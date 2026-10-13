@@ -710,15 +710,23 @@ mod tests {
 
     #[test]
     fn live_caps_forward_proxy_response() {
-        // Upstream that sends far more than MAX_RESPONSE_BYTES.
+        // Upstream that offers an UNBOUNDED body: it keeps writing until the
+        // broker closes the connection (which it does on hitting the cap). A
+        // single fixed write_all is timing-fragile on loopback — the broker may
+        // read fewer than the cap before the close propagates (seen on Docker
+        // Linux: ~7.8 MiB) — so instead we stream forever and let the broker's
+        // cap be the thing that stops it. That makes "relayed exactly the cap"
+        // deterministic on every OS, while still proving truncation.
         let up = TcpListener::bind("127.0.0.1:0").unwrap();
         let up_port = up.local_addr().unwrap().port();
         std::thread::spawn(move || {
             for s in up.incoming().flatten() {
                 let mut s = s;
-                let body = vec![b'A'; (MAX_RESPONSE_BYTES as usize) + 1024 * 1024]; // +1 MiB
                 let _ = s.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
-                let _ = s.write_all(&body);
+                let chunk = vec![b'A'; 64 * 1024];
+                // Keep feeding until the broker hits its cap and closes -> our
+                // write_all returns an error (EPIPE/ECONNRESET) and we stop.
+                while s.write_all(&chunk).is_ok() {}
             }
         });
         // allow_internal so the broker will connect to the loopback test upstream.
