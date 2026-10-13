@@ -9,6 +9,9 @@ use seisin_sandbox_core::catalog::endpoint_direction;
 use seisin_sandbox_core::{Axis, Collector, EffectEvent, EffectSink, Outcome};
 use std::collections::HashSet;
 
+#[cfg(target_os = "linux")]
+use crate::proc;
+
 /// A remote endpoint seen in a socket table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
@@ -18,10 +21,10 @@ pub struct Endpoint {
     pub inode: u64,
 }
 
-/// Observes the network reach of a set of pids.
+/// Observes the network reach of a process tree (by root pid).
 pub struct NetworkCollector {
     role: String,
-    pids: Vec<u32>,
+    root_pid: u32,
     within_ports: Vec<u16>,
     allowed_hosts: Vec<String>,
     /// endpoints already reported, so poll() only emits new ones.
@@ -31,13 +34,13 @@ pub struct NetworkCollector {
 impl NetworkCollector {
     pub fn new(
         role: impl Into<String>,
-        pids: Vec<u32>,
+        root_pid: u32,
         within_ports: Vec<u16>,
         allowed_hosts: Vec<String>,
     ) -> Self {
         NetworkCollector {
             role: role.into(),
-            pids,
+            root_pid,
             within_ports,
             allowed_hosts,
             seen: HashSet::new(),
@@ -47,10 +50,10 @@ impl NetworkCollector {
     /// Build a collector whose territory matches a policy, so enforcement and
     /// observation agree on what is "within". This is how an integrator
     /// wire it up.
-    pub fn for_policy(pids: Vec<u32>, policy: &seisin_sandbox_core::Policy) -> Self {
+    pub fn for_policy(root_pid: u32, policy: &seisin_sandbox_core::Policy) -> Self {
         Self::new(
             policy.role.clone(),
-            pids,
+            root_pid,
             policy.local_ports.clone(),
             policy.allowed_hosts.clone(),
         )
@@ -79,7 +82,7 @@ impl Collector for NetworkCollector {
     }
 
     fn poll(&mut self, sink: &mut dyn EffectSink) {
-        for ep in observe(&self.pids) {
+        for ep in observe(self.root_pid) {
             let key = (ep.ip.clone(), ep.port);
             if self.seen.insert(key) {
                 sink.emit(&self.event_for(&ep));
@@ -88,11 +91,11 @@ impl Collector for NetworkCollector {
     }
 }
 
-/// Observe current remote endpoints for the given pids. Linux: real; otherwise
-/// empty (a macOS lsof collector is the planned sibling).
+/// Observe current remote endpoints for the process tree rooted at `root_pid`.
+/// Linux: real; otherwise empty (a macOS lsof collector is the planned sibling).
 #[cfg(target_os = "linux")]
-fn observe(pids: &[u32]) -> Vec<Endpoint> {
-    let inodes = socket_inodes_for(pids);
+fn observe(root_pid: u32) -> Vec<Endpoint> {
+    let inodes = socket_inodes(root_pid);
     let mut out = Vec::new();
     for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
         if let Ok(contents) = std::fs::read_to_string(path) {
@@ -107,27 +110,21 @@ fn observe(pids: &[u32]) -> Vec<Endpoint> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn observe(_pids: &[u32]) -> Vec<Endpoint> {
+fn observe(_root_pid: u32) -> Vec<Endpoint> {
     Vec::new()
 }
 
-/// Collect the socket inodes owned by the pids (and reported fd links).
+/// Socket inodes owned by the whole process tree (so a child's connections are
+/// attributed too).
 #[cfg(target_os = "linux")]
-fn socket_inodes_for(pids: &[u32]) -> HashSet<u64> {
+fn socket_inodes(root_pid: u32) -> HashSet<u64> {
     let mut inodes = HashSet::new();
-    for pid in pids {
-        let fd_dir = format!("/proc/{pid}/fd");
-        if let Ok(entries) = std::fs::read_dir(&fd_dir) {
-            for e in entries.flatten() {
-                if let Ok(target) = std::fs::read_link(e.path()) {
-                    // links look like "socket:[12345]"
-                    let t = target.to_string_lossy();
-                    if let Some(rest) = t.strip_prefix("socket:[") {
-                        if let Some(num) = rest.strip_suffix(']') {
-                            if let Ok(n) = num.parse::<u64>() {
-                                inodes.insert(n);
-                            }
-                        }
+    for pid in proc::process_tree(root_pid) {
+        for (_fd, target) in proc::fd_targets(pid) {
+            if let Some(rest) = target.strip_prefix("socket:[") {
+                if let Some(num) = rest.strip_suffix(']') {
+                    if let Ok(n) = num.parse::<u64>() {
+                        inodes.insert(n);
                     }
                 }
             }
@@ -211,7 +208,7 @@ mod tests {
 
     #[test]
     fn emits_outside_event_for_external_endpoint() {
-        let c = NetworkCollector::new("qa", vec![], vec![8001], vec![]);
+        let c = NetworkCollector::new("qa", 0, vec![8001], vec![]);
         let ev = c.event_for(&Endpoint { ip: "8.8.8.8".into(), port: 53, inode: 1 });
         assert_eq!(ev.axis, Axis::Network);
         assert_eq!(ev.direction, Direction::OutsideTerritory);
@@ -220,7 +217,7 @@ mod tests {
 
     #[test]
     fn loopback_app_port_is_within() {
-        let c = NetworkCollector::new("qa", vec![], vec![8001, 8081], vec![]);
+        let c = NetworkCollector::new("qa", 0, vec![8001, 8081], vec![]);
         let ev = c.event_for(&Endpoint { ip: "127.0.0.1".into(), port: 8001, inode: 1 });
         assert_eq!(ev.direction, Direction::WithinTerritory);
     }
@@ -228,7 +225,7 @@ mod tests {
     #[test]
     fn dedup_only_new_endpoints() {
         // event_for + seen set behaviour via poll would need /proc; test seen set directly
-        let mut c = NetworkCollector::new("qa", vec![], vec![], vec![]);
+        let mut c = NetworkCollector::new("qa", 0, vec![], vec![]);
         let mut sink = VecSink::default();
         // simulate what poll does with two identical endpoints
         for _ in 0..2 {

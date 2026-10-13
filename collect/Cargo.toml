@@ -9,3 +9,6 @@ repository.workspace = true
 
 [dependencies]
 seisin-sandbox-core = { path = "../core" }
+
+[dev-dependencies]
+seisin-sandbox-linux = { path = "../backends/linux" }

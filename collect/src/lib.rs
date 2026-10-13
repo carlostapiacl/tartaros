@@ -22,3 +22,43 @@ pub use mcp::McpCollector;
 pub use net::NetworkCollector;
 pub use process::ProcessCollector;
 pub use secret::SecretCollector;
+
+use seisin_sandbox_core::{Collector, EffectSink};
+use std::process::Child;
+use std::time::Duration;
+
+/// Drive a set of collectors while a child runs: poll them on `interval` until
+/// the child exits, then poll once more to catch late effects. Returns the
+/// child's exit code (128 + signal when killed by a signal).
+pub fn observe_until_exit(
+    child: &mut Child,
+    collectors: &mut [Box<dyn Collector>],
+    sink: &mut dyn EffectSink,
+    interval: Duration,
+) -> i32 {
+    loop {
+        for c in collectors.iter_mut() {
+            c.poll(sink);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                for c in collectors.iter_mut() {
+                    c.poll(sink);
+                }
+                return exit_code_of(status);
+            }
+            Ok(None) => std::thread::sleep(interval),
+            Err(_) => return -1,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn exit_code_of(status: std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
+}
+#[cfg(not(unix))]
+fn exit_code_of(status: std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(-1)
+}

@@ -42,6 +42,33 @@ impl Backend for LandlockBackend {
     }
 }
 
+impl LandlockBackend {
+    /// Spawn the confined command without waiting, so collectors can observe its
+    /// process tree by pid while it runs. Linux only.
+    #[cfg(target_os = "linux")]
+    pub fn spawn(
+        &self,
+        policy: &Policy,
+        command: &[String],
+    ) -> Result<std::process::Child, RunError> {
+        self.validate(policy).map_err(|e| RunError { reason: e.reason })?;
+        if command.is_empty() {
+            return Err(RunError { reason: "empty command".into() });
+        }
+        let mut cmd = confined_command(policy, command)?;
+        cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn spawn(
+        &self,
+        _policy: &Policy,
+        _command: &[String],
+    ) -> Result<std::process::Child, RunError> {
+        Err(RunError { reason: "spawn is Linux-only".into() })
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunError> {
     Err(RunError { reason: "linux-landlock enforcement is only available on Linux".into() })
@@ -49,6 +76,18 @@ fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunErro
 
 #[cfg(target_os = "linux")]
 fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
+    let mut cmd = confined_command(policy, command)?;
+    let status = cmd.status().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+    Ok(RunOutcome { exit_code: exit_code_of(status) })
+}
+
+/// Build a `Command` that applies the Landlock ruleset in the child just before
+/// exec. Shared by `run` (waits) and `spawn` (observed).
+#[cfg(target_os = "linux")]
+fn confined_command(
+    policy: &Policy,
+    command: &[String],
+) -> Result<std::process::Command, RunError> {
     use landlock::{
         ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, PathBeneath, PathFd,
         Ruleset, RulesetAttr, RulesetCreatedAttr,
@@ -139,9 +178,7 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
         });
     }
-
-    let status = cmd.status().map_err(|e| err(format!("spawn: {e}")))?;
-    Ok(RunOutcome { exit_code: exit_code_of(status) })
+    Ok(cmd)
 }
 
 #[cfg(target_os = "linux")]
