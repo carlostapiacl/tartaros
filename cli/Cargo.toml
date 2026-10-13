@@ -1,6 +1,6 @@
 [package]
-name = "seisin-sandbox-cli"
-description = "seisin-sandbox command-line: run a command confined by a policy, on the OS backend"
+name = "tartaros-cli"
+description = "tartaros command-line: run a command confined by a policy, on the OS backend"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,18 +8,18 @@ authors.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "seisin-sandbox"
+name = "tartaros"
 path = "src/main.rs"
 
 [dependencies]
-seisin-sandbox-core = { path = "../core" }
+tartaros-core = { path = "../core" }
 toml = "0.8.19"
 serde = { version = "1.0.210", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-seisin-sandbox-linux = { path = "../backends/linux" }
-seisin-sandbox-collect = { path = "../collect" }
+tartaros-linux = { path = "../backends/linux" }
+tartaros-collect = { path = "../collect" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-seisin-sandbox-macos = { path = "../backends/macos" }
-seisin-sandbox-collect = { path = "../collect" }
+tartaros-macos = { path = "../backends/macos" }
+tartaros-collect = { path = "../collect" }

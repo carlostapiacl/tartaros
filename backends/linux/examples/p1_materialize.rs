@@ -1,10 +1,10 @@
 //! P1-2 mitigation check (Linux): with `materialize_absent_handoff`, the agent
 //! cannot create a trust-handoff config file that did not exist at launch (a
-//! surface a trusted tool would later run). `cargo run -p seisin-sandbox-linux
+//! surface a trusted tool would later run). `cargo run -p tartaros-linux
 //! --example p1_materialize`
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_linux::LandlockBackend;
 
 fn main() {
     let work = std::env::temp_dir().join(format!("sbx-mat-{}", std::process::id()));

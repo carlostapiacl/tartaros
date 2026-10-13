@@ -1,5 +1,5 @@
 //! macOS backend — generates a Seatbelt (sandbox-exec) profile from a
-//! `seisin_sandbox_core::Policy` and runs the command under it.
+//! `tartaros_core::Policy` and runs the command under it.
 //!
 //! Informed by the Seatbelt profile vendored under `vendor/codex/` (OpenAI
 //! Codex, Apache-2.0; see THIRD_PARTY_NOTICES.md) — specifically the
@@ -9,7 +9,7 @@
 //!      EVERY protected path at any depth, via `Policy::trust_handoff_rules`;
 //!   2. we never emit a `kern.proc.*` sysctl allow.
 
-use seisin_sandbox_core::{
+use tartaros_core::{
     Access, Backend, Collector, EffectSink, FsRule, Network, Policy, PolicyError, RunError,
     RunOutcome,
 };
@@ -42,7 +42,7 @@ impl Backend for SeatbeltBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
-        use seisin_sandbox_core::VecSink;
+        use tartaros_core::VecSink;
         let child = self.spawn(policy, command)?;
         Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut [], &mut VecSink::default()) })
     }

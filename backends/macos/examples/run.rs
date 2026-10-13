@@ -1,11 +1,11 @@
 //! Run a command confined by a default policy over the current directory.
-//! `cargo run -q -p seisin-sandbox-macos --example run -- <cmd> [args...]`
+//! `cargo run -q -p tartaros-macos --example run -- <cmd> [args...]`
 //!
 //! writable root = cwd, network denied, process-info isolated. Exits with the
 //! command's exit code. Handy for ad-hoc checks and measurements.
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_macos::SeatbeltBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_macos::SeatbeltBackend;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

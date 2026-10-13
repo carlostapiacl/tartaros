@@ -1,4 +1,4 @@
-//! seisin-security-bench — run the conformance corpus against the sandbox.
+//! tartaros-bench — run the conformance corpus against the sandbox.
 //!
 //! Each scenario (a TOML contract in `corpus/`) has: a policy, a fixture, a
 //! forbidden operation that must NOT succeed, a legitimate control that must,
@@ -6,22 +6,22 @@
 //! absent). We check the actual effect, not just an exit code — a sandbox that
 //! bloquea todo y rompe el trabajo legítimo no sirve.
 //!
-//! Run: `cargo run -p seisin-security-bench -- corpus`
+//! Run: `cargo run -p tartaros-bench -- corpus`
 
-use seisin_sandbox_core::{Backend, Network, Policy};
+use tartaros_core::{Backend, Network, Policy};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "linux")]
-type Be = seisin_sandbox_linux::LandlockBackend;
+type Be = tartaros_linux::LandlockBackend;
 #[cfg(target_os = "macos")]
-type Be = seisin_sandbox_macos::SeatbeltBackend;
+type Be = tartaros_macos::SeatbeltBackend;
 
 #[cfg(target_os = "linux")]
-const BACKEND: Be = seisin_sandbox_linux::LandlockBackend;
+const BACKEND: Be = tartaros_linux::LandlockBackend;
 #[cfg(target_os = "macos")]
-const BACKEND: Be = seisin_sandbox_macos::SeatbeltBackend;
+const BACKEND: Be = tartaros_macos::SeatbeltBackend;
 
 const OS: &str = if cfg!(target_os = "linux") { "linux" } else { "macos" };
 
@@ -158,7 +158,7 @@ fn main() {
         .collect();
     files.sort();
 
-    println!("seisin-security-bench · backend={OS}\n");
+    println!("tartaros-bench · backend={OS}\n");
     let mut outcomes = Vec::new();
     let mut infra_errors = 0usize; // invalid/unreadable contracts
     let mut skipped = 0usize;      // not for this OS
@@ -290,7 +290,7 @@ fn run_scenario(c: Contract) -> Outcome {
     }
     // broker (credential scenarios): secret lives only in the broker config.
     if let Some(bs) = &c.broker {
-        use seisin_sandbox_broker::{Broker, Capability, Injection};
+        use tartaros_broker::{Broker, Capability, Injection};
         let caps: Vec<Capability> = bs
             .capability
             .iter()
@@ -308,7 +308,7 @@ fn run_scenario(c: Contract) -> Outcome {
         let broker = Broker::new("bench", vec![]).with_auth(bs.token.clone()).with_capabilities(caps);
         if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", bs.port)) {
             std::thread::spawn(move || {
-                let mut sink = seisin_sandbox_core::VecSink::default();
+                let mut sink = tartaros_core::VecSink::default();
                 let _ = broker.serve(l, &mut sink);
             });
         }

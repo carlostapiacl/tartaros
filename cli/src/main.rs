@@ -1,7 +1,7 @@
-//! seisin-sandbox CLI — run a command confined by a policy, on the OS backend.
+//! tartaros CLI — run a command confined by a policy, on the OS backend.
 //!
 //! Usage:
-//!   seisin-sandbox run [options] -- <command> [args...]
+//!   tartaros run [options] -- <command> [args...]
 //!
 //! Options:
 //!   --role NAME            label for effect-log attribution
@@ -20,7 +20,7 @@
 //!
 //! Exit code is the command's (128+signal on signal death, 124 on timeout).
 
-use seisin_sandbox_core::{Network, Policy};
+use tartaros_core::{Network, Policy};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::exit;
@@ -74,7 +74,7 @@ fn main() {
         Some("run") => cmd_run(&args[1..]),
         Some("explain") => cmd_explain(&args[1..]),
         _ => {
-            eprintln!("usage:\n  seisin-sandbox run [options] -- <command> [args...]\n  seisin-sandbox explain [options]   # print what a policy grants, without running");
+            eprintln!("usage:\n  tartaros run [options] -- <command> [args...]\n  tartaros explain [options]   # print what a policy grants, without running");
             exit(2);
         }
     }
@@ -182,7 +182,7 @@ fn explain(p: &Policy) {
     #[cfg(target_os = "macos")]
     {
         println!("\n--- macOS Seatbelt profile ---");
-        println!("{}", seisin_sandbox_macos::compile_profile(p));
+        println!("{}", tartaros_macos::compile_profile(p));
     }
     #[cfg(target_os = "linux")]
     {
@@ -197,12 +197,12 @@ fn explain(p: &Policy) {
 
 #[cfg(target_os = "linux")]
 fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
-    run_common(&seisin_sandbox_linux::LandlockBackend, policy, cmd, log, true)
+    run_common(&tartaros_linux::LandlockBackend, policy, cmd, log, true)
 }
 
 #[cfg(target_os = "macos")]
 fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
-    run_common(&seisin_sandbox_macos::SeatbeltBackend, policy, cmd, log, true)
+    run_common(&tartaros_macos::SeatbeltBackend, policy, cmd, log, true)
 }
 
 /// Shared run path (both OS): `--log` goes through `run_observed`, which uses the
@@ -214,13 +214,13 @@ fn run_common<B>(be: &B, policy: &Policy, cmd: &[String], log: Option<&str>, net
 where
     B: RunObserved,
 {
-    use seisin_sandbox_collect::{NetworkCollector, ProcessCollector, SecretCollector};
-    use seisin_sandbox_core::{Collector, FilterSink, JsonlSink, RecordMode};
+    use tartaros_collect::{NetworkCollector, ProcessCollector, SecretCollector};
+    use tartaros_core::{Collector, FilterSink, JsonlSink, RecordMode};
     match log {
         Some(path) => {
             let f = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
                 Ok(f) => f,
-                Err(e) => { eprintln!("seisin-sandbox: cannot open log {path}: {e}"); return 1; }
+                Err(e) => { eprintln!("tartaros: cannot open log {path}: {e}"); return 1; }
             };
             let mut sink = FilterSink::new(JsonlSink::new(f), RecordMode::Boundary);
             let pol = policy.clone();
@@ -231,49 +231,49 @@ where
                 v.push(Box::new(ProcessCollector::for_policy(pid, &pol)));
                 v
             });
-            match res { Ok(o) => o.exit_code, Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); 1 } }
+            match res { Ok(o) => o.exit_code, Err(e) => { eprintln!("tartaros: {}", e.reason); 1 } }
         }
         None => match be.run(policy, cmd) {
             Ok(o) => o.exit_code,
-            Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); 1 }
+            Err(e) => { eprintln!("tartaros: {}", e.reason); 1 }
         },
     }
 }
 
 /// Minimal trait so `run_common` can call either backend's `run_observed`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-trait RunObserved: seisin_sandbox_core::Backend {
+trait RunObserved: tartaros_core::Backend {
     fn run_observed<F>(
         &self,
         policy: &Policy,
         command: &[String],
-        sink: &mut dyn seisin_sandbox_core::EffectSink,
+        sink: &mut dyn tartaros_core::EffectSink,
         make: F,
-    ) -> Result<seisin_sandbox_core::RunOutcome, seisin_sandbox_core::RunError>
+    ) -> Result<tartaros_core::RunOutcome, tartaros_core::RunError>
     where
-        F: FnOnce(u32) -> Vec<Box<dyn seisin_sandbox_core::Collector>>;
+        F: FnOnce(u32) -> Vec<Box<dyn tartaros_core::Collector>>;
 }
 
 #[cfg(target_os = "linux")]
-impl RunObserved for seisin_sandbox_linux::LandlockBackend {
-    fn run_observed<F>(&self, policy: &Policy, command: &[String], sink: &mut dyn seisin_sandbox_core::EffectSink, make: F)
-        -> Result<seisin_sandbox_core::RunOutcome, seisin_sandbox_core::RunError>
-    where F: FnOnce(u32) -> Vec<Box<dyn seisin_sandbox_core::Collector>> {
-        seisin_sandbox_linux::LandlockBackend::run_observed(self, policy, command, sink, make)
+impl RunObserved for tartaros_linux::LandlockBackend {
+    fn run_observed<F>(&self, policy: &Policy, command: &[String], sink: &mut dyn tartaros_core::EffectSink, make: F)
+        -> Result<tartaros_core::RunOutcome, tartaros_core::RunError>
+    where F: FnOnce(u32) -> Vec<Box<dyn tartaros_core::Collector>> {
+        tartaros_linux::LandlockBackend::run_observed(self, policy, command, sink, make)
     }
 }
 
 #[cfg(target_os = "macos")]
-impl RunObserved for seisin_sandbox_macos::SeatbeltBackend {
-    fn run_observed<F>(&self, policy: &Policy, command: &[String], sink: &mut dyn seisin_sandbox_core::EffectSink, make: F)
-        -> Result<seisin_sandbox_core::RunOutcome, seisin_sandbox_core::RunError>
-    where F: FnOnce(u32) -> Vec<Box<dyn seisin_sandbox_core::Collector>> {
-        seisin_sandbox_macos::SeatbeltBackend::run_observed(self, policy, command, sink, make)
+impl RunObserved for tartaros_macos::SeatbeltBackend {
+    fn run_observed<F>(&self, policy: &Policy, command: &[String], sink: &mut dyn tartaros_core::EffectSink, make: F)
+        -> Result<tartaros_core::RunOutcome, tartaros_core::RunError>
+    where F: FnOnce(u32) -> Vec<Box<dyn tartaros_core::Collector>> {
+        tartaros_macos::SeatbeltBackend::run_observed(self, policy, command, sink, make)
     }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn run(_policy: &Policy, _cmd: &[String], _log: Option<&str>) -> i32 {
-    eprintln!("seisin-sandbox: unsupported OS");
+    eprintln!("tartaros: unsupported OS");
     1
 }

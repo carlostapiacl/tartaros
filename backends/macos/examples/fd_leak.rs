@@ -1,9 +1,9 @@
 //! Inherited-fd leak check (macOS). Parent opens a non-CLOEXEC fd to a secret
 //! outside the territory; the confined child must not read through it.
-//! cargo run -p seisin-sandbox-macos --example fd_leak
+//! cargo run -p tartaros-macos --example fd_leak
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_macos::SeatbeltBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_macos::SeatbeltBackend;
 use std::ffi::CString;
 
 fn main() {

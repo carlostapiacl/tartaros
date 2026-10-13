@@ -1,6 +1,6 @@
 //! Effect collectors — observe what an agent attempts, from outside the agent,
 //! and emit [`EffectEvent`]s. Collectors attach to a process tree by pid; they
-//! do **not** depend on seisin-sandbox's enforcement, and nothing here depends
+//! do **not** depend on tartaros's enforcement, and nothing here depends
 //! on the intent layer. The effect log (JSON Lines) is the neutral interface: a collector
 //! writes it, the intent layer (or anything) reads it via its own adapter.
 //!
@@ -8,8 +8,8 @@
 //! the trait; `core::catalog` is the shared classification so they agree on what
 //! counts as "outside the territory".
 //!
-//! [`EffectEvent`]: seisin_sandbox_core::EffectEvent
-//! [`Collector`]: seisin_sandbox_core::Collector
+//! [`EffectEvent`]: tartaros_core::EffectEvent
+//! [`Collector`]: tartaros_core::Collector
 
 mod proc;
 
@@ -23,7 +23,7 @@ pub use net::NetworkCollector;
 pub use process::ProcessCollector;
 pub use secret::SecretCollector;
 
-use seisin_sandbox_core::{Collector, EffectSink};
+use tartaros_core::{Collector, EffectSink};
 use std::process::Child;
 use std::time::Duration;
 

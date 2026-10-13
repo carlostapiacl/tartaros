@@ -376,69 +376,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "seisin-sandbox-broker"
-version = "0.0.0"
-dependencies = [
- "seisin-sandbox-core",
- "seisin-sandbox-linux",
- "ureq",
-]
-
-[[package]]
-name = "seisin-sandbox-cli"
-version = "0.0.0"
-dependencies = [
- "seisin-sandbox-collect",
- "seisin-sandbox-core",
- "seisin-sandbox-linux",
- "seisin-sandbox-macos",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "seisin-sandbox-collect"
-version = "0.0.0"
-dependencies = [
- "seisin-sandbox-core",
- "seisin-sandbox-linux",
-]
-
-[[package]]
-name = "seisin-sandbox-core"
-version = "0.0.0"
-
-[[package]]
-name = "seisin-sandbox-linux"
-version = "0.0.0"
-dependencies = [
- "landlock",
- "libc",
- "seccompiler",
- "seisin-sandbox-core",
-]
-
-[[package]]
-name = "seisin-sandbox-macos"
-version = "0.0.0"
-dependencies = [
- "libc",
- "seisin-sandbox-core",
-]
-
-[[package]]
-name = "seisin-security-bench"
-version = "0.0.0"
-dependencies = [
- "seisin-sandbox-broker",
- "seisin-sandbox-core",
- "seisin-sandbox-linux",
- "seisin-sandbox-macos",
- "serde",
- "toml",
-]
-
-[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -538,6 +475,69 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "tartaros-bench"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "tartaros-broker",
+ "tartaros-core",
+ "tartaros-linux",
+ "tartaros-macos",
+ "toml",
+]
+
+[[package]]
+name = "tartaros-broker"
+version = "0.0.0"
+dependencies = [
+ "tartaros-core",
+ "tartaros-linux",
+ "ureq",
+]
+
+[[package]]
+name = "tartaros-cli"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "tartaros-collect",
+ "tartaros-core",
+ "tartaros-linux",
+ "tartaros-macos",
+ "toml",
+]
+
+[[package]]
+name = "tartaros-collect"
+version = "0.0.0"
+dependencies = [
+ "tartaros-core",
+ "tartaros-linux",
+]
+
+[[package]]
+name = "tartaros-core"
+version = "0.0.0"
+
+[[package]]
+name = "tartaros-linux"
+version = "0.0.0"
+dependencies = [
+ "landlock",
+ "libc",
+ "seccompiler",
+ "tartaros-core",
+]
+
+[[package]]
+name = "tartaros-macos"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "tartaros-core",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # Third-party notices
 
-seisin-sandbox reuses source from other open-source projects. Each is listed
+tartaros reuses source from other open-source projects. Each is listed
 here with its upstream origin, the exact commit it was taken from, the files
 involved, its license, and the modifications made. All reused code keeps its
 original license; this file satisfies the attribution and "state your changes"
@@ -32,7 +32,7 @@ Under `backends/macos/vendor/codex/`, taken from `codex-rs/sandboxing/src/`:
 - **As of the initial import: none.** The files are vendored verbatim as
   reference for the macOS backend. They are NOT yet compiled into any crate
   (they live under `vendor/` and are outside the module tree).
-- When adapted for seisin-sandbox (re-wiring to `seisin-sandbox-core`'s policy
+- When adapted for tartaros (re-wiring to `tartaros-core`'s policy
   type, removing the `kern.proc.*` sysctl allow that leaks other processes'
   environment, and extending ancestor-rename protection to the full
   trust-handoff set), each changed file will carry a prominent notice at its top

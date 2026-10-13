@@ -1,6 +1,6 @@
-//! seisin-sandbox-core — the policy model and backend interface.
+//! tartaros-core — the policy model and backend interface.
 //!
-//! This crate is the differentiator: it defines *what* seisin-sandbox enforces
+//! This crate is the differentiator: it defines *what* tartaros enforces
 //! (the policy, including the trust-handoff set), independent of *how* a given
 //! OS enforces it (the backends). Backends are swappable; the policy is not.
 
@@ -138,9 +138,9 @@ impl Policy {
     /// with every protected path carved out.
     ///
     /// Landlock cannot express "allow X but deny X/y" (nono refuses such a
-    /// policy outright). seisin restructures instead: it grants the safe
+    /// policy outright). TartarOS restructures instead: it grants the safe
     /// subtrees and excludes the branch that leads to each protected path. This
-    /// is the seisin advantage on Linux.
+    /// is the TartarOS advantage on Linux.
     ///
     /// Tradeoff (honest): Landlock grants are hierarchical, so a directory that
     /// *contains* a protected path cannot itself be granted — the agent cannot

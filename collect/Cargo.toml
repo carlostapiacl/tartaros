@@ -1,6 +1,6 @@
 [package]
-name = "seisin-sandbox-collect"
-description = "Effect collectors for seisin-sandbox — observe what an agent attempts, by pid, independent of enforcement"
+name = "tartaros-collect"
+description = "Effect collectors for tartaros — observe what an agent attempts, by pid, independent of enforcement"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-seisin-sandbox-core = { path = "../core" }
+tartaros-core = { path = "../core" }
 
 [dev-dependencies]
-seisin-sandbox-linux = { path = "../backends/linux" }
+tartaros-linux = { path = "../backends/linux" }

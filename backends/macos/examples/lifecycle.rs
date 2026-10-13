@@ -1,5 +1,5 @@
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_macos::SeatbeltBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_macos::SeatbeltBackend;
 use std::time::{Duration, Instant};
 fn main() {
     let work = std::env::temp_dir().join(format!("sbx-mlife-{}", std::process::id()));

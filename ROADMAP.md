@@ -1,4 +1,4 @@
-# Roadmap — seisin-sandbox
+# Roadmap — tartaros
 
 Principle: the policy is the product; backends reuse proven Apache-2.0 plumbing.
 Build only where measurement shows no existing backend can enforce the policy.
@@ -31,7 +31,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 ## M2 — Linux backend
 - [x] `Policy::linux_write_allowlist`: **carves** the deny out of the allow
       (grant safe subtrees, exclude the protected branch) — makes expressible
-      what nono refuses. Unit test with nested `.git`. The seisin Linux edge.
+      what nono refuses. Unit test with nested `.git`. The TartarOS Linux edge.
 - [x] `validate` ACCEPTS deny-inside-allow by restructuring (nono rejects)
 - [x] wired the Landlock ruleset from the allow-list (`landlock` 0.4.5), target-
       gated so macOS still builds; read+exec everywhere, write only in the carve;
@@ -46,7 +46,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 
 ## M3 — integration + release
 - [ ] `srt` adapter (wrap @anthropic-ai/sandbox-runtime)
-- [ ] seisin consumes seisin-sandbox through the backend abstraction
+- [ ] seisin consumes tartaros through the backend abstraction
 - [ ] make the repo public
 
 ## M4 — the other dimensions (field-detected)
@@ -112,7 +112,7 @@ Build only where measurement shows no existing backend can enforce the policy.
       Verified: Docker/linuxkit (no Landlock) now refuses ("refusing to run
       unconfined"); the Linux test host (Landlock present) still runs and enforces.
 - [x] **P1 broker client auth**: `Broker::with_auth(token)` requires
-      `X-Seisin-Auth: <token>` per run; a process without it gets 403. Verified
+      `X-Tartaros-Auth: <token>` per run; a process without it gets 403. Verified
       on the Linux test host (with token 200, without 403). Destination/method scoping per
       capability remains to extend.
 - [x] **P1 absent trust-handoff paths on Linux — MITIGATED (opt-in).**
@@ -171,10 +171,10 @@ Build only where measurement shows no existing backend can enforce the policy.
       write-outside and .claude/settings.json — no srt disadvantage reproduced, none
       claimed (honest).
 - [x] **automated competitor comparison** (`comparison/compare.sh`, review P2):
-      runs the same scenarios under seisin (CLI) and nono, prints the table.
+      runs the same scenarios under TartarOS (CLI) and nono, prints the table.
       Reproducible on the Linux test host; no commercial claim without a measured row.
 - [x] SRT column added to compare.sh (activates when node+bwrap+srt present).
-      seisin+nono path verified automated on the Linux test host; srt measured manually (parity).
+      TartarOS+nono path verified automated on the Linux test host; srt measured manually (parity).
 - [ ] comparison vs OpenShell (NVIDIA); make the srt column run in CI env
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
 
@@ -184,7 +184,7 @@ Build only where measurement shows no existing backend can enforce the policy.
       macOS too (was Linux-only). Verified: macOS timeout 2s → exit 124, bench 11/11.
 
 ## M7 — CLI (adoptability)
-- [x] `seisin-sandbox run [opts] -- cmd`: policy via flags, OS backend, exit code
+- [x] `tartaros run [opts] -- cmd`: policy via flags, OS backend, exit code
       passthrough; `--log` emits the effect log of a real run (Linux). Verified on
       macOS (confines) and the Linux test host (confines + read-deny + effect log of ~/.ssh read).
 - [x] **config file (TOML policy)**: `--config role.toml` — one policy declared

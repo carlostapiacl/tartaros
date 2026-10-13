@@ -10,7 +10,7 @@ agrees on what counts as "outside".
 
 - **The effect log is a neutral format (JSON Lines), not a dependency.**
   Collectors write it; anything reads it. See `core::effect::EffectEvent`.
-- **The intent layer does not depend on seisin-sandbox** and seisin-sandbox does not
+- **The intent layer does not depend on tartaros** and tartaros does not
   depend on the intent layer. The intent layer reads the log via its own adapter (it also has
   adapters for other sources — it treats this as one replaceable source).
 - **Collectors attach to a process tree by pid** — they can watch any agent, not

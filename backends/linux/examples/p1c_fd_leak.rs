@@ -1,10 +1,10 @@
 //! Inherited-fd leak check (Linux). The parent opens a non-CLOEXEC fd to a secret
 //! OUTSIDE the territory; the confined child must not be able to read through it
 //! (the backend closes inherited fds before exec).
-//! cargo run -p seisin-sandbox-linux --example p1c_fd_leak
+//! cargo run -p tartaros-linux --example p1c_fd_leak
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_linux::LandlockBackend;
 use std::ffi::CString;
 
 fn main() {

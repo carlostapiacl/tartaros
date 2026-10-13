@@ -13,7 +13,7 @@ EPERM":
   *absent*.
 
 ```
-cargo run -p seisin-security-bench -- corpus
+cargo run -p tartaros-bench -- corpus
 ```
 
 The runner picks the backend for the current OS (Landlock on Linux, Seatbelt on
@@ -81,7 +81,7 @@ inherited-fd leak (`backends/linux/examples/p1c_fd_leak`), broker HTTP/HTTPS
 
 A first honest comparison vs **nono 0.79** (fairly configured, measured on the Linux test host)
 is in [`comparison/RESULTS.md`](comparison/RESULTS.md): parity on write-outside,
-seisin's trust-handoff advantage on nested `.git/hooks`, and nono cannot express a
+TartarOS's trust-handoff advantage on nested `.git/hooks`, and nono cannot express a
 deny inside an allow on Linux. Includes a mid-measurement correction (a /tmp-default
 false positive) — a difference in defaults is never sold as a vulnerability.
 Reproduce with `comparison/nono-scenarios.sh` on a Landlock host (not the dev Mac).

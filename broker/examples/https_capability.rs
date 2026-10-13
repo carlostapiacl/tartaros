@@ -1,11 +1,11 @@
 //! HTTPS via the broker, no MITM (Linux). The agent speaks plain HTTP to the
 //! broker; the broker does the real HTTPS and injects the secret. The agent
 //! never does TLS and never holds the token.
-//! `cargo run -p seisin-sandbox-broker --example https_capability` (needs curl + network)
+//! `cargo run -p tartaros-broker --example https_capability` (needs curl + network)
 
-use seisin_sandbox_broker::{Broker, Capability, Injection};
-use seisin_sandbox_core::{Backend, JsonlSink, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_broker::{Broker, Capability, Injection};
+use tartaros_core::{Backend, JsonlSink, Network, Policy};
+use tartaros_linux::LandlockBackend;
 use std::thread;
 use std::time::Duration;
 
@@ -48,7 +48,7 @@ fn main() {
     let out = work.join("via");
     let rc = be.run(&policy, &[
         "curl".into(), "-sS".into(), "-o".into(), out.to_string_lossy().into(),
-        "-H".into(), format!("X-Seisin-Auth: {run_token}"),
+        "-H".into(), format!("X-Tartaros-Auth: {run_token}"),
         format!("http://127.0.0.1:{broker_port}/ex/"),
     ]).map(|o| o.exit_code).unwrap_or(-1);
     let body = std::fs::read_to_string(&out).unwrap_or_default();
@@ -68,7 +68,7 @@ fn main() {
     let m = work.join("method");
     be.run(&policy, &[
         "curl".into(), "-s".into(), "-X".into(), "POST".into(), "-o".into(), m.to_string_lossy().into(),
-        "-H".into(), format!("X-Seisin-Auth: {run_token}"),
+        "-H".into(), format!("X-Tartaros-Auth: {run_token}"),
         format!("http://127.0.0.1:{broker_port}/ex/"),
     ]).ok();
     let mbody = std::fs::read_to_string(&m).unwrap_or_default();

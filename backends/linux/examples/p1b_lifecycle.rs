@@ -1,8 +1,8 @@
 //! P1-B (process supervision) + P1-A (safe materialization) live checks (Linux).
-//! `cargo run -p seisin-sandbox-linux --example p1b_lifecycle`
+//! `cargo run -p tartaros-linux --example p1b_lifecycle`
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_linux::LandlockBackend;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

@@ -5,8 +5,8 @@
 //! up as many outside-territory events. Pure parsing is unit-tested; the live
 //! read is Linux-only. macOS (lsof) is a planned sibling collector.
 
-use seisin_sandbox_core::catalog::endpoint_direction;
-use seisin_sandbox_core::{Axis, Collector, EffectEvent, EffectSink, Outcome};
+use tartaros_core::catalog::endpoint_direction;
+use tartaros_core::{Axis, Collector, EffectEvent, EffectSink, Outcome};
 use std::collections::HashSet;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -50,7 +50,7 @@ impl NetworkCollector {
     /// Build a collector whose territory matches a policy, so enforcement and
     /// observation agree on what is "within". This is how an integrator
     /// wire it up.
-    pub fn for_policy(root_pid: u32, policy: &seisin_sandbox_core::Policy) -> Self {
+    pub fn for_policy(root_pid: u32, policy: &tartaros_core::Policy) -> Self {
         Self::new(
             policy.role.clone(),
             root_pid,
@@ -228,7 +228,7 @@ fn parse_hex_addr(s: &str) -> Option<(String, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seisin_sandbox_core::{Direction, EffectSink, VecSink};
+    use tartaros_core::{Direction, EffectSink, VecSink};
 
     #[test]
     fn parses_ipv4_remote_and_skips_listeners() {
