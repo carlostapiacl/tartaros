@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "backends/macos",
+    "backends/linux",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Carlos Tapia"]
+repository = "https://github.com/carlostapiacl/tartaros"
