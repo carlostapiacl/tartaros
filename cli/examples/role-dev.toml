@@ -1,0 +1,8 @@
+# A role's confinement, declared once — applies on macOS (Seatbelt) and Linux (Landlock).
+role = "dev"
+writable_roots = ["./repo"]
+read_denies = ["~/.ssh", "~/.aws", "~/.config/gcloud"]
+local_ports = [8001, 8081]
+materialize_absent_handoff = true   # Linux: protect absent .claude/settings.json etc.
+timeout_secs = 600
+max_memory_bytes = 2147483648       # 2 GiB
