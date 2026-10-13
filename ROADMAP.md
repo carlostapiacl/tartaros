@@ -60,6 +60,10 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] collectors: `SecretCollector` (fd→secret), `ProcessCollector` (exfil-tool
       exec + foreign `/proc/<pid>/environ` read), `McpCollector` (ungranted MCP,
       v1 cmdline heuristic) — classifiers unit-tested; `proc` helpers shared
+- [x] **secret read-deny**: `Policy::read_denies` + `linux_read_allowlist`
+      (symmetric read carve) and macOS `(deny file-read*)`; Linux live-verified
+      on the Linux test host (~/.ssh unreadable, /etc + /usr/bin readable). Secret dimension now
+      complete: observe (collector) + deny-read + broker (capability)
 - [ ] file-write event capture (enforced already; emit on deny)
 - [x] **observed session live on the Linux test host**: `LandlockBackend::spawn` + `collect::
       observe_until_exit` drive the collectors while a confined agent runs; real

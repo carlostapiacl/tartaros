@@ -120,12 +120,17 @@ fn confined_command(
     }
     let mut ruleset = builder.create().map_err(|e| err(format!("create ruleset: {e}")))?;
 
-    // Read + execute everywhere so the command and its libraries load.
-    ruleset = ruleset
-        .add_rule(
-            PathBeneath::new(PathFd::new("/").map_err(|e| err(format!("open /: {e}")))?, read_only),
-        )
-        .map_err(|e| err(format!("add / rule: {e}")))?;
+    // Read + execute everywhere EXCEPT the secret dirs (carved out of /), so the
+    // command and its libraries load but it cannot read `~/.ssh` etc.
+    for p in policy.linux_read_allowlist() {
+        let fd = match PathFd::new(&p) {
+            Ok(fd) => fd,
+            Err(_) => continue,
+        };
+        ruleset = ruleset
+            .add_rule(PathBeneath::new(fd, read_only))
+            .map_err(|e| err(format!("add read rule {}: {e}", p.display())))?;
+    }
 
     // Write only under the carved allow-list.
     for p in policy.linux_write_allowlist() {
