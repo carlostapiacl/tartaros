@@ -1,0 +1,24 @@
+id = "isolate-net-egress"
+category = "isolation"
+severity = "critical"
+os = ["linux"]
+
+# NET-1: Landlock network rules mediate only TCP connect/bind, so a Landlock-only
+# "deny network" still lets UDP (DNS exfil) and ICMP leave. --isolate-net puts the
+# agent in an empty network namespace (loopback only, no route), closing every
+# protocol. The attack is a UDP datagram to a public resolver; under isolation the
+# send fails (network unreachable), so it is blocked. Needs CAP_SYS_ADMIN on a
+# host that allows user/network namespaces.
+[policy]
+writable_roots = ["{root}/work"]
+isolate_network = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys\ns=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\ntry:\n  s.sendto(b\"x\",(\"8.8.8.8\",53)); sys.exit(0)\nexcept OSError:\n  sys.exit(1)'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"

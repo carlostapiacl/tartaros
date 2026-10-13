@@ -288,6 +288,7 @@ fn confined_command(
     let max_cpu = policy.max_cpu_secs;
     let deny_unix = policy.deny_unix_sockets;
     let isolate_pids = policy.isolate_pids;
+    let isolate_network = policy.isolate_network;
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
     unsafe {
@@ -310,11 +311,11 @@ fn confined_command(
                     libc::close(fd);
                 }
             }
-            // Private PID + mount namespace (opt-in). Must happen before the
-            // Landlock lockdown (mounting /proc needs CAP_SYS_ADMIN and an
-            // unrestricted mount tree). Fails closed. See enter_pid_namespace.
-            if isolate_pids {
-                enter_pid_namespace()?;
+            // Private namespaces (opt-in). Must happen before the Landlock
+            // lockdown (mounting /proc / bringing up loopback need CAP_SYS_ADMIN
+            // and an unrestricted mount tree). Fails closed. See enter_namespaces.
+            if isolate_pids || isolate_network {
+                enter_namespaces(isolate_pids, isolate_network)?;
             }
             // Resource limits (P1-B) before dropping into the sandbox.
             set_rlimit(libc::RLIMIT_AS, max_memory)?;
@@ -340,77 +341,128 @@ fn confined_command(
     Ok(cmd)
 }
 
-/// Put the agent in a private PID + mount namespace so it sees only its own
-/// process subtree. Called from `pre_exec` (child, before the Landlock lockdown)
-/// and after the cgroup join. On return the caller continues as PID 1 of a new
-/// PID namespace with a fresh `/proc`; it never returns in the parent, which
-/// becomes a thin init that reaps the agent and propagates its exit status.
+/// Put the agent in private namespaces so it cannot see host processes
+/// (`isolate_pids`) and/or cannot reach any external network (`isolate_net`).
+/// Called from `pre_exec` (child, before the Landlock lockdown) and after the
+/// cgroup join.
+///
+/// - `isolate_net` adds an empty network namespace with only loopback up: no
+///   external interface or route, so NO protocol leaves (TCP, UDP, ICMP, raw) —
+///   closing the gap that Landlock (TCP connect/bind only) leaves for UDP/ICMP.
+/// - `isolate_pids` adds a PID + mount namespace; the caller continues as PID 1
+///   of the new PID namespace with a fresh `/proc`, and the fork's parent becomes
+///   a thin init that reaps the agent and propagates its exit status (it never
+///   returns here).
 ///
 /// Fails closed: if any step is denied (e.g. no CAP_SYS_ADMIN inside an
 /// undelegated container), it returns an error and the launch is aborted rather
 /// than running without the requested isolation.
 #[cfg(target_os = "linux")]
-unsafe fn enter_pid_namespace() -> std::io::Result<()> {
-    // New mount + PID namespace. CLONE_NEWPID takes effect on the next fork:
-    // this process stays in the old PID ns and its first child is PID 1 of the
-    // new one.
-    if libc::unshare(libc::CLONE_NEWNS | libc::CLONE_NEWPID) != 0 {
+unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> std::io::Result<()> {
+    // CLONE_NEWNET and CLONE_NEWNS apply to this process immediately; CLONE_NEWPID
+    // takes effect on the next fork (this process stays in the old PID ns and its
+    // first child is PID 1 of the new one).
+    let mut flags = 0;
+    if isolate_pids {
+        flags |= libc::CLONE_NEWNS | libc::CLONE_NEWPID;
+    }
+    if isolate_net {
+        flags |= libc::CLONE_NEWNET;
+    }
+    if libc::unshare(flags) != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // Make the mount tree private so our fresh /proc does not propagate to (or
-    // from) the host mount namespace.
-    let root = c"/";
-    if libc::mount(
-        std::ptr::null(),
-        root.as_ptr(),
-        std::ptr::null(),
-        libc::MS_REC | libc::MS_PRIVATE,
-        std::ptr::null(),
-    ) != 0
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    let pid = libc::fork();
-    if pid < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if pid > 0 {
-        // Init shim (stays in the old PID ns): wait for the agent and exit with
-        // its status, so the supervisor sees the agent's real exit code.
-        //
-        // Close every inherited non-stdio fd first. std::process keeps a
-        // CLOEXEC exec-status pipe; the agent (G) closes its copy when it
-        // execs, but this shim would hold its copy open for the whole run,
-        // so Command::spawn() in the parent would BLOCK reading that pipe until
-        // the run ends — the supervisor (and its timeout) would never start.
-        // Closing here releases the pipe the moment the agent execs.
-        close_inherited_fds();
-        let mut status: libc::c_int = 0;
-        while libc::waitpid(pid, &mut status, 0) < 0 {
-            if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-                libc::_exit(1);
-            }
+    if isolate_pids {
+        // Make the mount tree private so our fresh /proc does not propagate to (or
+        // from) the host mount namespace.
+        let root = c"/";
+        if libc::mount(
+            std::ptr::null(),
+            root.as_ptr(),
+            std::ptr::null(),
+            libc::MS_REC | libc::MS_PRIVATE,
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
         }
-        let code = if (status & 0x7f) == 0 {
-            (status >> 8) & 0xff // WEXITSTATUS
-        } else {
-            128 + (status & 0x7f) // 128 + WTERMSIG
-        };
-        libc::_exit(code);
+        let pid = libc::fork();
+        if pid < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if pid > 0 {
+            // Init shim (stays in the old PID ns): wait for the agent and exit with
+            // its status, so the supervisor sees the agent's real exit code.
+            //
+            // Close every inherited non-stdio fd first. std::process keeps a
+            // CLOEXEC exec-status pipe; the agent (G) closes its copy when it
+            // execs, but this shim would hold its copy open for the whole run,
+            // so Command::spawn() in the parent would BLOCK reading that pipe until
+            // the run ends — the supervisor (and its timeout) would never start.
+            // Closing here releases the pipe the moment the agent execs.
+            close_inherited_fds();
+            let mut status: libc::c_int = 0;
+            while libc::waitpid(pid, &mut status, 0) < 0 {
+                if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    libc::_exit(1);
+                }
+            }
+            let code = if (status & 0x7f) == 0 {
+                (status >> 8) & 0xff // WEXITSTATUS
+            } else {
+                128 + (status & 0x7f) // 128 + WTERMSIG
+            };
+            libc::_exit(code);
+        }
+        // Agent (PID 1 of the new namespace): mount a fresh procfs so /proc
+        // reflects this namespace (only our own processes), not the host's.
+        let proc_src = c"proc";
+        let proc_tgt = c"/proc";
+        if libc::mount(
+            proc_src.as_ptr(),
+            proc_tgt.as_ptr(),
+            proc_src.as_ptr(),
+            0,
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
     }
-    // Agent (PID 1 of the new namespace): mount a fresh procfs so /proc reflects
-    // this namespace (only our own processes), not the host's.
-    let proc_src = c"proc";
-    let proc_tgt = c"/proc";
-    if libc::mount(
-        proc_src.as_ptr(),
-        proc_tgt.as_ptr(),
-        proc_src.as_ptr(),
-        0,
-        std::ptr::null(),
-    ) != 0
-    {
+    // Bring up loopback inside the new netns so 127.0.0.1-to-self works; there is
+    // still no external interface or route, so nothing can leave the host.
+    if isolate_net {
+        bring_up_loopback()?;
+    }
+    Ok(())
+}
+
+/// Bring the loopback interface up inside the current (new) network namespace via
+/// SIOCGIFFLAGS/SIOCSIFFLAGS. A fresh netns has `lo` DOWN; without this even
+/// 127.0.0.1-to-self fails. No external interface exists, so egress stays closed.
+#[cfg(target_os = "linux")]
+unsafe fn bring_up_loopback() -> std::io::Result<()> {
+    const SIOCGIFFLAGS: libc::c_ulong = 0x8913;
+    const SIOCSIFFLAGS: libc::c_ulong = 0x8914;
+    let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+    if fd < 0 {
         return Err(std::io::Error::last_os_error());
+    }
+    // struct ifreq: char ifr_name[16]; then the flags union (a c_short first).
+    let mut ifr: libc::ifreq = std::mem::zeroed();
+    let name = b"lo\0";
+    for (i, b) in name.iter().enumerate() {
+        ifr.ifr_name[i] = *b as libc::c_char;
+    }
+    let mut rc = libc::ioctl(fd, SIOCGIFFLAGS, &mut ifr);
+    if rc == 0 {
+        ifr.ifr_ifru.ifru_flags |= (libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short;
+        rc = libc::ioctl(fd, SIOCSIFFLAGS, &ifr);
+    }
+    let err = std::io::Error::last_os_error();
+    libc::close(fd);
+    if rc != 0 {
+        return Err(err);
     }
     Ok(())
 }
