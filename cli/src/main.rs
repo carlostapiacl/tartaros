@@ -219,7 +219,7 @@ fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
 
 #[cfg(target_os = "macos")]
 fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
-    use seisin_sandbox_collect::{observe_until_exit, ProcessCollector, SecretCollector};
+    use seisin_sandbox_collect::{observe_until_exit, NetworkCollector, ProcessCollector, SecretCollector};
     use seisin_sandbox_core::{Collector, FilterSink, JsonlSink, RecordMode};
     let be = seisin_sandbox_macos::SeatbeltBackend;
     match log {
@@ -231,6 +231,7 @@ fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
             };
             let pid = child.id();
             let mut collectors: Vec<Box<dyn Collector>> = vec![
+                Box::new(NetworkCollector::for_policy(pid, policy)),
                 Box::new(SecretCollector::for_policy(pid, policy)),
                 Box::new(ProcessCollector::for_policy(pid, policy)),
             ];
