@@ -79,6 +79,9 @@ pub struct Policy {
     pub local_ports: Vec<u16>,
     /// External hosts (by IP) the role may reach; everything else is outside.
     pub allowed_hosts: Vec<String>,
+    /// Paths the agent may NOT read (secret dirs: `~/.ssh`, `~/.aws`, …). The
+    /// enforcement counterpart of the secret collector.
+    pub read_denies: Vec<PathBuf>,
     /// Deny any process-info / environment read of processes outside this
     /// sandbox (macOS `KERN_PROCARGS2`, Linux `/proc/<pid>`).
     pub isolate_process_info: bool,
@@ -122,6 +125,22 @@ impl Policy {
         for root in &self.writable_roots {
             carve(root, &denied, &mut out);
         }
+        out
+    }
+
+    /// Read allow-list for Linux: everything is readable except the `read_denies`
+    /// (secret dirs), carved out of a read grant on `/`. Same inode caveat as the
+    /// write carve — only existing paths are carved.
+    pub fn linux_read_allowlist(&self) -> Vec<PathBuf> {
+        let mut denied: Vec<PathBuf> = self.read_denies.clone();
+        denied.retain(|p| p.exists());
+        if denied.is_empty() {
+            return vec![PathBuf::from("/")];
+        }
+        denied.sort();
+        denied.dedup();
+        let mut out = Vec::new();
+        carve(Path::new("/"), &denied, &mut out);
         out
     }
 

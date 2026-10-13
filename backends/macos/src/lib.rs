@@ -147,6 +147,12 @@ pub fn compile_profile(policy: &Policy) -> String {
         emit_deny(&mut p, &rule.path, &policy.writable_roots);
     }
 
+    // Secret read-denies (last, so they win over the broad file-read* allow).
+    for path in &policy.read_denies {
+        p.push_str(&format!("(deny file-read* (subpath {}))\n", quote(path)));
+        p.push_str(&format!("(deny file-read* (literal {}))\n", quote(path)));
+    }
+
     p
 }
 
