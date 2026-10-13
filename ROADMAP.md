@@ -61,7 +61,11 @@ Build only where measurement shows no existing backend can enforce the policy.
       exec + foreign `/proc/<pid>/environ` read), `McpCollector` (ungranted MCP,
       v1 cmdline heuristic) — classifiers unit-tested; `proc` helpers shared
 - [ ] file-write event capture (enforced already; emit on deny)
-- [ ] live run of the collectors against a real agent on the Linux test host
+- [x] **observed session live on the Linux test host**: `LandlockBackend::spawn` + `collect::
+      observe_until_exit` drive the collectors while a confined agent runs; real
+      effect log captured first-hand (secret read of ~/.ssh + curl exec), filtered
+      by `RecordMode`. `NetworkCollector` now walks the process tree (child
+      sockets attributed)
 - [ ] macOS siblings (lsof for net, fd for secret) 
 - [x] **ports per role**: `Policy::local_ports` opens only granted loopback
       ports (macOS live-verified: 8001 reachable, 8787 blocked); unit-tested.
