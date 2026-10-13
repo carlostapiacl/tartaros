@@ -43,6 +43,11 @@ We did **not** reproduce a srt disadvantage here, so none is claimed. `.claude/
 settings.json` blocked under srt 0.0.78 — to reconcile with an earlier code-level
 observation needs a version-specific check; recorded as parity until then.
 
+`compare.sh` now supports a third column for srt (when node + bwrap + srt are
+present): srt blocks write-outside and nested `.git/hooks` (via its glob deny) —
+parity with seisin — and nono allows the nested hook (the measured differentiator).
+The srt column activates only where the tooling is installed.
+
 Where the measured rows differ: deny-inside-allow on
 Linux (nono cannot express it; srt uses bwrap). Against nono and the Codex class
 the trust-handoff advantage is public and measured (above).

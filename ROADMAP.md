@@ -173,7 +173,9 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] **automated competitor comparison** (`comparison/compare.sh`, review P2):
       runs the same scenarios under seisin (CLI) and nono, prints the table.
       Reproducible on the Linux test host; no commercial claim without a measured row.
-- [ ] comparison vs OpenShell (NVIDIA); add SRT to compare.sh
+- [x] SRT column added to compare.sh (activates when node+bwrap+srt present).
+      seisin+nono path verified automated on the Linux test host; srt measured manually (parity).
+- [ ] comparison vs OpenShell (NVIDIA); make the srt column run in CI env
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
 
 ## Both-OS parity (loop)
