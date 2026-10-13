@@ -392,6 +392,8 @@ dependencies = [
  "seisin-sandbox-core",
  "seisin-sandbox-linux",
  "seisin-sandbox-macos",
+ "serde",
+ "toml",
 ]
 
 [[package]]

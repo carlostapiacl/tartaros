@@ -182,4 +182,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] `seisin-sandbox run [opts] -- cmd`: policy via flags, OS backend, exit code
       passthrough; `--log` emits the effect log of a real run (Linux). Verified on
       macOS (confines) and the Linux test host (confines + read-deny + effect log of ~/.ssh read).
-- [ ] config file (TOML policy) and per-role profiles; macOS collectors for --log
+- [x] **config file (TOML policy)**: `--config role.toml` — one policy declared
+      once, applied equivalently on macOS and Linux (B2B P2). `~` expands to $HOME;
+      flags override. Verified on both (control ok, secret read-deny rc=1).
+- [ ] per-role profile discovery; macOS collectors for --log
