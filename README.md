@@ -130,6 +130,23 @@ Reproducible scenarios (attack + legitimate control + real-effect assertion)
 live in [`security-bench/`](security-bench/) — run them against the OS backend
 for a PASS/VIOLATION scorecard that exits non-zero on any failure.
 
+## Build & install
+
+```
+cargo build --release -p tartaros-cli            # target/release/tartaros
+tartaros version                                 # version + active backend
+tartaros help                                    # full usage
+```
+
+For a dependency-free drop-in (distroless / minimal containers), build a fully
+static Linux binary — no glibc version to match:
+
+```
+rustup target add x86_64-unknown-linux-musl
+cargo build --release -p tartaros-cli --target x86_64-unknown-linux-musl
+# -> static-pie, ldd reports "not a dynamic executable"
+```
+
 ## License
 
 Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
