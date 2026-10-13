@@ -8,6 +8,7 @@
 //!   --role NAME            label for effect-log attribution
 //!   --write DIR            a writable root (repeatable)
 //!   --read-deny DIR        deny reads of this path (repeatable; secrets)
+//!   --read-allow DIR       re-allow reading this path inside a read-deny (repeatable)
 //!   --write-deny DIR       deny writes to this path inside a writable root (repeatable)
 //!   --port N               allow loopback TCP to this port (repeatable)
 //!   --net                  allow all network (default: denied)
@@ -43,6 +44,8 @@ struct PolicyFile {
     writable_roots: Vec<String>,
     #[serde(default)]
     read_denies: Vec<String>,
+    #[serde(default)]
+    read_allows: Vec<String>,
     #[serde(default)]
     write_denies: Vec<String>,
     #[serde(default)]
@@ -131,6 +134,7 @@ POLICY:
   --role NAME            label for the effect log
   --write DIR            a writable root (repeatable)
   --read-deny DIR        deny reads of this path, e.g. a secret dir (repeatable)
+  --read-allow DIR       re-allow reading this path inside a read-deny (repeatable)
   --write-deny DIR       deny writes to this path inside a writable root (repeatable)
   --port N               allow loopback TCP to this port (repeatable)
   --net                  allow all network (default: denied)
@@ -210,6 +214,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
         p.role = pf.role;
         p.writable_roots = pf.writable_roots.iter().map(|s| PathBuf::from(expand(s))).collect();
         p.read_denies = pf.read_denies.iter().map(|s| PathBuf::from(expand(s))).collect();
+        p.read_allows = pf.read_allows.iter().map(|s| PathBuf::from(expand(s))).collect();
         p.fs_rules.extend(pf.write_denies.iter().map(|s| FsRule { path: PathBuf::from(expand(s)), access: Access::Deny, even_if_absent: true }));
         p.local_ports = pf.local_ports;
         p.network = Some(if pf.net { Network::Allowed } else { Network::Denied });
@@ -256,6 +261,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
             "--role" => p.role = val(),
             "--write" => p.writable_roots.push(PathBuf::from(expand(&val()))),
             "--read-deny" => p.read_denies.push(PathBuf::from(expand(&val()))),
+            "--read-allow" => p.read_allows.push(PathBuf::from(expand(&val()))),
             "--write-deny" => p.fs_rules.push(FsRule { path: PathBuf::from(expand(&val())), access: Access::Deny, even_if_absent: true }),
             "--port" => p.local_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --port"); exit(2); })),
             "--net" => p.network = Some(Network::Allowed),
@@ -303,6 +309,10 @@ fn explain(p: &Policy) {
     }
     println!("\nread-denied (secrets):");
     for r in &p.read_denies { println!("  - {}", r.display()); }
+    if !p.read_allows.is_empty() {
+        println!("\nread re-allowed (inside a read-deny):");
+        for r in &p.read_allows { println!("  + {}", r.display()); }
+    }
     println!("\ntrust-handoff protected (deny write, any depth):");
     for r in p.trust_handoff_rules() { println!("  ! {}", r.path.display()); }
 

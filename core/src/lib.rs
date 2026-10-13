@@ -101,6 +101,11 @@ pub struct Policy {
     /// Paths the agent may NOT read (secret dirs: `~/.ssh`, `~/.aws`, …). The
     /// enforcement counterpart of the secret collector.
     pub read_denies: Vec<PathBuf>,
+    /// Paths to RE-ALLOW reading even though they sit inside a `read_denies`
+    /// subtree: deny a broad directory but open one branch within it (e.g. deny
+    /// the whole runs directory, allow this run's own files). Deny-inside-allow
+    /// for reads, the mirror of the write carve.
+    pub read_allows: Vec<PathBuf>,
     /// Deny any process-info / environment read of processes outside this
     /// sandbox (macOS `KERN_PROCARGS2`, Linux `/proc/<pid>`).
     pub isolate_process_info: bool,
@@ -226,13 +231,23 @@ impl Policy {
             denied.push(PathBuf::from("/proc"));
         }
         denied.retain(|p| p.exists());
-        if denied.is_empty() {
-            return vec![PathBuf::from("/")];
+        let mut out = if denied.is_empty() {
+            vec![PathBuf::from("/")]
+        } else {
+            denied.sort();
+            denied.dedup();
+            let mut o = Vec::new();
+            carve(Path::new("/"), &denied, &mut o);
+            o
+        };
+        // Re-allow explicit read_allows: a Landlock read grant on a subtree that
+        // lies inside a denied parent re-permits exactly that branch, while the
+        // rest of the denied dir stays ungranted (unreadable).
+        for a in &self.read_allows {
+            if a.exists() {
+                out.push(a.clone());
+            }
         }
-        denied.sort();
-        denied.dedup();
-        let mut out = Vec::new();
-        carve(Path::new("/"), &denied, &mut out);
         out
     }
 

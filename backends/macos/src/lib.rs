@@ -337,6 +337,13 @@ pub fn compile_profile(policy: &Policy) -> String {
         p.push_str(&format!("(deny file-read* (literal {}))\n", quote(&real)));
     }
 
+    // Read re-allows LAST, so they win over a read-deny they sit inside
+    // (deny a broad dir, re-open one branch). Seatbelt is last-match-wins.
+    for path in &policy.read_allows {
+        let real = path.canonicalize().unwrap_or_else(|_| path.clone());
+        p.push_str(&format!("(allow file-read* (subpath {}))\n", quote(&real)));
+    }
+
     p
 }
 
