@@ -39,6 +39,19 @@ impl Backend for SeatbeltBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
+        let child = self.spawn(policy, command)?;
+        Ok(RunOutcome { exit_code: supervise(child, policy.timeout) })
+    }
+}
+
+impl SeatbeltBackend {
+    /// Spawn the confined command without waiting, so collectors can observe its
+    /// process tree by pid while it runs (used by the CLI's `--log`).
+    pub fn spawn(&self, policy: &Policy, command: &[String]) -> Result<std::process::Child, RunError> {
+        self.validate(policy).map_err(|e| RunError { reason: e.reason })?;
+        if command.is_empty() {
+            return Err(RunError { reason: "empty command".into() });
+        }
         let profile = compile_profile(policy);
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
         cmd.arg("-p").arg(&profile).arg("--").args(command);
@@ -49,24 +62,19 @@ impl Backend for SeatbeltBackend {
         unsafe {
             use std::os::unix::process::CommandExt;
             cmd.pre_exec(move || {
-                // Own process group so the supervisor can signal the whole tree.
                 if libc::setpgid(0, 0) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 set_rlimit(libc::RLIMIT_AS, max_memory)?;
                 set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
                 set_rlimit(libc::RLIMIT_CPU, max_cpu)?;
-                // Close inherited non-stdio fds (FD-1) before the chain execs.
                 for fd in 3..1024 {
                     libc::close(fd);
                 }
                 Ok(())
             });
         }
-        let child = cmd
-            .spawn()
-            .map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })?;
-        Ok(RunOutcome { exit_code: supervise(child, policy.timeout) })
+        cmd.spawn().map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })
     }
 }
 

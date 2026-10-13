@@ -83,19 +83,90 @@ fn ppid_of(pid: u32) -> Option<u32> {
     it.next()?.parse::<u32>().ok()
 }
 
-#[cfg(not(target_os = "linux"))]
+// --- macOS: no /proc, so observe via lsof / ps (sampling; misses <interval). ---
+
+#[cfg(target_os = "macos")]
+pub fn fd_targets(pid: u32) -> Vec<(u32, String)> {
+    let out = match std::process::Command::new("lsof")
+        .args(["-p", &pid.to_string(), "-F", "fn", "-w"])
+        .output()
+    {
+        Ok(o) => o.stdout,
+        Err(_) => return Vec::new(),
+    };
+    let mut res = Vec::new();
+    let mut cur_fd: u32 = u32::MAX;
+    for line in String::from_utf8_lossy(&out).lines() {
+        if let Some(rest) = line.strip_prefix('f') {
+            cur_fd = rest.parse().unwrap_or(u32::MAX);
+        } else if let Some(name) = line.strip_prefix('n') {
+            res.push((cur_fd, name.to_string()));
+        }
+    }
+    res
+}
+
+#[cfg(target_os = "macos")]
+pub fn exe(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+#[cfg(target_os = "macos")]
+pub fn cmdline(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+#[cfg(target_os = "macos")]
+pub fn process_tree(root: u32) -> Vec<u32> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let out = match std::process::Command::new("ps").args(["-axo", "pid=,ppid="]).output() {
+        Ok(o) => o.stdout,
+        Err(_) => return vec![root],
+    };
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for line in String::from_utf8_lossy(&out).lines() {
+        let mut it = line.split_whitespace();
+        if let (Some(p), Some(pp)) = (it.next(), it.next()) {
+            if let (Ok(p), Ok(pp)) = (p.parse::<u32>(), pp.parse::<u32>()) {
+                children.entry(pp).or_default().push(p);
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    let mut q = VecDeque::from([root]);
+    while let Some(p) = q.pop_front() {
+        if out.insert(p) {
+            if let Some(cs) = children.get(&p) {
+                q.extend(cs);
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn fd_targets(_pid: u32) -> Vec<(u32, String)> {
     Vec::new()
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn exe(_pid: u32) -> Option<String> {
     None
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn cmdline(_pid: u32) -> Option<String> {
     None
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn process_tree(root: u32) -> Vec<u32> {
     vec![root]
 }
