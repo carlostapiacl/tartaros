@@ -391,8 +391,14 @@ fn explain(p: &Policy) {
         println!("\nread re-allowed (inside a read-deny):");
         for r in &p.read_allows { println!("  + {}", r.display()); }
     }
-    println!("\ntrust-handoff protected (deny write, any depth):");
-    for r in p.trust_handoff_rules() { println!("  ! {}", r.path.display()); }
+    // The handoff set is protected by NAME at any depth under each writable root.
+    // We list the names themselves, not an enumeration of matching paths on disk:
+    // the protection covers paths that do not exist yet (pre-planting defense), and
+    // walking a large writable tree (e.g. --write /tmp) just to print it would be a
+    // needless stat storm.
+    println!("\ntrust-handoff protected (deny write at any depth under each writable root):");
+    for name in tartaros_core::HANDOFF_CONFIG_NAMES { println!("  ! **/{name}"); }
+    for name in tartaros_core::HANDOFF_GIT_NAMES { println!("  ! **/{name}  (in any git repo)"); }
 
     // What this policy ACTUALLY enforces on THIS host (probed), so guarantees can
     // be verified up front rather than discovered from stderr warnings at runtime.
