@@ -13,10 +13,10 @@ CVE-2026-26268). TartarOS closes it, on macOS and Linux, with a policy you can
 verify — and adds process, resource and network confinement that holds **even
 when the agent runs as root**.
 
-> Status: **early but real.** This repo is the open enforcement layer that
-> [seisin](../seisin) builds on. The policy engine and multi-agent
-> orchestration that make it a product live in seisin itself; intent analysis
-> lives in a separate intent-analysis layer.
+> Status: **early but real** (`v0.1.0-alpha`). This repo is the open enforcement
+> layer: the policy model and the OS backends. A separate policy engine and
+> multi-agent orchestration build on top of it, and intent analysis is a
+> separate concern — both consume this layer rather than being part of it.
 
 ## What makes it different (measured, not claimed)
 
@@ -56,8 +56,11 @@ do not sell a competitor's default or scope choice as a vulnerability.
 | Process isolation (`--isolate-pids`) | ✅ PID + mount namespace | ❌ (no primitive) |
 | First-hand effect log (collectors, record modes) | ✅ | ✅ |
 
-**Conformance:** 17/17 security scenarios pass on Linux (the Linux test host), 0 violations.
-macOS runs the cross-platform subset.
+**Conformance:** 21/21 security scenarios pass on Linux (the Linux test host, kernel 6.8), 0
+violations; macOS (Seatbelt) passes the cross-platform subset. The suite also
+runs a mutation mode (`--mutate`) that proves it would catch a removed
+protection, and marks scenarios UNSUPPORTED on a host that lacks a required
+capability rather than silently passing.
 
 ## Honest limits
 
