@@ -70,6 +70,10 @@ pub struct Broker {
     /// Non-empty = only these hosts; everything else is 403. An entry beginning
     /// with `.` (e.g. `.github.com`) matches that domain and its subdomains.
     allowed_hosts: Vec<String>,
+    /// Permit forwarding to internal/private IPs (loopback, RFC1918, link-local
+    /// incl. cloud metadata, ULA). Default false: an allowed hostname that
+    /// resolves to an internal address is refused (SSRF / DNS-rebinding defense).
+    allow_internal: bool,
 }
 
 impl Broker {
@@ -84,7 +88,16 @@ impl Broker {
             quota: None,
             used: AtomicU32::new(0),
             allowed_hosts: Vec::new(),
+            allow_internal: false,
         }
+    }
+
+    /// Allow forwarding to internal/private IP ranges (off by default). Only for
+    /// brokering to an intentional internal service; leaving it off blocks SSRF
+    /// to loopback, RFC1918, link-local (169.254.x, cloud metadata) and ULA.
+    pub fn with_allow_internal(mut self, allow: bool) -> Self {
+        self.allow_internal = allow;
+        self
     }
 
     /// Restrict forward-proxy egress to these hosts (host-based mediation). An
@@ -300,8 +313,45 @@ impl Broker {
             "broker",
         ));
 
-        // Forward to the real upstream.
-        let mut upstream = TcpStream::connect((host.as_str(), port))?;
+        // Resolve the host ourselves and refuse internal destinations (SSRF /
+        // DNS-rebinding defense): an allowed hostname that resolves to loopback,
+        // RFC1918, link-local (169.254.x — cloud metadata) or ULA is blocked.
+        // Connect to the resolved address, not the name, so there is no
+        // resolve-then-reresolve rebinding window.
+        use std::net::ToSocketAddrs;
+        let addrs: Vec<std::net::SocketAddr> =
+            (host.as_str(), port).to_socket_addrs().map(|i| i.collect()).unwrap_or_default();
+        let target = addrs
+            .iter()
+            .find(|a| self.allow_internal || !is_internal_ip(&a.ip()))
+            .copied();
+        let target = match target {
+            Some(a) => a,
+            None => {
+                sink.emit(&EffectEvent::now(
+                    self.role.clone(),
+                    Axis::Network,
+                    "broker-internal-destination-denied",
+                    format!("{host}:{port}"),
+                    Direction::OutsideTerritory,
+                    Outcome::Denied,
+                    "broker",
+                ));
+                let body = b"internal destination blocked";
+                let _ = client.write_all(
+                    format!(
+                        "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+                let _ = client.write_all(body);
+                return Ok(());
+            }
+        };
+
+        // Forward to the real upstream (the verified, non-internal address).
+        let mut upstream = TcpStream::connect(target)?;
         let mut req = format!("{method} {path} {version}\r\n");
         // ensure Host header
         if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("host")) {
@@ -400,6 +450,31 @@ fn read_capped(resp: ureq::Response) -> String {
 }
 
 /// "http://host:port/path" -> (host, port, "/path"). Defaults port 80.
+/// Is `ip` an internal/private destination that an egress broker should refuse
+/// by default? Covers loopback, RFC1918, link-local (169.254.x — cloud metadata
+/// at 169.254.169.254), CGNAT, "this host" 0.0.0.0, IPv6 loopback/link-local and
+/// unique-local (fc00::/7).
+fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()            // 127.0.0.0/8
+                || v4.is_private()      // 10/8, 172.16/12, 192.168/16
+                || v4.is_link_local()   // 169.254/16 (incl. cloud metadata)
+                || v4.is_broadcast()
+                || v4.is_unspecified()  // 0.0.0.0
+                || o[0] == 100 && (o[1] & 0xc0) == 64 // 100.64/10 CGNAT
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 unique-local
+                || v6.to_ipv4_mapped().map(|m| is_internal_ip(&m.into())).unwrap_or(false)
+        }
+    }
+}
+
 fn parse_abs_uri(uri: &str) -> Option<(String, u16, String)> {
     let rest = uri.strip_prefix("http://")?;
     let (authority, path) = match rest.find('/') {
@@ -464,6 +539,44 @@ mod tests {
         b.deadline = Some(Instant::now() - Duration::from_secs(1));
         let r = b.gate().expect("expired");
         assert!(r.0.starts_with("403") && r.1.contains("expired"));
+    }
+
+    #[test]
+    fn blocks_internal_destinations() {
+        let internal = [
+            "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1",
+            "169.254.169.254", // cloud metadata
+            "0.0.0.0", "100.100.0.1", // CGNAT
+            "::1", "fe80::1", "fc00::1",
+        ];
+        for s in internal {
+            let ip: std::net::IpAddr = s.parse().unwrap();
+            assert!(is_internal_ip(&ip), "{s} must be internal");
+        }
+        let public = ["1.1.1.1", "8.8.8.8", "140.82.112.3", "2606:4700:4700::1111"];
+        for s in public {
+            let ip: std::net::IpAddr = s.parse().unwrap();
+            assert!(!is_internal_ip(&ip), "{s} must be public");
+        }
+    }
+
+    #[test]
+    fn live_blocks_ssrf_to_loopback() {
+        let b = Broker::new("qa", vec![]).insecure_no_auth();
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        // forward-proxy request whose target resolves to loopback -> SSRF blocked
+        c.write_all(b"GET http://127.0.0.1:9/x HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        let mut resp = String::new();
+        let _ = c.read_to_string(&mut resp);
+        assert!(resp.contains("403"), "SSRF to loopback must be 403, got: {resp:?}");
+        assert!(resp.contains("internal destination"), "got: {resp:?}");
     }
 
     #[test]
