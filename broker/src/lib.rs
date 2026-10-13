@@ -66,6 +66,10 @@ pub struct Broker {
     quota: Option<u32>,
     /// Authorized requests served so far (quota counter).
     used: AtomicU32,
+    /// Forward-proxy egress allow-list. Empty = allow any host (back-compat).
+    /// Non-empty = only these hosts; everything else is 403. An entry beginning
+    /// with `.` (e.g. `.github.com`) matches that domain and its subdomains.
+    allowed_hosts: Vec<String>,
 }
 
 impl Broker {
@@ -79,7 +83,31 @@ impl Broker {
             deadline: None,
             quota: None,
             used: AtomicU32::new(0),
+            allowed_hosts: Vec::new(),
         }
+    }
+
+    /// Restrict forward-proxy egress to these hosts (host-based mediation). An
+    /// entry beginning with `.` matches that domain and its subdomains. Empty
+    /// (the default) allows any host, preserving the prototype's behaviour.
+    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.allowed_hosts = hosts;
+        self
+    }
+
+    /// Is `host` permitted by the egress allow-list? Empty list = allow all.
+    fn host_allowed(&self, host: &str) -> bool {
+        if self.allowed_hosts.is_empty() {
+            return true;
+        }
+        self.allowed_hosts.iter().any(|h| {
+            if let Some(suffix) = h.strip_prefix('.') {
+                host.eq_ignore_ascii_case(suffix)
+                    || host.to_ascii_lowercase().ends_with(&format!(".{}", suffix.to_ascii_lowercase()))
+            } else {
+                host.eq_ignore_ascii_case(h)
+            }
+        })
     }
 
     /// Expire the broker's grant after `ttl` from now: a short-lived capability.
@@ -227,6 +255,30 @@ impl Broker {
                 return Ok(());
             }
         };
+
+        // Egress allow-list (host-based mediation): a host off the list is
+        // refused here, before any connection or secret injection.
+        if !self.host_allowed(&host) {
+            sink.emit(&EffectEvent::now(
+                self.role.clone(),
+                Axis::Network,
+                "broker-egress-denied",
+                format!("{host}:{port}{path}"),
+                Direction::OutsideTerritory,
+                Outcome::Denied,
+                "broker",
+            ));
+            let body = b"host not allowed";
+            let _ = client.write_all(
+                format!(
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+            let _ = client.write_all(body);
+            return Ok(());
+        }
 
         // Inject the secret(s) for this host — the agent never saw them.
         let mut injected = false;
@@ -412,6 +464,26 @@ mod tests {
         b.deadline = Some(Instant::now() - Duration::from_secs(1));
         let r = b.gate().expect("expired");
         assert!(r.0.starts_with("403") && r.1.contains("expired"));
+    }
+
+    #[test]
+    fn egress_allowlist() {
+        // empty = allow any (back-compat)
+        let open = Broker::new("qa", vec![]);
+        assert!(open.host_allowed("anything.com"));
+        // exact host
+        let b = Broker::new("qa", vec![]).with_allowed_hosts(vec!["api.github.com".into()]);
+        assert!(b.host_allowed("api.github.com"));
+        assert!(b.host_allowed("API.GitHub.com"), "case-insensitive");
+        assert!(!b.host_allowed("evil.com"));
+        assert!(!b.host_allowed("notapi.github.com"), "no accidental suffix match");
+        // domain wildcard (.github.com matches the domain and subdomains)
+        let w = Broker::new("qa", vec![]).with_allowed_hosts(vec![".github.com".into()]);
+        assert!(w.host_allowed("github.com"));
+        assert!(w.host_allowed("api.github.com"));
+        assert!(w.host_allowed("uploads.api.github.com"));
+        assert!(!w.host_allowed("github.com.evil.com"));
+        assert!(!w.host_allowed("evilgithub.com"));
     }
 
     #[test]
