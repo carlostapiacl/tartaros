@@ -216,10 +216,20 @@ fn main() {
     println!("  INFRA_ERROR:             {infra_errors}  [target 0]");
     println!("  SKIPPED (other OS):      {skipped}");
 
+    // Environment stamp: a scorecard is only citeable if it says WHERE it ran and
+    // which enforcement primitives the host actually offered (a PASS on a host
+    // missing Landlock/cgroup is not the same guarantee). Printed and recorded.
+    let env = environment();
+    println!("\nenvironment: {} · kernel {} · tartaros-bench {}", env.os, env.kernel, env.version);
+    println!("host caps:  landlock={} cgroup_v2={} userns={}", env.landlock, env.cgroup_v2, env.userns);
+
     // write a JSON report
     let _ = std::fs::create_dir_all("reports");
     let mut j = String::from("{\n");
-    j.push_str(&format!("  \"os\": \"{OS}\",\n  \"total\": {total},\n  \"passed\": {passed},\n  \"violations\": {violations},\n  \"critical_violations\": {crit_viol},\n  \"control_broken\": {broke},\n  \"scenarios\": [\n"));
+    j.push_str(&format!(
+        "  \"os\": \"{OS}\",\n  \"environment\": {{\"os\":\"{}\",\"kernel\":\"{}\",\"tool_version\":\"{}\",\"unix_time\":{},\"caps\":{{\"landlock\":{},\"cgroup_v2\":{},\"userns\":{}}}}},\n  \"total\": {total},\n  \"passed\": {passed},\n  \"violations\": {violations},\n  \"critical_violations\": {crit_viol},\n  \"control_broken\": {broke},\n  \"scenarios\": [\n",
+        env.os, env.kernel, env.version, env.unix_time, env.landlock, env.cgroup_v2, env.userns
+    ));
     for (i, o) in outcomes.iter().enumerate() {
         j.push_str(&format!(
             "    {{\"id\":\"{}\",\"category\":\"{}\",\"severity\":\"{}\",\"passed\":{},\"violation\":{},\"control_broke\":{}}}{}\n",
@@ -296,6 +306,51 @@ impl Mutation {
             Mutation::RaiseProcLimit => p.max_processes = None,
             Mutation::RaiseMemLimit => p.max_memory_bytes = None,
         }
+    }
+}
+
+/// Self-describing environment stamp for a scorecard (read-only probes).
+struct Env {
+    os: String,
+    kernel: String,
+    version: String,
+    unix_time: u64,
+    landlock: bool,
+    cgroup_v2: bool,
+    userns: bool,
+}
+
+fn environment() -> Env {
+    let kernel = std::process::Command::new("uname")
+        .arg("-r")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".into());
+    let unix_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Linux capability probes — read-only, no side effects.
+    let landlock = std::fs::read_to_string("/sys/kernel/security/lsm")
+        .map(|s| s.split(',').any(|l| l.trim() == "landlock"))
+        .unwrap_or(false);
+    let cgroup_v2 = Path::new("/sys/fs/cgroup/cgroup.controllers").exists();
+    // User namespaces available for unprivileged clone, or we are privileged.
+    let userns = std::fs::read_to_string("/proc/sys/user/max_user_namespaces")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    Env {
+        os: OS.to_string(),
+        kernel,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        unix_time,
+        landlock,
+        cgroup_v2,
+        userns,
     }
 }
 
