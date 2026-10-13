@@ -1,0 +1,30 @@
+id = "lifecycle-daemon-escape"
+category = "lifecycle"
+severity = "high"
+os = ["linux"]
+
+# A command that double-forks and setsid's a daemon leaves the process group, so
+# the timeout's kill(-pgid) misses it and it would outlive the sandbox. seisin
+# puts every run in a per-run cgroup and tears it down with cgroup.kill, which
+# reaps the escaped daemon too. The daemon here only writes "dirty" at t+2s; the
+# run is killed at t+1s, so after settling the marker must still read "clean".
+# (Needs a cgroup-v2 host with write access to /sys/fs/cgroup; a container without
+# cgroup delegation falls back to process-group teardown and would flag this.)
+[policy]
+writable_roots = ["{root}/work"]
+timeout_secs = 1
+
+[[fixture]]
+path = "{root}/work/marker"
+content = "clean"
+
+[attack]
+cmd = "setsid sh -c 'sleep 2; echo dirty > {root}/work/marker' & echo launched; sleep 5"
+expect_exit = 124
+
+[control]
+cmd = "echo ok > {root}/work/ctl.txt"
+
+[assert]
+unchanged = "{root}/work/marker"
+settle_secs = 3
