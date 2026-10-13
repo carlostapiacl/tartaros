@@ -170,7 +170,10 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] comparison vs anthropic-srt 0.0.78 (a Linux host): PARITY on
       write-outside and .claude/settings.json — no srt disadvantage reproduced, none
       claimed (honest).
-- [ ] comparison vs OpenShell (NVIDIA)
+- [x] **automated competitor comparison** (`comparison/compare.sh`, review P2):
+      runs the same scenarios under seisin (CLI) and nono, prints the table.
+      Reproducible on the Linux test host; no commercial claim without a measured row.
+- [ ] comparison vs OpenShell (NVIDIA); add SRT to compare.sh
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
 
 ## Both-OS parity (loop)
