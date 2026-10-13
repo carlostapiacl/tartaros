@@ -23,6 +23,8 @@
 //!   --max-procs N          process limit
 //!   --max-cpu SECS         total CPU-seconds limit (RLIMIT_CPU; root-proof)
 //!   --log FILE             write the effect log (JSON Lines) here (Linux)
+//!   --settings FILE        map a sandbox-runtime settings.json onto the generic
+//!                          policy; refuses (exit 2) on anything it can't guarantee
 //!
 //! Exit code is the command's (128+signal on signal death, 124 on timeout).
 
@@ -131,6 +133,8 @@ PROFILE (preset threat model; flags still extend it):
 
 POLICY:
   --config FILE          load a TOML policy (flags override it)
+  --settings FILE        map a sandbox-runtime settings.json onto the generic
+                         policy; refuses (exit 2) on anything it can't guarantee
   --role NAME            label for the effect log
   --write DIR            a writable root (repeatable)
   --read-deny DIR        deny reads of this path, e.g. a secret dir (repeatable)
@@ -200,6 +204,71 @@ fn cmd_explain(opts: &[String]) -> ! {
     exit(0);
 }
 
+/// sandbox-runtime settings schema (the subset we read). An adapter maps it onto
+/// the generic Policy; anything we cannot enforce makes the launch refuse.
+#[derive(Deserialize, Default)]
+struct SandboxSettings {
+    #[serde(default)]
+    filesystem: SandboxFs,
+    #[serde(default)]
+    network: SandboxNet,
+}
+#[derive(Deserialize, Default)]
+struct SandboxFs {
+    #[serde(default, rename = "allowWrite")]
+    allow_write: Vec<String>,
+    #[serde(default, rename = "denyWrite")]
+    deny_write: Vec<String>,
+    #[serde(default, rename = "allowRead")]
+    allow_read: Vec<String>,
+    #[serde(default, rename = "denyRead")]
+    deny_read: Vec<String>,
+}
+#[derive(Deserialize, Default)]
+struct SandboxNet {
+    #[serde(default, rename = "allowedDomains")]
+    allowed_domains: Vec<String>,
+    #[serde(default, rename = "deniedDomains")]
+    denied_domains: Vec<String>,
+    #[serde(default, rename = "allowUnixSockets")]
+    allow_unix_sockets: Vec<String>,
+    #[serde(default, rename = "allowLocalBinding")]
+    allow_local_binding: bool,
+}
+
+/// Apply a sandbox-runtime settings file strictly: map the fields we can enforce
+/// onto the generic policy, and REFUSE (exit) on any field we cannot guarantee,
+/// rather than running under-enforced. "Apply fully or do not start."
+fn apply_settings_file(p: &mut Policy, path: &str) {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| { eprintln!("read {path}: {e}"); exit(2); });
+    let s: SandboxSettings = serde_json::from_str(&text).unwrap_or_else(|e| { eprintln!("parse {path}: {e}"); exit(2); });
+    let refuse = |what: &str| -> ! {
+        eprintln!("tartaros: --settings: cannot guarantee {what} on this backend; refusing to run (apply-fully-or-refuse).");
+        exit(2);
+    };
+    // Filesystem: fully expressible with the generic carve.
+    p.writable_roots = s.filesystem.allow_write.iter().map(|x| PathBuf::from(expand(x))).collect();
+    p.read_denies = s.filesystem.deny_read.iter().map(|x| PathBuf::from(expand(x))).collect();
+    p.read_allows = s.filesystem.allow_read.iter().map(|x| PathBuf::from(expand(x))).collect();
+    p.fs_rules.extend(s.filesystem.deny_write.iter().map(|x| FsRule { path: PathBuf::from(expand(x)), access: Access::Deny, even_if_absent: true }));
+    // Network: we default-deny. Anything we cannot enforce in-sandbox is refused.
+    p.network = Some(Network::Denied);
+    if !s.network.allowed_domains.is_empty() {
+        refuse("per-domain egress (needs the broker; not wired into `run` yet)");
+    }
+    if !s.network.denied_domains.is_empty() {
+        refuse("per-domain deny lists");
+    }
+    if !s.network.allow_unix_sockets.is_empty() {
+        refuse("a specific AF_UNIX socket (seccomp is all-or-nothing on Linux)");
+    }
+    if s.network.allow_local_binding {
+        refuse("blanket local binding (grant a concrete port with a port rule instead)");
+    }
+    // Strict: a settings-driven run is guaranteed-or-abort.
+    p.strict = true;
+}
+
 /// Build the Policy from --config (if any) + --profile + flags. Returns the
 /// policy, the optional --log path, and the selected profile (for its caveat).
 fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
@@ -237,6 +306,14 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
         }
     }
 
+    // --settings: apply a sandbox-runtime settings file through the generic
+    // policy, strictly (guaranteed-or-refuse). It is just an adapter over the same
+    // flags; the capabilities live in the sandbox, not in this shortcut.
+    if let Some(i) = opts.iter().position(|a| a == "--settings") {
+        let path = opts.get(i + 1).unwrap_or_else(|| { eprintln!("--settings needs a path"); exit(2); });
+        apply_settings_file(&mut p, path);
+    }
+
     // --profile on the command line overrides a config profile.
     if let Some(i) = opts.iter().position(|a| a == "--profile") {
         let name = opts.get(i + 1).unwrap_or_else(|| { eprintln!("--profile needs a name"); exit(2); });
@@ -257,6 +334,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
         let mut val = || it.next().cloned().unwrap_or_else(|| { eprintln!("error: {o} needs a value"); exit(2); });
         match o.as_str() {
             "--config" => { let _ = val(); } // handled in the first pass
+            "--settings" => { let _ = val(); } // handled above
             "--profile" => { let _ = val(); } // handled in the pre-scan above
             "--role" => p.role = val(),
             "--write" => p.writable_roots.push(PathBuf::from(expand(&val()))),
