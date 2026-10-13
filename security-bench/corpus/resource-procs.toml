@@ -1,0 +1,24 @@
+id = "resource-process-limit"
+category = "resources"
+severity = "high"
+os = ["linux"]
+
+# RES-1: a fork bomb is contained by the process cap even when the agent runs as
+# root. RLIMIT_NPROC alone is bypassable by root (CAP_SYS_RESOURCE), so the cap is
+# enforced with a cgroup v2 `pids.max`. Spawning past the cap must fail; it must
+# not take down the host. Requires a cgroup-v2 host with write access to
+# /sys/fs/cgroup (a container without cgroup delegation degrades to RLIMIT and
+# seisin warns on stderr — there this scenario is expected to flag non-enforcement).
+[policy]
+writable_roots = ["{root}/work"]
+max_processes = 25
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import subprocess,sys\np=[]\ntry:\n  [p.append(subprocess.Popen([\"sleep\",\"5\"])) for _ in range(200)]\nexcept OSError:\n  sys.exit(1)\nsys.exit(0)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

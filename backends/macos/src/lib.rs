@@ -69,9 +69,9 @@ impl SeatbeltBackend {
                 if libc::setpgid(0, 0) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                set_rlimit(libc::RLIMIT_AS, max_memory)?;
-                set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
-                set_rlimit(libc::RLIMIT_CPU, max_cpu)?;
+                set_rlimit(libc::RLIMIT_AS as libc::c_int, max_memory)?;
+                set_rlimit(libc::RLIMIT_NPROC as libc::c_int, max_processes)?;
+                set_rlimit(libc::RLIMIT_CPU as libc::c_int, max_cpu)?;
                 // Close every inherited fd >= 3, not a fixed 1024 cap (review P1):
                 // use the current fd limit so high-numbered fds are closed too.
                 let mut hi: libc::rlimit = std::mem::zeroed();
