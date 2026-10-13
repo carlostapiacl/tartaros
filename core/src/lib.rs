@@ -50,10 +50,25 @@ pub enum Network {
 /// `.git/hooks` and `.git/config` are handled separately, per git repo found,
 /// so they protect nested repos too.
 pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
+    // Agent/MCP config a trusted agent later loads and ACTS ON (launches an MCP
+    // server, runs a slash-command, loads a skill/subagent) — passive RCE across
+    // the trust boundary if the sandboxed agent can plant them.
+    ".mcp.json",
     ".claude/settings.json",
     ".claude/settings.local.json",
+    ".claude/commands",
+    ".claude/agents",
+    ".claude/skills",
+    // Editor auto-run surfaces.
     ".vscode/tasks.json",
+    ".vscode/launch.json",
+    // Git handoff beyond hooks/config: clean/smudge filters, submodule URLs.
+    ".gitattributes",
+    ".gitmodules",
+    // Shell-into-the-repo and commit-time runners.
     ".envrc",
+    ".pre-commit-config.yaml",
+    // CI that a host runner later executes.
     ".github/workflows",
 ];
 
