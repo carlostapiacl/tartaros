@@ -26,7 +26,9 @@ measured competitors (Codex `0.162.1`, nono, `@anthropic-ai/sandbox-runtime`):
 
 - **Trust-handoff protected at *any* depth, path-based** — a nested `.git/hooks`
   or `.claude/settings.json` is non-writable however deep, and an ancestor rename
-  cannot relocate it out from under its deny. The nearest comparison,
+  cannot relocate it out from under its deny. Discovery walks to a bounded depth;
+  anything deeper is denied wholesale (fail-safe), so a handoff path is never left
+  writable just by being far down. The nearest comparison,
   sandbox-runtime, path-protects nested hooks on Linux only up to a depth cap
   (default 3); nono uses cryptographic attestation rather than path protection.
 - **Deny-inside-allow on Linux** — expressed as a carved Landlock allow-list.

@@ -78,7 +78,10 @@ pub const HANDOFF_GIT_NAMES: &[&str] = &[".git/hooks", ".git/config"];
 
 /// How deep the walk for nested markers goes. A real tree rarely nests repos
 /// deeper than this; the bound keeps a pathological tree from stalling us.
-const MAX_WALK_DEPTH: usize = 40;
+/// Bound on the handoff-discovery walk (guards against pathological depth and
+/// recursion blow-up). Real repositories are far shallower; a tree that exceeds
+/// this is handled fail-safe (see `walk`) rather than silently left writable.
+const MAX_WALK_DEPTH: usize = 64;
 
 /// A complete, backend-independent confinement policy.
 #[derive(Debug, Clone, Default)]
@@ -397,6 +400,11 @@ fn expand_root(root: &Path, out: &mut Vec<FsRule>) {
 /// directory is a git repo, and protect any config handoff files that exist.
 fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
     if depth > MAX_WALK_DEPTH {
+        // Fail-safe: beyond the discovery bound we cannot verify which
+        // trust-handoff paths live below, so deny write to the whole subtree
+        // instead of silently leaving it writable. The carve excludes it, so a
+        // deep `.git/hooks` can never become writable just by being far down.
+        out.push(deny(dir.to_path_buf(), true));
         return;
     }
     if is_git_repo(dir) {
@@ -686,6 +694,32 @@ mod tests {
                 x.display()
             );
         }
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn deep_subtree_beyond_walk_depth_is_not_writable() {
+        // A trust-handoff path deeper than the discovery walk must NOT be left
+        // writable — the walk denies the over-depth subtree fail-safe.
+        let tmp = std::env::temp_dir().join(format!("sbx-deep-{}", std::process::id()));
+        let root = tmp.join("work");
+        let mut deep = root.clone();
+        for _ in 0..(MAX_WALK_DEPTH + 3) {
+            deep = deep.join("d");
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(root.join("shallow.txt"), b"x").unwrap();
+
+        let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
+        let allow = policy.linux_write_allowlist();
+        let granted = |x: &Path| allow.iter().any(|a| x.starts_with(a));
+
+        // shallow work stays writable...
+        assert!(granted(&root.join("shallow.txt")), "shallow file must be writable");
+        // ...but the over-depth subtree is denied (fail-safe), so a planted
+        // .git/hooks that deep could never become writable.
+        assert!(!granted(&deep.join(".git/hooks/pre-commit")), "deep subtree must not be writable");
 
         fs::remove_dir_all(&tmp).ok();
     }
