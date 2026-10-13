@@ -1,5 +1,8 @@
 # seisin-sandbox CLI
 
+Two subcommands: `run` (confine a command) and `explain` (print what a policy
+grants, without running — for auditing a profile before deploying it).
+
 Run a command confined by a policy, on the OS backend (Landlock / Seatbelt).
 
 ```
@@ -49,3 +52,14 @@ See [`examples/role-dev.toml`](examples/role-dev.toml).
 
 The exit code is the command's (128+signal on signal death, 124 on timeout).
 `--log` records every boundary-crossing attempt first-hand — the feed the intent layer reads.
+
+## explain — audit a policy
+
+```
+seisin-sandbox explain --config role-dev.toml
+```
+
+Prints the role, network/ports, writable roots, read-denied secrets, the
+trust-handoff protected set expanded to any depth, and the generated Seatbelt
+profile (macOS) or Landlock allow-lists (Linux). "Política verificable": a
+security team reviews exactly what a profile grants before it ships.

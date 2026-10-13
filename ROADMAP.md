@@ -185,4 +185,8 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] **config file (TOML policy)**: `--config role.toml` — one policy declared
       once, applied equivalently on macOS and Linux (B2B P2). `~` expands to $HOME;
       flags override. Verified on both (control ok, secret read-deny rc=1).
+- [x] **`explain` subcommand**: prints what a policy grants (role, roots,
+      read-denies, trust-handoff set at any depth, the Seatbelt profile / Landlock
+      allow-lists) without running — auditable "política verificable". Verified
+      on macOS and Linux.
 - [ ] per-role profile discovery; macOS collectors for --log

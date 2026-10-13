@@ -64,11 +64,17 @@ fn expand(s: &str) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(|s| s.as_str()) != Some("run") {
-        eprintln!("usage: seisin-sandbox run [options] -- <command> [args...]");
-        exit(2);
+    match args.first().map(|s| s.as_str()) {
+        Some("run") => cmd_run(&args[1..]),
+        Some("explain") => cmd_explain(&args[1..]),
+        _ => {
+            eprintln!("usage:\n  seisin-sandbox run [options] -- <command> [args...]\n  seisin-sandbox explain [options]   # print what a policy grants, without running");
+            exit(2);
+        }
     }
-    let rest = &args[1..];
+}
+
+fn cmd_run(rest: &[String]) -> ! {
     let split = rest.iter().position(|a| a == "--");
     let (opts, cmd): (&[String], Vec<String>) = match split {
         Some(i) => (&rest[..i], rest[i + 1..].to_vec()),
@@ -81,7 +87,22 @@ fn main() {
         eprintln!("error: no command after `--`");
         exit(2);
     }
+    let (p, log) = build_policy(opts);
+    if p.writable_roots.is_empty() {
+        eprintln!("warning: no --write roots; the command cannot write anywhere");
+    }
+    exit(run(&p, &cmd, log.as_deref()));
+}
 
+fn cmd_explain(opts: &[String]) -> ! {
+    let (p, _) = build_policy(opts);
+    explain(&p);
+    exit(0);
+}
+
+/// Build the Policy from --config (if any) + flags. Returns the policy and the
+/// optional --log path.
+fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
     let mut p = Policy { network: Some(Network::Denied), ..Default::default() };
 
     // First pass: load --config (a policy file), so flags can override it.
@@ -123,12 +144,42 @@ fn main() {
             other => { eprintln!("unknown option: {other}"); exit(2); }
         }
     }
-    if p.writable_roots.is_empty() {
-        eprintln!("warning: no --write roots; the command cannot write anywhere");
-    }
+    (p, log)
+}
 
-    let code = run(&p, &cmd, log.as_deref());
-    exit(code);
+/// Print exactly what a policy grants, without running anything — so a security
+/// team can audit a profile before deploying it.
+fn explain(p: &Policy) {
+    println!("role: {}", if p.role.is_empty() { "(unset)" } else { &p.role });
+    println!("network: {:?}", p.network);
+    if !p.local_ports.is_empty() {
+        println!("loopback ports: {:?}", p.local_ports);
+    }
+    println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
+    println!("isolate /proc (env reads): {}", p.isolate_process_info);
+    if let Some(t) = p.timeout { println!("timeout: {}s", t.as_secs()); }
+    if let Some(m) = p.max_memory_bytes { println!("max memory: {m} bytes"); }
+    println!("\nwritable roots:");
+    for r in &p.writable_roots { println!("  + {}", r.display()); }
+    println!("\nread-denied (secrets):");
+    for r in &p.read_denies { println!("  - {}", r.display()); }
+    println!("\ntrust-handoff protected (deny write, any depth):");
+    for r in p.trust_handoff_rules() { println!("  ! {}", r.path.display()); }
+
+    #[cfg(target_os = "macos")]
+    {
+        println!("\n--- macOS Seatbelt profile ---");
+        println!("{}", seisin_sandbox_macos::compile_profile(p));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        println!("\n--- Linux Landlock allow-lists (based on the current filesystem) ---");
+        println!("write (carved):");
+        for a in p.linux_write_allowlist() { println!("  w {}", a.display()); }
+        println!("read (carved):");
+        for a in p.linux_read_allowlist() { println!("  r {}", a.display()); }
+        println!("note: writes grant write-only; reads are governed by the read carve.");
+    }
 }
 
 #[cfg(target_os = "linux")]
