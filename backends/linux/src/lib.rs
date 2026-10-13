@@ -317,6 +317,18 @@ fn confined_command(
             if isolate_pids || isolate_network {
                 enter_namespaces(isolate_pids, isolate_network)?;
             }
+            // Kill-switch (supervisor loss): die if our parent dies, even on a
+            // SIGKILL of the supervisor that never runs destroy_cgroup.
+            //   - With --isolate-pids this is a COMPLETE tree-kill: the parent is
+            //     the init shim (which carries the same request against the
+            //     supervisor), and the agent is PID 1 of its namespace, so the
+            //     chain supervisor→shim→agent collapses and the whole namespace —
+            //     every descendant — is torn down. Nothing outlives the box.
+            //   - Without it, PR_SET_PDEATHSIG reaps only THIS (direct child)
+            //     process; a grandchild the agent forked can be reparented to init
+            //     and survive. The full guarantee needs the PID namespace (which
+            //     the hostile-code / multi-tenant profiles enable by default).
+            set_pdeathsig_kill();
             // Resource limits (P1-B) before dropping into the sandbox.
             set_rlimit(libc::RLIMIT_AS, max_memory)?;
             set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
@@ -401,6 +413,11 @@ unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> std::io::Re
             // the run ends — the supervisor (and its timeout) would never start.
             // Closing here releases the pipe the moment the agent execs.
             close_inherited_fds();
+            // Kill-switch: if the supervisor dies, this shim dies too — and its
+            // death trips the agent's own PR_SET_PDEATHSIG (its parent is this
+            // shim), tearing the whole PID namespace down. Set AFTER the fork
+            // (pdeathsig is cleared across fork) and relative to the supervisor.
+            set_pdeathsig_kill();
             let mut status: libc::c_int = 0;
             while libc::waitpid(pid, &mut status, 0) < 0 {
                 if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
@@ -465,6 +482,22 @@ unsafe fn bring_up_loopback() -> std::io::Result<()> {
         return Err(err);
     }
     Ok(())
+}
+
+/// Ask the kernel to SIGKILL this task when its parent dies (`PR_SET_PDEATHSIG`).
+/// pdeathsig is cleared across `fork`, so this must be set after the fork and is
+/// preserved across the following `execve`. If the parent already died in the
+/// (tiny) window since the fork, the signal was missed, so we also exit if we
+/// have already been reparented to init in the same PID namespace.
+#[cfg(target_os = "linux")]
+unsafe fn set_pdeathsig_kill() {
+    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
+    // getppid() == 1 means our original parent is already gone (reparented to the
+    // ns init). getppid() == 0 means the parent lives in an ancestor PID namespace
+    // (the isolate-pids shim case) — still alive, nothing to do.
+    if libc::getppid() == 1 {
+        libc::_exit(1);
+    }
 }
 
 /// Close every inherited fd >= 3 (keep stdio) just before exec. `close_range`
