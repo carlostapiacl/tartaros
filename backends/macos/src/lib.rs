@@ -34,6 +34,35 @@ impl Backend for SeatbeltBackend {
                 });
             }
         }
+        // Fail closed on Linux-only hardening: Seatbelt cannot provide a PID /
+        // network namespace or a seccomp syscall filter, so honouring a policy
+        // that requested one by silently running WITHOUT it would hand back a
+        // weaker sandbox than asked for (the P0-2 class). Refuse with a clear
+        // message instead — a capability we cannot provide is never silently
+        // downgraded. (RLIMIT-based caps and FS/trust-handoff ARE provided here.)
+        let mut unsupported = Vec::new();
+        if policy.isolate_pids {
+            unsupported.push("--isolate-pids (PID namespace)");
+        }
+        if policy.isolate_network {
+            unsupported.push("--isolate-net (network namespace)");
+        }
+        if policy.harden_syscalls {
+            unsupported.push("--seccomp-strict (seccomp syscall filter)");
+        }
+        if policy.deny_unix_sockets {
+            unsupported.push("--deny-unix (seccomp AF_UNIX deny)");
+        }
+        if !unsupported.is_empty() {
+            return Err(PolicyError {
+                reason: format!(
+                    "unsupported on macOS (Seatbelt cannot provide these): {}. \
+                     Run on Linux for this hardening, or drop the flags / use \
+                     --profile local-agent.",
+                    unsupported.join(", ")
+                ),
+            });
+        }
         Ok(())
     }
 
