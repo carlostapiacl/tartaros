@@ -9,3 +9,7 @@ repository.workspace = true
 
 [dependencies]
 seisin-sandbox-core = { path = "../../core" }
+libc = "0.2.177"
+
+[dev-dependencies]
+libc = "0.2.177"
