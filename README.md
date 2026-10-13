@@ -20,7 +20,7 @@ when the agent runs as root**.
 
 ## What makes it different (measured, not claimed)
 
-Reproducible with [`security-bench/`](security-bench/). Measured on the Linux test host
+Reproducible with [`security-bench/`](security-bench/). Measured on a Linux host
 (Linux 6.8) and macOS 15.7, 2026-10-13. The genuine differentiators versus the
 measured competitors (Codex `0.162.1`, nono, `@anthropic-ai/sandbox-runtime`):
 
@@ -56,7 +56,7 @@ do not sell a competitor's default or scope choice as a vulnerability.
 | Process isolation (`--isolate-pids`) | ✅ PID + mount namespace | ❌ (no primitive) |
 | First-hand effect log (collectors, record modes) | ✅ | ✅ |
 
-**Conformance:** 21/21 security scenarios pass on Linux (the Linux test host, kernel 6.8), 0
+**Conformance:** 21/21 security scenarios pass on Linux (a Linux host (kernel 6.8)), 0
 violations; macOS (Seatbelt) passes the cross-platform subset. The suite also
 runs a mutation mode (`--mutate`) that proves it would catch a removed
 protection, and marks scenarios UNSUPPORTED on a host that lacks a required

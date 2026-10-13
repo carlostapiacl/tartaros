@@ -48,8 +48,8 @@ impl NetworkCollector {
     }
 
     /// Build a collector whose territory matches a policy, so enforcement and
-    /// observation agree on what is "within". This is how an integrator
-    /// wire it up.
+    /// observation agree on what is "within". This is how an integrator wires
+    /// enforcement and the effect log together.
     pub fn for_policy(root_pid: u32, policy: &tartaros_core::Policy) -> Self {
         Self::new(
             policy.role.clone(),

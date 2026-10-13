@@ -10,7 +10,7 @@ Two layers, one vantage point — the kernel, outside the agent.
   says about itself.
 
 ```
-                        seisin  (policy + multi-agent orchestration)
+                        a policy / orchestration layer
                  territories · ownership · roles · ports · domains · MCP
                                          │
                                          │  compiles the policy
@@ -69,8 +69,8 @@ Nothing here is a hard dependency chain. The **effect log is a neutral format**
   log through its own adapter and treats it as one replaceable source (it has
   others). 
 - **Collectors attach to a process tree by pid** — they can watch any agent.
-- **An integrator** that runs agents under the sandbox and points
-  the intent layer at the log. The libraries don't know about the integrator.
+- **An integrator** runs agents under the sandbox and points
+  the intent layer at the log; the libraries do not know about it.
 
 The full list of what we capture, by axis, is in [`CATALOG.md`](CATALOG.md).
 

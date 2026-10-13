@@ -1,7 +1,7 @@
 # Cross-backend comparison — tartaros vs nono
 
 Honest comparison of the same scenarios, **fairly configured** on each backend.
-Measured on the Linux test host (Ubuntu 24.04, kernel 6.8, Landlock) 2026-10-13. nono 0.79.0.
+Measured on a Linux host (Ubuntu 24.04, kernel 6.8, Landlock) 2026-10-13. nono 0.79.0.
 
 > **Methodology (the discipline the B2B review demanded):**
 > - Each backend configured the idiomatic way for strict confinement.

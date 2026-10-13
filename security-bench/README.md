@@ -38,11 +38,11 @@ and re-runs every scenario that relies on it. Removing a protection **must** mak
 at least one attack succeed (flip to VIOLATION); a mutation that flips nothing is
 a blind spot — the corpus never actually tested that enforcement — and the run
 exits non-zero. The mutations weaken the policy the runner passes, never the
-backend, so the real enforcement is exercised. Measured on the Linux test host: 0 blind spots.
+backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind spots.
 
-## Scorecard (measured 2026-10-13, the Linux test host Linux 6.8)
+## Scorecard (measured 2026-10-13, a Linux host Linux 6.8)
 
-| | Linux (the Linux test host) |
+| | Linux (Linux) |
 |---|---|
 | scenarios | 18/18 pass |
 | security violations (critical) | 0 |
@@ -99,7 +99,7 @@ inherited-fd leak (`backends/linux/examples/p1c_fd_leak`), broker HTTP/HTTPS
 
 ## Cross-backend comparison
 
-A first honest comparison vs **nono 0.79** (fairly configured, measured on the Linux test host)
+A first honest comparison vs **nono 0.79** (fairly configured, measured on a Linux host)
 is in [`comparison/RESULTS.md`](comparison/RESULTS.md): parity on write-outside,
 TartarOS's trust-handoff advantage on nested `.git/hooks`, and nono cannot express a
 deny inside an allow on Linux. Includes a mid-measurement correction (a /tmp-default
