@@ -48,3 +48,17 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [ ] `srt` adapter (wrap @anthropic-ai/sandbox-runtime)
 - [ ] seisin consumes seisin-sandbox through the backend abstraction
 - [ ] make the repo public
+
+## M4 — the other dimensions (field-detected)
+- [ ] **effect log**: record allowed AND denied events (files, ports/net,
+      secrets, MCP), per role, with timestamps — the bridge to the intent layer
+- [ ] **ports/network per role**: 127.0.0.1:<port> granular (not all-localhost);
+      domain allow-list via proxy
+- [ ] **secret reads**: read-deny of secret dirs (~/.ssh, ~/.aws, keydirs)
+- [ ] **secret broker**: give the capability, not the raw value
+- [ ] **close the Linux env-leak**: restrict /proc or PID namespace
+- [ ] **resources, not paths**: evolve `Policy` toward capabilities
+
+## M5 — intent layer (the intent layer) on the effect log
+- [ ] feed the intent layer from the effect log (allowed + denied)
+- [ ] the missing core: infer goal + deviation per session (1 LLM call)
