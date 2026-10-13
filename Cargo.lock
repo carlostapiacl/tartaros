@@ -58,6 +58,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "seisin-sandbox-collect"
+version = "0.0.0"
+dependencies = [
+ "seisin-sandbox-core",
+]
+
+[[package]]
 name = "seisin-sandbox-core"
 version = "0.0.0"
 

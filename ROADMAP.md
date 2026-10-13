@@ -50,8 +50,16 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [ ] make the repo public
 
 ## M4 — the other dimensions (field-detected)
-- [ ] **effect log**: record allowed AND denied events (files, ports/net,
-      secrets, MCP), per role, with timestamps — the bridge to the intent layer
+- [x] **effect-log framework** (`core::effect`): `EffectEvent` (axis/action/
+      target/direction/outcome/source), `EffectSink`+`JsonlSink`, `Collector`
+      trait; `core::catalog` classifies secrets and endpoints. Neutral JSONL
+      format — not a dependency either way. Tests green.
+- [x] **first collector**: `collect::NetworkCollector` — captures the process
+      tree's outbound connects (port scans show as many outside events) from
+      `/proc/net/tcp`; parser + classification unit-tested; live read Linux
+- [ ] collectors for the other axes (file-write, secret-read, process, mcp) —
+      each a new `Collector`, no core change (see CATALOG.md)
+- [ ] live run of NetworkCollector against a real agent on the Linux test host
 - [ ] **ports/network per role**: 127.0.0.1:<port> granular (not all-localhost);
       domain allow-list via proxy
 - [ ] **secret reads**: read-deny of secret dirs (~/.ssh, ~/.aws, keydirs)
