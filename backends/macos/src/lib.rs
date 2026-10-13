@@ -40,11 +40,23 @@ impl Backend for SeatbeltBackend {
             return Err(RunError { reason: "empty command".into() });
         }
         let profile = compile_profile(policy);
-        let status = Command::new("/usr/bin/sandbox-exec")
-            .arg("-p")
-            .arg(&profile)
-            .arg("--")
-            .args(command)
+        let mut cmd = Command::new("/usr/bin/sandbox-exec");
+        cmd.arg("-p").arg(&profile).arg("--").args(command);
+        // Close inherited non-stdio fds before the chain execs (defense-in-depth,
+        // FD-1): an fd the orchestrator left open would otherwise bypass the
+        // path-based profile. Runs in the sandbox-exec child, so the confined
+        // command does not inherit them either.
+        #[cfg(unix)]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(|| {
+                for fd in 3..1024 {
+                    libc::close(fd);
+                }
+                Ok(())
+            });
+        }
+        let status = cmd
             .status()
             .map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })?;
 

@@ -161,6 +161,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] **inherited-fd leak closed**: the Linux backend closes all non-stdio fds
       (`close_range`) just before exec — an fd the orchestrator left open no longer
       bypasses path-based confinement. Verified on the Linux test host (`p1c_fd_leak`: child can't
-      read the inherited fd; smoke/net unaffected). macOS equivalent pending.
-- [ ] add: cross-backend adapters (srt / nono / openshell); macOS fd-close
+      read the inherited fd; smoke/net unaffected). **macOS too**: fds closed in
+      sandbox-exec's pre_exec; verified (`fd_leak` PASS, tests green).
+- [ ] add: cross-backend adapters (srt / nono / openshell)
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
