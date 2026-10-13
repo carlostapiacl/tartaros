@@ -154,6 +154,10 @@ struct Outcome {
     severity: String,
     violation: bool,  // the forbidden op succeeded (security failure)
     control_broke: bool, // the legitimate op failed (usability failure)
+    /// The backend could not even launch the command (spawn/Landlock error).
+    /// This is NOT a blocked attack — conflating the two would let a scenario
+    /// whose process never started look like a pass. Counted as INFRA_ERROR.
+    infra_error: bool,
     passed: bool,
     detail: String,
 }
@@ -230,7 +234,7 @@ fn main() {
     println!("\n{:<36} {:<8} {}", "scenario", "sev", "result");
     println!("{}", "-".repeat(64));
     for o in &outcomes {
-        let r = if o.passed { "PASS" } else if o.violation { "VIOLATION" } else { "control-broke" };
+        let r = if o.passed { "PASS" } else if o.violation { "VIOLATION" } else if o.infra_error { "INFRA_ERROR" } else { "control-broke" };
         println!("{:<36} {:<8} {}  {}", o.id, o.severity, r, o.detail);
     }
 
@@ -239,6 +243,9 @@ fn main() {
     let violations = outcomes.iter().filter(|o| o.violation).count();
     let broke = outcomes.iter().filter(|o| o.control_broke).count();
     let crit_viol = outcomes.iter().filter(|o| o.violation && o.severity == "critical").count();
+    // Backend-launch failures found while running scenarios add to the file-level
+    // infra errors (a scenario whose process never started is NOT a pass).
+    infra_errors += outcomes.iter().filter(|o| o.infra_error).count();
     println!("\n== scorecard ==");
     println!("  scenarios run:           {total}");
     println!("  PASS:                    {passed}/{total}");
@@ -264,8 +271,8 @@ fn main() {
     j.push_str(&format!("  \"skipped\": {skipped},\n  \"unsupported\": {unsupported},\n"));
     for (i, o) in outcomes.iter().enumerate() {
         j.push_str(&format!(
-            "    {{\"id\":\"{}\",\"category\":\"{}\",\"severity\":\"{}\",\"passed\":{},\"violation\":{},\"control_broke\":{}}}{}\n",
-            o.id, o.category, o.severity, o.passed, o.violation, o.control_broke,
+            "    {{\"id\":\"{}\",\"category\":\"{}\",\"severity\":\"{}\",\"passed\":{},\"violation\":{},\"control_broke\":{},\"infra_error\":{}}}{}\n",
+            o.id, o.category, o.severity, o.passed, o.violation, o.control_broke, o.infra_error,
             if i + 1 < outcomes.len() { "," } else { "" }
         ));
     }
@@ -281,7 +288,18 @@ fn main() {
         eprintln!("\nFAIL: {violations} violation(s), {broke} broken control(s), {infra_errors} infra error(s)");
         std::process::exit(1);
     }
-    println!("\nOK: all {total} scenarios passed ({skipped} skipped for other OS)");
+    // Minimum-coverage gate (adversarial-audit P1): a run that verified NO
+    // guarantee must never certify green. If nothing actually passed — e.g. every
+    // scenario was skipped or unsupported, or the corpus was empty — that is not
+    // success, it is "we tested nothing here".
+    if passed == 0 {
+        eprintln!(
+            "\nFAIL: 0 scenarios passed ({skipped} skipped, {unsupported} unsupported) — \
+             no guarantee was actually verified on this host; not a green run."
+        );
+        std::process::exit(1);
+    }
+    println!("\nOK: all {passed} scenarios passed ({skipped} skipped, {unsupported} unsupported)");
 }
 
 /// A deliberate weakening of a policy, used by `--mutate` to prove the corpus
@@ -634,11 +652,23 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         m.weaken(&mut policy);
     }
 
-    let run = |cmd: &str| -> i32 {
+    // Returns Ok(exit_code) when the backend LAUNCHED the command, or Err(reason)
+    // when it could not even start it (spawn/Landlock error). The two must not be
+    // conflated: a backend failure is infrastructure, not a blocked attack.
+    let run = |cmd: &str| -> Result<i32, String> {
         BACKEND
             .run(&policy, &["/bin/sh".into(), "-c".into(), sub(cmd)])
             .map(|o| o.exit_code)
-            .unwrap_or(-1)
+            .map_err(|e| e.reason)
+    };
+    // Build an INFRA_ERROR outcome (cleaning up first) when the backend couldn't
+    // run a command — never report that as pass/violation.
+    let infra = |detail: String| -> Outcome {
+        let _ = std::fs::remove_dir_all(&root);
+        Outcome {
+            id: c.id.clone(), category: c.category.clone(), severity: c.severity.clone(),
+            violation: false, control_broke: false, infra_error: true, passed: false, detail,
+        }
     };
 
     // attack: forbidden op must NOT succeed (or must exit with expect_exit).
@@ -649,34 +679,43 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     } else {
         c.attack.cmd.clone()
     };
-    let attack_rc = run(&attack_cmd);
-    let attack_succeeded = match c.attack.expect_exit {
-        Some(code) => attack_rc != code, // "succeeded" = guarantee NOT met
-        None => attack_rc == 0,
-    };
+    let attack_res = run(&attack_cmd);
 
     // Mutation run: we only care whether weakening the policy let the attack
-    // through (the corpus "noticed" the removed protection). Skip control and
-    // effect assertions; `violation` carries the flip.
+    // through (the corpus "noticed" the removed protection). A backend error
+    // counts as "did not flip". Skip control and effect assertions.
     if mutate.is_some() {
+        let attack_succeeded = match &attack_res {
+            Ok(rc) => match c.attack.expect_exit { Some(code) => *rc != code, None => *rc == 0 },
+            Err(_) => false,
+        };
         drop(servers);
         for p in &unix_paths {
             let _ = std::fs::remove_file(p);
         }
         let _ = std::fs::remove_dir_all(&root);
         return Outcome {
-            id: c.id,
-            category: c.category,
-            severity: c.severity,
-            violation: attack_succeeded,
-            control_broke: false,
-            passed: !attack_succeeded,
-            detail: format!("attack rc={attack_rc}"),
+            id: c.id, category: c.category, severity: c.severity,
+            violation: attack_succeeded, control_broke: false, infra_error: false,
+            passed: !attack_succeeded, detail: format!("attack {attack_res:?}"),
         };
     }
 
+    // A backend that could not launch the attack is INFRA_ERROR, not "blocked".
+    let attack_rc = match attack_res {
+        Ok(rc) => rc,
+        Err(e) => { drop(servers); for p in &unix_paths { let _ = std::fs::remove_file(p); } return infra(format!("attack backend error: {e}")); }
+    };
+    let attack_succeeded = match c.attack.expect_exit {
+        Some(code) => attack_rc != code, // "succeeded" = guarantee NOT met
+        None => attack_rc == 0,
+    };
+
     // control: legitimate op must succeed (or match expect_exit)
-    let control_rc = run(&c.control.cmd);
+    let control_rc = match run(&c.control.cmd) {
+        Ok(rc) => rc,
+        Err(e) => { drop(servers); for p in &unix_paths { let _ = std::fs::remove_file(p); } return infra(format!("control backend error: {e}")); }
+    };
     let control_ok = match c.control.expect_exit {
         Some(code) => control_rc == code,
         None => control_rc == 0,
@@ -719,5 +758,5 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     }
 
     let _ = std::fs::remove_dir_all(&root);
-    Outcome { id: c.id, category: c.category, severity: c.severity, violation, control_broke, passed, detail }
+    Outcome { id: c.id, category: c.category, severity: c.severity, violation, control_broke, infra_error: false, passed, detail }
 }
