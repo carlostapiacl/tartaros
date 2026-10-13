@@ -25,8 +25,8 @@ violation — drop it into CI.
 
 | | macOS | Linux (the Linux test host) |
 |---|---|---|
-| scenarios | 8 | 11 |
-| passed | 8/8 | 11/11 |
+| scenarios | 9 | 12 |
+| passed | 9/9 | 12/12 |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 
@@ -65,12 +65,11 @@ so Seatbelt/Landlock see the real path).
 
 filesystem write-outside · symlink escape · hardlink bypass · trust-handoff nested `.git` · ancestor
 rename · secret read-deny · secret inside a writable root (P0-1) · absent-handoff
-materialization · network per-port · lifecycle timeout (kills the group) · memory limit.
+materialization · network per-port · lifecycle timeout (kills the group) · memory limit · IPC unix-socket (opt-in seccomp on Linux).
 
 ## Not yet in the corpus
 
-broker (HTTP/HTTPS capability — have examples under `broker/`), IPC (unix sockets /
-inherited fds) and cross-backend adapters. Kernel-escape
+broker (HTTP/HTTPS capability — have examples under `broker/`), inherited-fd IPC, and cross-backend adapters. Kernel-escape
 benchmarks (AgentEscapeBench) run only on disposable VMs, never here.
 
 ## Other backends

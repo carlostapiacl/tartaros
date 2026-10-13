@@ -1,0 +1,23 @@
+id = "ipc-unix-socket-outside"
+category = "ipc"
+severity = "critical"
+os = ["linux", "macos"]
+
+# a unix socket OUTSIDE the territory must not be reachable. On Linux this needs
+# opt-in deny_unix_sockets (seccomp, deny AF_UNIX); macOS Seatbelt blocks it anyway.
+[policy]
+writable_roots = ["{root}/work"]
+deny_unix_sockets = true
+
+[[unix_server]]
+path = "{root}/ipc.sock"
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(\"{root}/ipc.sock\"); sys.exit(0)' 2>/dev/null"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
