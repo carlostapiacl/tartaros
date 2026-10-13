@@ -66,6 +66,8 @@ struct PolicySpec {
     #[serde(default)]
     max_processes: Option<u64>,
     #[serde(default)]
+    max_cpu_secs: Option<u64>,
+    #[serde(default)]
     deny_unix_sockets: bool,
 }
 
@@ -322,6 +324,7 @@ fn run_scenario(c: Contract) -> Outcome {
         timeout: c.policy.timeout_secs.map(std::time::Duration::from_secs),
         max_memory_bytes: c.policy.max_memory_bytes,
         max_processes: c.policy.max_processes,
+        max_cpu_secs: c.policy.max_cpu_secs,
         deny_unix_sockets: c.policy.deny_unix_sockets,
         ..Default::default()
     };

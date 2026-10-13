@@ -1,0 +1,23 @@
+id = "resource-cpu-limit"
+category = "resources"
+severity = "high"
+os = ["linux", "macos"]
+
+# A CPU-bound spin loop is capped by the total CPU-seconds limit and killed, even
+# as root: RLIMIT_CPU (unlike RLIMIT_NPROC) has no capability bypass, the kernel
+# enforces it in the scheduler. No wall-clock timeout here on purpose — the kill
+# must come from the CPU budget, so the attack depends on CPU-limit enforcement
+# (like resource-memory depends on the memory cap).
+[policy]
+writable_roots = ["{root}/work"]
+max_cpu_secs = 2
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'while :; do :; done'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
