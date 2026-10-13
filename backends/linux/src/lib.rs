@@ -57,7 +57,7 @@ impl LandlockBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
-        let mut cmd = confined_command(policy, command)?;
+        let mut cmd = confined_command(policy, command, None)?;
         cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })
     }
 
@@ -88,10 +88,14 @@ impl LandlockBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
-        let mut cmd = confined_command(policy, command)?;
+        let cg = create_cgroup(policy);
+        let procs = cg.as_ref().map(|d| format!("{d}/cgroup.procs"));
+        let mut cmd = confined_command(policy, command, procs)?;
         let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
         let mut cols = make_collectors(child.id());
-        Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut cols, sink) })
+        let code = supervise(child, policy.timeout, &mut cols, sink);
+        if let Some(d) = cg { destroy_cgroup(&d); }
+        Ok(RunOutcome { exit_code: code })
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -117,10 +121,13 @@ fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunErro
 #[cfg(target_os = "linux")]
 fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
     use seisin_sandbox_core::VecSink;
-    let mut cmd = confined_command(policy, command)?;
+    let cg = create_cgroup(policy);
+    let procs = cg.as_ref().map(|d| format!("{d}/cgroup.procs"));
+    let mut cmd = confined_command(policy, command, procs)?;
     let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
-    // Same supervisor as run_observed, with no collectors.
-    Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut [], &mut VecSink::default()) })
+    let code = supervise(child, policy.timeout, &mut [], &mut VecSink::default());
+    if let Some(d) = cg { destroy_cgroup(&d); }
+    Ok(RunOutcome { exit_code: code })
 }
 
 /// Build a `Command` that applies the Landlock ruleset in the child just before
@@ -129,6 +136,7 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
 fn confined_command(
     policy: &Policy,
     command: &[String],
+    cgroup_procs: Option<String>,
 ) -> Result<std::process::Command, RunError> {
     use landlock::{
         ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, PathBeneath, PathFd,
@@ -287,6 +295,16 @@ fn confined_command(
             if libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
+            // Join the cgroup (guaranteed pid/memory caps) before exec, if any.
+            if let Some(path) = &cgroup_procs {
+                let pid = format!("{}\n", libc::getpid());
+                let cpath = std::ffi::CString::new(path.as_str()).unwrap();
+                let fd = libc::open(cpath.as_ptr(), libc::O_WRONLY);
+                if fd >= 0 {
+                    let _ = libc::write(fd, pid.as_ptr() as *const _, pid.len());
+                    libc::close(fd);
+                }
+            }
             // Resource limits (P1-B) before dropping into the sandbox.
             set_rlimit(libc::RLIMIT_AS, max_memory)?;
             set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
@@ -361,6 +379,127 @@ fn apply_deny_af_unix() -> std::io::Result<()> {
     let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
     apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
     Ok(())
+}
+
+/// Create a cgroup v2 with the policy's pid/memory caps, if the cgroup fs is
+/// writable (needs a delegated/privileged cgroup). Returns the cgroup dir, whose
+/// `cgroup.procs` the child writes its pid into. Guaranteed regardless of uid/caps
+/// — unlike RLIMIT_NPROC, which root bypasses (finding RES-1). Best-effort: on a
+/// read-only cgroup fs it returns None and we fall back to setrlimit.
+#[cfg(target_os = "linux")]
+/// Warn (once per run) that a requested resource limit could not be enforced via
+/// cgroups and has degraded to RLIMIT. `--max-procs` without a cgroup falls back
+/// to RLIMIT_NPROC, which a process running as root (CAP_SYS_RESOURCE) can raise
+/// and thus bypass (RES-1). Fail-loud, not fail-silent.
+#[cfg(target_os = "linux")]
+fn warn_cgroup_degraded(policy: &Policy) {
+    if policy.max_processes.is_some() {
+        eprintln!(
+            "seisin-sandbox: warning: cgroup v2 unavailable; --max-procs degraded to \
+             RLIMIT_NPROC (best-effort, bypassable by root). Run on a cgroup-v2 host \
+             with write access to /sys/fs/cgroup for a hard process cap."
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn create_cgroup(policy: &Policy) -> Option<String> {
+    if policy.max_processes.is_none() && policy.max_memory_bytes.is_none() {
+        return None;
+    }
+    let base = "/sys/fs/cgroup";
+    // enable controllers in the root subtree (best-effort).
+    let _ = std::fs::write(format!("{base}/cgroup.subtree_control"), "+pids +memory");
+    let dir = format!("{base}/seisin-{}-{}", std::process::id(), now_nanos());
+    if std::fs::create_dir(&dir).is_err() {
+        warn_cgroup_degraded(policy);
+        return None;
+    }
+    if let Some(n) = policy.max_processes {
+        if std::fs::write(format!("{dir}/pids.max"), n.to_string()).is_err() {
+            let _ = std::fs::remove_dir(&dir);
+            warn_cgroup_degraded(policy);
+            return None;
+        }
+    }
+    if let Some(m) = policy.max_memory_bytes {
+        let _ = std::fs::write(format!("{dir}/memory.max"), m.to_string());
+    }
+    // Capability probe (fail-closed): creating the directory and writing pids.max
+    // can both "succeed" in a container whose cgroup namespace won't actually let
+    // a process join a child cgroup (the write to cgroup.procs is accepted but the
+    // move never takes effect — observed under Docker without cgroup delegation).
+    // There, --max-procs would silently enforce nothing. Prove membership works by
+    // moving a throwaway child in and confirming pids.current rose; if not, discard
+    // the cgroup and warn that the limit degraded to RLIMIT.
+    if !cgroup_membership_works(&dir) {
+        let _ = std::fs::remove_dir(&dir);
+        warn_cgroup_degraded(policy);
+        return None;
+    }
+    Some(dir)
+}
+
+/// Fork a child that does nothing but park briefly, move it into `dir`, and check
+/// the cgroup actually accounts it (`pids.current` > 0). Reaps the child. Returns
+/// false if the move didn't take effect, so the caller can fail loud.
+#[cfg(target_os = "linux")]
+fn cgroup_membership_works(dir: &str) -> bool {
+    let procs = format!("{dir}/cgroup.procs");
+    let current = format!("{dir}/pids.current");
+    // SAFETY: fork in a single-threaded context (before any spawn); child only
+    // makes async-signal-safe-ish syscalls (nanosleep) then _exit.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return false;
+    }
+    if pid == 0 {
+        // Child: park ~200ms so the parent can observe membership, then exit.
+        let ts = libc::timespec { tv_sec: 0, tv_nsec: 200_000_000 };
+        unsafe {
+            libc::nanosleep(&ts, std::ptr::null_mut());
+            libc::_exit(0);
+        }
+    }
+    // Parent: move the child into the cgroup and read back pids.current.
+    let moved = std::fs::write(&procs, format!("{pid}\n")).is_ok();
+    let accounted = moved
+        && std::fs::read_to_string(&current)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .map(|n| n > 0)
+            .unwrap_or(false);
+    // Kill and reap the throwaway child; reaping removes it from the cgroup's
+    // accounting, leaving `dir` empty and removable / ready for the real child.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+        let mut status = 0;
+        libc::waitpid(pid, &mut status, 0);
+    }
+    accounted
+}
+
+/// Tear down a cgroup created by [`create_cgroup`]. A cgroup directory can only
+/// be removed once empty, so first SIGKILL every member at once via `cgroup.kill`
+/// (cgroup v2), then retry `rmdir` briefly while the kernel reaps the members.
+/// Leaking the directory is harmless (each run uses a unique name) but untidy.
+#[cfg(target_os = "linux")]
+fn destroy_cgroup(dir: &str) {
+    let _ = std::fs::write(format!("{dir}/cgroup.kill"), "1");
+    for _ in 0..50 {
+        if std::fs::remove_dir(dir).is_ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn now_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
 }
 
 /// Apply one `setrlimit` (cur=max=limit) when a limit is set. Returns an io error
