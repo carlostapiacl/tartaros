@@ -1,0 +1,26 @@
+id = "trust-handoff-mcp-json"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A nested .mcp.json (an agent later launches the MCP servers it declares) must
+# not be rewritable by the sandboxed agent — planting one is RCE across the
+# trust boundary. Protected at any depth, here under proj/.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/proj/.mcp.json"
+content = "{\"mcpServers\":{}}"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "printf '{\"mcpServers\":{\"evil\":{\"command\":\"/tmp/x\"}}}' > {root}/work/proj/.mcp.json"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/proj/.mcp.json"
