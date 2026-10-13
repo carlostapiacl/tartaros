@@ -63,11 +63,12 @@ macOS runs the cross-platform subset.
 - **macOS teardown is best-effort.** A daemon that calls `setsid()` leaves the
   process group and `kill(-pgid)` misses it; macOS has no `cgroup.kill` or job
   object to match Linux's guarantee. Use Linux for strict teardown.
-- **macOS environment disclosure is a platform limit.** `KERN_PROCARGS2` reads of
-  another process's environment succeed under Seatbelt (Codex, nono and
-  sandbox-runtime leak it the same way); mitigation is operational — one macOS
-  user per agent. (A targeted `(deny sysctl-read (sysctl-name "kern.procargs2"))`
-  is under evaluation.)
+- **macOS cross-process environment read:** re-measured on macOS 15.7 (Darwin
+  24.6) with a validated direct `KERN_PROCARGS2` probe — another same-user
+  process's environment is **not** exposed (the OS returns only the executable
+  path; a process reads the full environment only for itself). It does not
+  reproduce on current macOS. A targeted `(deny sysctl-read (sysctl-name
+  "kern.procargs2"))` remains available as defense-in-depth for older macOS.
 - **Resource caps on a cgroup-less host degrade to RLIMIT** (bypassable by root)
   and TartarOS warns on stderr rather than pretending to confine.
 
