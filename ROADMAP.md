@@ -81,7 +81,7 @@ Build only where measurement shows no existing backend can enforce the policy.
       external blocked. Honest limit: port-based not host-based (loopback vs
       external same port needs the proxy); needs kernel >= 6.7
 - [ ] domain allow-list via proxy (external hosts beyond IP)
-- [ ] **secret reads**: read-deny of secret dirs (~/.ssh, ~/.aws, keydirs)
+- [x] **secret reads**: read-deny of secret dirs — see M4 above (done, both OS)
 - [x] **secret broker (the single gateway)**: `broker` crate — HTTP forward
       proxy injects the secret; agent reaches ONLY the broker port, authenticates
       upstream without ever holding the token, direct egress blocked. Live-
@@ -98,3 +98,22 @@ Build only where measurement shows no existing backend can enforce the policy.
 ## M5 — intent layer (the intent layer) on the effect log
 - [ ] feed the intent layer from the effect log (allowed + denied)
 - [ ] the missing core: infer goal + deviation per session (1 LLM call)
+
+## Security findings (external review 2026-10-13)
+
+- [x] **P0 read_denies neutralized by write rule** — a read-denied path inside a
+      writable root was readable because write rules granted `all` (incl. read)
+      and Landlock unions permissions. **Reproduced and fixed on the Linux test host**: write
+      rules now grant write-only; read is governed solely by the read carve.
+      Repro kept: `backends/linux/examples/p0_readdeny_in_writable`.
+- [ ] **P0 Landlock BestEffort can silently drop net restrictions** on kernels
+      without the required ABI → fail-open for network. Fix: probe the ABI and
+      fail closed when the policy needs capabilities the kernel lacks.
+- [ ] **P1 broker has no client-identity auth** (any local process reaching the
+      port can use the capability; example uses `Injection{host:None}`). Fix:
+      bind each credential to an authorized run identity; scope destination,
+      method and path per capability.
+- [ ] **P1 absent trust-handoff paths unprotected on Linux** (inode limit): a
+      config a trusted tool later runs, created after launch, is not covered.
+      macOS/Seatbelt covers absent paths; Linux needs fanotify/FUSE or a check.
+- [ ] **P1 /proc isolation**: close cross-process env read on Linux (PID namespace).
