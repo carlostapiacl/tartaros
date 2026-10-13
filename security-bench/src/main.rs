@@ -151,7 +151,13 @@ struct Outcome {
 }
 
 fn main() {
-    let dir = std::env::args().nth(1).unwrap_or_else(|| "corpus".into());
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mutate = args.iter().any(|a| a == "--mutate");
+    let dir = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .unwrap_or_else(|| "corpus".into());
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("reading {dir}: {e}"))
         .flatten()
@@ -159,6 +165,11 @@ fn main() {
         .filter(|p| p.extension().map(|x| x == "toml").unwrap_or(false))
         .collect();
     files.sort();
+
+    if mutate {
+        run_mutations(&files);
+        return;
+    }
 
     println!("tartaros-bench · backend={OS}\n");
     let mut outcomes = Vec::new();
@@ -231,7 +242,129 @@ fn main() {
     println!("\nOK: all {total} scenarios passed ({skipped} skipped for other OS)");
 }
 
+/// A deliberate weakening of a policy, used by `--mutate` to prove the corpus
+/// actually exercises each enforcement: removing a protection must make at least
+/// one scenario's attack succeed (flip to VIOLATION). A mutation that flips
+/// nothing is a blind spot in the suite. Mutations weaken the POLICY the runner
+/// passes — never the backend — so the real enforcement is exercised.
+#[derive(Clone, Copy)]
+enum Mutation {
+    DropReadDenies,
+    GrantNetwork,
+    DropIsolateNet,
+    DropIsolatePids,
+    RaiseProcLimit,
+    RaiseMemLimit,
+}
+
+impl Mutation {
+    const ALL: [Mutation; 6] = [
+        Mutation::DropReadDenies,
+        Mutation::GrantNetwork,
+        Mutation::DropIsolateNet,
+        Mutation::DropIsolatePids,
+        Mutation::RaiseProcLimit,
+        Mutation::RaiseMemLimit,
+    ];
+    fn name(self) -> &'static str {
+        match self {
+            Mutation::DropReadDenies => "drop-read-denies",
+            Mutation::GrantNetwork => "grant-network",
+            Mutation::DropIsolateNet => "drop-isolate-net",
+            Mutation::DropIsolatePids => "drop-isolate-pids",
+            Mutation::RaiseProcLimit => "raise-proc-limit",
+            Mutation::RaiseMemLimit => "raise-mem-limit",
+        }
+    }
+    /// Does the scenario rely on the protection this mutation removes?
+    fn applies(self, c: &Contract) -> bool {
+        match self {
+            Mutation::DropReadDenies => !c.policy.read_denies.is_empty(),
+            Mutation::GrantNetwork => !c.server.is_empty() || c.broker.is_some(),
+            Mutation::DropIsolateNet => c.policy.isolate_network,
+            Mutation::DropIsolatePids => c.policy.isolate_pids,
+            Mutation::RaiseProcLimit => c.policy.max_processes.is_some(),
+            Mutation::RaiseMemLimit => c.policy.max_memory_bytes.is_some(),
+        }
+    }
+    fn weaken(self, p: &mut Policy) {
+        match self {
+            Mutation::DropReadDenies => p.read_denies.clear(),
+            Mutation::GrantNetwork => p.network = Some(Network::Allowed),
+            Mutation::DropIsolateNet => p.isolate_network = false,
+            Mutation::DropIsolatePids => p.isolate_pids = false,
+            Mutation::RaiseProcLimit => p.max_processes = None,
+            Mutation::RaiseMemLimit => p.max_memory_bytes = None,
+        }
+    }
+}
+
 fn run_scenario(c: Contract) -> Outcome {
+    run_scenario_inner(c, None)
+}
+
+/// Mutation testing — "a conformance that cannot fool itself". For each policy
+/// weakening, re-run every scenario that relies on the removed protection and
+/// require that at least one attack now SUCCEEDS (flips to VIOLATION). A mutation
+/// that applies to scenarios yet flips none means the corpus never actually
+/// tested that enforcement — a blind spot. Exits non-zero on any blind spot.
+fn run_mutations(files: &[PathBuf]) {
+    // (path, parsed contract) for contracts valid on this OS
+    let loaded: Vec<(PathBuf, Contract)> = files
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(f).ok().map(|t| (f.clone(), t)))
+        .filter_map(|(f, t)| toml::from_str::<Contract>(&t).ok().map(|c| (f, c)))
+        .filter(|(_, c)| c.os.is_empty() || c.os.iter().any(|o| o == OS))
+        .collect();
+
+    println!("tartaros-bench · MUTATION MODE · backend={OS}\n");
+    println!("Each mutation removes one protection; a healthy corpus flips >=1 scenario.\n");
+    println!("{:<20} {:<10} {}", "mutation", "flips", "sensitive scenarios");
+    println!("{}", "-".repeat(70));
+
+    let mut blind_spots = 0usize;
+    for m in Mutation::ALL {
+        let applicable: Vec<&PathBuf> = loaded
+            .iter()
+            .filter(|(_, c)| m.applies(c))
+            .map(|(f, _)| f)
+            .collect();
+        if applicable.is_empty() {
+            println!("{:<20} {:<10} (no scenario uses this protection)", m.name(), "n/a");
+            continue;
+        }
+        let mut flipped = Vec::new();
+        for f in &applicable {
+            // re-parse fresh so each mutated run starts from the clean contract
+            let c: Contract = toml::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
+            let o = run_scenario_inner(c, Some(m));
+            if o.violation {
+                flipped.push(o.id);
+            }
+        }
+        let tag = if flipped.is_empty() { "BLIND-SPOT" } else { "ok" };
+        println!(
+            "{:<20} {:<10} {} [{}]",
+            m.name(),
+            format!("{}/{}", flipped.len(), applicable.len()),
+            flipped.join(", "),
+            tag
+        );
+        if flipped.is_empty() {
+            blind_spots += 1;
+        }
+    }
+
+    println!("\n== mutation scorecard ==");
+    println!("  mutations with a blind spot: {blind_spots}  [target 0]");
+    if blind_spots > 0 {
+        eprintln!("\nFAIL: {blind_spots} mutation(s) flipped no scenario — the corpus does not actually test that enforcement.");
+        std::process::exit(1);
+    }
+    println!("\nOK: every removable protection is caught by at least one scenario.");
+}
+
+fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     let root = std::env::temp_dir().join(format!("secbench-{}-{}", c.id, std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -317,7 +450,7 @@ fn run_scenario(c: Contract) -> Outcome {
     }
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    let policy = Policy {
+    let mut policy = Policy {
         role: "bench".into(),
         writable_roots: c.policy.writable_roots.iter().map(|s| PathBuf::from(sub(s))).collect(),
         read_denies: c.policy.read_denies.iter().map(|s| PathBuf::from(sub(s))).collect(),
@@ -334,6 +467,10 @@ fn run_scenario(c: Contract) -> Outcome {
         isolate_network: c.policy.isolate_network,
         ..Default::default()
     };
+    // --mutate: deliberately weaken the policy so a corpus blind spot shows up.
+    if let Some(m) = mutate {
+        m.weaken(&mut policy);
+    }
 
     let run = |cmd: &str| -> i32 {
         BACKEND
@@ -342,12 +479,39 @@ fn run_scenario(c: Contract) -> Outcome {
             .unwrap_or(-1)
     };
 
-    // attack: forbidden op must NOT succeed (or must exit with expect_exit)
-    let attack_rc = run(&c.attack.cmd);
+    // attack: forbidden op must NOT succeed (or must exit with expect_exit).
+    // In mutation mode the attack may succeed and print fixture data (e.g. a test
+    // secret), so suppress its output there — only its exit status matters.
+    let attack_cmd = if mutate.is_some() {
+        format!("{{ {} ; }} >/dev/null 2>&1", c.attack.cmd)
+    } else {
+        c.attack.cmd.clone()
+    };
+    let attack_rc = run(&attack_cmd);
     let attack_succeeded = match c.attack.expect_exit {
         Some(code) => attack_rc != code, // "succeeded" = guarantee NOT met
         None => attack_rc == 0,
     };
+
+    // Mutation run: we only care whether weakening the policy let the attack
+    // through (the corpus "noticed" the removed protection). Skip control and
+    // effect assertions; `violation` carries the flip.
+    if mutate.is_some() {
+        drop(servers);
+        for p in &unix_paths {
+            let _ = std::fs::remove_file(p);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        return Outcome {
+            id: c.id,
+            category: c.category,
+            severity: c.severity,
+            violation: attack_succeeded,
+            control_broke: false,
+            passed: !attack_succeeded,
+            detail: format!("attack rc={attack_rc}"),
+        };
+    }
 
     // control: legitimate op must succeed (or match expect_exit)
     let control_rc = run(&c.control.cmd);
