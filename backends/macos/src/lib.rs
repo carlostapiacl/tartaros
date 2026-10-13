@@ -150,6 +150,10 @@ fn supervise(
     let pid = child.id() as i32;
     let start = Instant::now();
     let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
+    // Adaptive poll: start tight (short commands dominate) and back off to 50ms,
+    // removing a fixed ~50ms per-launch latency. Cadence does not affect the
+    // timeout/teardown guarantees.
+    let mut poll_ms = 1u64;
     loop {
         for c in collectors.iter_mut() {
             c.poll(sink);
@@ -173,7 +177,8 @@ fn supervise(
                         return 124;
                     }
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(Duration::from_millis(poll_ms));
+                poll_ms = (poll_ms * 2).min(50);
             }
             Err(_) => return -1,
         }
