@@ -10,6 +10,7 @@
 //!   --port N               allow loopback TCP to this port (repeatable)
 //!   --net                  allow all network (default: denied)
 //!   --deny-unix            deny AF_UNIX sockets (Linux, seccomp)
+//!   --isolate-pids         run in a private PID+mount namespace (Linux; hides host processes)
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
 //!   --timeout SECS         kill the process group after SECS (exit 124)
 //!   --max-mem BYTES        address-space limit
@@ -41,6 +42,8 @@ struct PolicyFile {
     net: bool,
     #[serde(default)]
     deny_unix_sockets: bool,
+    #[serde(default)]
+    isolate_pids: bool,
     #[serde(default)]
     materialize_absent_handoff: bool,
     #[serde(default)]
@@ -119,6 +122,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
         p.local_ports = pf.local_ports;
         p.network = Some(if pf.net { Network::Allowed } else { Network::Denied });
         p.deny_unix_sockets = pf.deny_unix_sockets;
+        p.isolate_pids = pf.isolate_pids;
         p.materialize_absent_handoff = pf.materialize_absent_handoff;
         p.isolate_process_info = pf.isolate_process_info;
         p.timeout = pf.timeout_secs.map(Duration::from_secs);
@@ -139,6 +143,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
             "--port" => p.local_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --port"); exit(2); })),
             "--net" => p.network = Some(Network::Allowed),
             "--deny-unix" => p.deny_unix_sockets = true,
+            "--isolate-pids" => p.isolate_pids = true,
             "--materialize" => p.materialize_absent_handoff = true,
             "--timeout" => p.timeout = Some(Duration::from_secs(val().parse().unwrap_or(0))),
             "--max-mem" => p.max_memory_bytes = Some(val().parse().unwrap_or(0)),
@@ -161,6 +166,7 @@ fn explain(p: &Policy) {
         println!("loopback ports: {:?}", p.local_ports);
     }
     println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
+    println!("isolate PID namespace: {}", p.isolate_pids);
     println!("isolate /proc (env reads): {}", p.isolate_process_info);
     if let Some(t) = p.timeout { println!("timeout: {}s", t.as_secs()); }
     if let Some(m) = p.max_memory_bytes { println!("max memory: {m} bytes"); }

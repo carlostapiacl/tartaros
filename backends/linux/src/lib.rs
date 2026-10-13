@@ -93,7 +93,7 @@ impl LandlockBackend {
         let mut cmd = confined_command(policy, command, procs)?;
         let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
         let mut cols = make_collectors(child.id());
-        let code = supervise(child, policy.timeout, &mut cols, sink);
+        let code = supervise(child, policy.timeout, cg.as_deref(), &mut cols, sink);
         if let Some(d) = cg { destroy_cgroup(&d); }
         Ok(RunOutcome { exit_code: code })
     }
@@ -125,7 +125,7 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
     let procs = cg.as_ref().map(|d| format!("{d}/cgroup.procs"));
     let mut cmd = confined_command(policy, command, procs)?;
     let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
-    let code = supervise(child, policy.timeout, &mut [], &mut VecSink::default());
+    let code = supervise(child, policy.timeout, cg.as_deref(), &mut [], &mut VecSink::default());
     if let Some(d) = cg { destroy_cgroup(&d); }
     Ok(RunOutcome { exit_code: code })
 }
@@ -287,6 +287,7 @@ fn confined_command(
     let max_processes = policy.max_processes;
     let max_cpu = policy.max_cpu_secs;
     let deny_unix = policy.deny_unix_sockets;
+    let isolate_pids = policy.isolate_pids;
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
     unsafe {
@@ -295,7 +296,11 @@ fn confined_command(
             if libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            // Join the cgroup (guaranteed pid/memory caps) before exec, if any.
+            // Join the cgroup BEFORE any PID-namespace unshare: inside a new PID
+            // namespace getpid() returns the namespaced pid (1), which is not what
+            // cgroup.procs expects. Joining here (host pid) and letting the agent
+            // inherit membership keeps the cgroup caps and cgroup.kill teardown
+            // working across the namespace boundary.
             if let Some(path) = &cgroup_procs {
                 let pid = format!("{}\n", libc::getpid());
                 let cpath = std::ffi::CString::new(path.as_str()).unwrap();
@@ -304,6 +309,12 @@ fn confined_command(
                     let _ = libc::write(fd, pid.as_ptr() as *const _, pid.len());
                     libc::close(fd);
                 }
+            }
+            // Private PID + mount namespace (opt-in). Must happen before the
+            // Landlock lockdown (mounting /proc needs CAP_SYS_ADMIN and an
+            // unrestricted mount tree). Fails closed. See enter_pid_namespace.
+            if isolate_pids {
+                enter_pid_namespace()?;
             }
             // Resource limits (P1-B) before dropping into the sandbox.
             set_rlimit(libc::RLIMIT_AS, max_memory)?;
@@ -327,6 +338,81 @@ fn confined_command(
         });
     }
     Ok(cmd)
+}
+
+/// Put the agent in a private PID + mount namespace so it sees only its own
+/// process subtree. Called from `pre_exec` (child, before the Landlock lockdown)
+/// and after the cgroup join. On return the caller continues as PID 1 of a new
+/// PID namespace with a fresh `/proc`; it never returns in the parent, which
+/// becomes a thin init that reaps the agent and propagates its exit status.
+///
+/// Fails closed: if any step is denied (e.g. no CAP_SYS_ADMIN inside an
+/// undelegated container), it returns an error and the launch is aborted rather
+/// than running without the requested isolation.
+#[cfg(target_os = "linux")]
+unsafe fn enter_pid_namespace() -> std::io::Result<()> {
+    // New mount + PID namespace. CLONE_NEWPID takes effect on the next fork:
+    // this process stays in the old PID ns and its first child is PID 1 of the
+    // new one.
+    if libc::unshare(libc::CLONE_NEWNS | libc::CLONE_NEWPID) != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Make the mount tree private so our fresh /proc does not propagate to (or
+    // from) the host mount namespace.
+    let root = c"/";
+    if libc::mount(
+        std::ptr::null(),
+        root.as_ptr(),
+        std::ptr::null(),
+        libc::MS_REC | libc::MS_PRIVATE,
+        std::ptr::null(),
+    ) != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    let pid = libc::fork();
+    if pid < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if pid > 0 {
+        // Init shim (stays in the old PID ns): wait for the agent and exit with
+        // its status, so the supervisor sees the agent's real exit code.
+        //
+        // Close every inherited non-stdio fd first. std::process keeps a
+        // CLOEXEC exec-status pipe; the agent (G) closes its copy when it
+        // execs, but this shim would hold its copy open for the whole run,
+        // so Command::spawn() in the parent would BLOCK reading that pipe until
+        // the run ends — the supervisor (and its timeout) would never start.
+        // Closing here releases the pipe the moment the agent execs.
+        close_inherited_fds();
+        let mut status: libc::c_int = 0;
+        while libc::waitpid(pid, &mut status, 0) < 0 {
+            if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                libc::_exit(1);
+            }
+        }
+        let code = if (status & 0x7f) == 0 {
+            (status >> 8) & 0xff // WEXITSTATUS
+        } else {
+            128 + (status & 0x7f) // 128 + WTERMSIG
+        };
+        libc::_exit(code);
+    }
+    // Agent (PID 1 of the new namespace): mount a fresh procfs so /proc reflects
+    // this namespace (only our own processes), not the host's.
+    let proc_src = c"proc";
+    let proc_tgt = c"/proc";
+    if libc::mount(
+        proc_src.as_ptr(),
+        proc_tgt.as_ptr(),
+        proc_src.as_ptr(),
+        0,
+        std::ptr::null(),
+    ) != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Close every inherited fd >= 3 (keep stdio) just before exec. `close_range`
@@ -525,6 +611,7 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, limit: Option<u64>) -> std::i
 fn supervise(
     mut child: std::process::Child,
     timeout: Option<std::time::Duration>,
+    cgroup_dir: Option<&str>,
     collectors: &mut [Box<dyn Collector>],
     sink: &mut dyn EffectSink,
 ) -> i32 {
@@ -532,6 +619,19 @@ fn supervise(
     let pid = child.id() as i32;
     let start = Instant::now();
     let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
+    // Kill the whole run. When a cgroup exists, `cgroup.kill` SIGKILLs every
+    // member atomically regardless of process group or PID namespace — essential
+    // when --isolate-pids makes the agent PID 1 of its namespace, which is immune
+    // to signals (even from an ancestor) that `kill(-pgid)` relies on. The
+    // process-group kill stays as a fallback for the no-cgroup path.
+    let kill_all = |sig: i32| {
+        if let Some(d) = cgroup_dir {
+            if sig == libc::SIGKILL {
+                let _ = std::fs::write(format!("{d}/cgroup.kill"), "1");
+            }
+        }
+        kill_group(sig);
+    };
     loop {
         // Poll collectors in the same loop (no-op when there are none), so
         // observation never alters the supervision/timeout behaviour.
@@ -543,17 +643,17 @@ fn supervise(
                 for c in collectors.iter_mut() {
                     c.poll(sink);
                 }
-                kill_group(libc::SIGKILL);
+                kill_all(libc::SIGKILL);
                 return exit_code_of(status);
             }
             Ok(None) => {
                 if let Some(t) = timeout {
                     if start.elapsed() >= t {
-                        kill_group(libc::SIGTERM);
+                        kill_all(libc::SIGTERM);
                         std::thread::sleep(Duration::from_millis(500));
-                        kill_group(libc::SIGKILL);
+                        kill_all(libc::SIGKILL);
                         let _ = child.wait();
-                        kill_group(libc::SIGKILL);
+                        kill_all(libc::SIGKILL);
                         return 124; // timed out
                     }
                 }

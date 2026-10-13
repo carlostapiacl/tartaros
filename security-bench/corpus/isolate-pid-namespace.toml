@@ -1,0 +1,23 @@
+id = "isolate-pid-namespace"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+
+# With --isolate-pids the agent runs in a private PID namespace and sees only its
+# own subtree: it cannot enumerate host processes (to read their /proc/<pid>/
+# cmdline, fds, or signal them). The attack passes only if it can see many pids;
+# under isolation /proc lists just a handful, so it fails (guarantee met). The
+# control confirms the agent still runs normally inside the namespace.
+[policy]
+writable_roots = ["{root}/work"]
+isolate_pids = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'test $(ls /proc | grep -cE \"^[0-9]+$\") -gt 50'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"

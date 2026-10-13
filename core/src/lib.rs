@@ -105,6 +105,13 @@ pub struct Policy {
     /// pathname unix sockets). Default off — real agents use unix sockets, so this
     /// is a strict mode the policy turns on when that is acceptable.
     pub deny_unix_sockets: bool,
+    /// Opt-in (Linux): run the agent in a private PID + mount namespace so it
+    /// sees ONLY its own process subtree — it cannot enumerate, inspect
+    /// (`/proc/<pid>/cmdline`) or signal host processes, and a fresh `/proc` is
+    /// mounted to match. The agent becomes PID 1 of its namespace, which also
+    /// tightens teardown (its death reaps the whole subtree). Needs
+    /// CAP_SYS_ADMIN; fails closed if the namespace can't be created.
+    pub isolate_pids: bool,
 }
 
 impl Policy {
