@@ -85,6 +85,30 @@ pub struct Policy {
     /// Deny any process-info / environment read of processes outside this
     /// sandbox (macOS `KERN_PROCARGS2`, Linux `/proc/<pid>`).
     pub isolate_process_info: bool,
+    /// Opt-in (P1-2 mitigation): before launch, create empty read-only
+    /// placeholders for ABSENT top-level trust-handoff config files under the
+    /// writable roots, so the agent cannot create a new one that a trusted tool
+    /// later runs. Landlock protects by inode, so a path must exist to be carved;
+    /// this materializes it. A workspace side effect — hence opt-in.
+    pub materialize_absent_handoff: bool,
+}
+
+impl Policy {
+    /// The absent top-level trust-handoff config paths that
+    /// `materialize_absent_handoff` would create (files, and dirs for the ones
+    /// ending without an extension like `.github/workflows`).
+    pub fn handoff_placeholders(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for root in &self.writable_roots {
+            for name in HANDOFF_CONFIG_NAMES {
+                let p = root.join(name);
+                if !p.exists() {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    }
 }
 
 impl Policy {
