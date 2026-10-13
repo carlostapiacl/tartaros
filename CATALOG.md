@@ -22,7 +22,7 @@ agrees on what counts as "outside".
 
 | axis | important attempts to capture | collector | status |
 |---|---|---|---|
-| **network** | outbound connect; port scan (many connects); loopback to a neighbour service the role wasn't granted; DNS to external resolver; bind/listen | `collect::NetworkCollector` (Linux `/proc/net/tcp`) | **first collector built** (parser + classification tested; live read Linux) |
+| **network** | outbound connect; port scan (many connects); loopback to a neighbour service the role wasn't granted; DNS to external resolver; bind/listen | `collect::NetworkCollector` (Linux `/proc/net/tcp`; `for_policy` wires territory) | **built + enforced**: `Policy::local_ports` opens only granted loopback ports (macOS live-verified: 8001 ✓, 8787 blocked); collector classifies via `catalog` |
 | | same on macOS | `net/lsof` (planned) | ◻️ |
 | **file (write)** | write outside the writable roots; write to a trust-handoff path (`.git/hooks`, `.vscode/tasks.json`, `.envrc`, CI config) | enforced today; event capture ◻️ | 🟡 enforced, not yet logged |
 | **secret (read)** | read of a secret location (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `.env`, cloud creds) — `core::catalog::looks_like_secret` | `secret` collector (planned: fd/open observation) | ◻️ classification done |
@@ -31,6 +31,19 @@ agrees on what counts as "outside".
 
 Legend: **built** · 🟡 partial · ◻️ planned (the model and catalog already accept
 it; adding it is a new `Collector`, no change to `core`).
+
+## Logging modes
+
+Pick how much to record by wrapping the sink in `core::effect::FilterSink` with a
+`RecordMode`:
+
+- `Off` — nothing.
+- `DeniedOnly` — only what the wall blocked.
+- `OutsideOnly` — only attempts that reach outside the territory (allowed or not).
+- `Boundary` — outside OR denied (every crossing).
+- `All` — everything, including within-territory activity.
+
+Optionally restrict to axes: `FilterSink::new(sink, mode).with_axes([Axis::Network, Axis::Secret])`.
 
 ## Event shape
 

@@ -44,6 +44,18 @@ impl NetworkCollector {
         }
     }
 
+    /// Build a collector whose territory matches a policy, so enforcement and
+    /// observation agree on what is "within". This is how an integrator
+    /// wire it up.
+    pub fn for_policy(pids: Vec<u32>, policy: &seisin_sandbox_core::Policy) -> Self {
+        Self::new(
+            policy.role.clone(),
+            pids,
+            policy.local_ports.clone(),
+            policy.allowed_hosts.clone(),
+        )
+    }
+
     /// Turn an observed endpoint into an event (classifying direction). Pure, so
     /// it is testable without touching /proc.
     fn event_for(&self, ep: &Endpoint) -> EffectEvent {

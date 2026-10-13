@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 
 pub mod catalog;
 pub mod effect;
-pub use effect::{Axis, Collector, Direction, EffectEvent, EffectSink, JsonlSink, Outcome, VecSink};
+pub use effect::{
+    Axis, Collector, Direction, EffectEvent, EffectSink, FilterSink, JsonlSink, Outcome,
+    RecordMode, VecSink,
+};
 
 /// What a confined process may do with a filesystem path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,11 +67,18 @@ const MAX_WALK_DEPTH: usize = 40;
 /// A complete, backend-independent confinement policy.
 #[derive(Debug, Clone, Default)]
 pub struct Policy {
+    /// Role label, used to attribute effect-log events. Optional.
+    pub role: String,
     /// Roots the agent may write under.
     pub writable_roots: Vec<PathBuf>,
     /// Explicit filesystem rules; `Deny` always wins over an overlapping allow.
     pub fs_rules: Vec<FsRule>,
     pub network: Option<Network>,
+    /// Specific loopback ports the role may reach (e.g. its app's 8001/8081/3307)
+    /// without opening all of localhost. The field the field-use detected it needs.
+    pub local_ports: Vec<u16>,
+    /// External hosts (by IP) the role may reach; everything else is outside.
+    pub allowed_hosts: Vec<String>,
     /// Deny any process-info / environment read of processes outside this
     /// sandbox (macOS `KERN_PROCARGS2`, Linux `/proc/<pid>`).
     pub isolate_process_info: bool,

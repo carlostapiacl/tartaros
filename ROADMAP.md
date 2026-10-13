@@ -60,8 +60,12 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [ ] collectors for the other axes (file-write, secret-read, process, mcp) —
       each a new `Collector`, no core change (see CATALOG.md)
 - [ ] live run of NetworkCollector against a real agent on the Linux test host
-- [ ] **ports/network per role**: 127.0.0.1:<port> granular (not all-localhost);
-      domain allow-list via proxy
+- [x] **ports per role**: `Policy::local_ports` opens only granted loopback
+      ports (macOS live-verified: 8001 reachable, 8787 blocked); unit-tested.
+      `NetworkCollector::for_policy` ties observation to the same territory
+- [x] **logging modes**: `RecordMode` (Off/DeniedOnly/OutsideOnly/Boundary/All)
+      + axis filter, via `FilterSink`; tested
+- [ ] domain allow-list via proxy (external hosts beyond IP); Linux net enforce
 - [ ] **secret reads**: read-deny of secret dirs (~/.ssh, ~/.aws, keydirs)
 - [ ] **secret broker**: give the capability, not the raw value
 - [ ] **close the Linux env-leak**: restrict /proc or PID namespace

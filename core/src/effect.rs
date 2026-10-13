@@ -16,7 +16,7 @@ use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Which kind of boundary the attempt touches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Axis {
     File,
     Network,
@@ -176,6 +176,73 @@ impl<W: Write> EffectSink for JsonlSink<W> {
     }
 }
 
+/// How much to record. Pick the mode per run (or per role).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordMode {
+    /// Record nothing.
+    Off,
+    /// Only attempts the wall blocked.
+    DeniedOnly,
+    /// Only attempts that reach outside the territory (the security-relevant
+    /// ones), whether allowed or not — a port scan, a read of a secret.
+    OutsideOnly,
+    /// Everything that crosses a boundary: outside-territory OR denied.
+    Boundary,
+    /// Everything observed, including within-territory activity.
+    All,
+}
+
+impl RecordMode {
+    fn keeps(&self, e: &EffectEvent) -> bool {
+        match self {
+            RecordMode::Off => false,
+            RecordMode::DeniedOnly => e.outcome == Outcome::Denied,
+            RecordMode::OutsideOnly => e.direction == Direction::OutsideTerritory,
+            RecordMode::Boundary => {
+                e.direction == Direction::OutsideTerritory || e.outcome == Outcome::Denied
+            }
+            RecordMode::All => true,
+        }
+    }
+}
+
+/// Wraps any sink and forwards only events that match the mode (and, optionally,
+/// a set of axes). Compose it around a `JsonlSink` to get a logging mode.
+pub struct FilterSink<S: EffectSink> {
+    mode: RecordMode,
+    axes: Option<std::collections::HashSet<Axis>>,
+    inner: S,
+}
+
+impl<S: EffectSink> FilterSink<S> {
+    pub fn new(inner: S, mode: RecordMode) -> Self {
+        FilterSink { mode, axes: None, inner }
+    }
+
+    /// Restrict to these axes as well (e.g. only network + secret).
+    pub fn with_axes(mut self, axes: impl IntoIterator<Item = Axis>) -> Self {
+        self.axes = Some(axes.into_iter().collect());
+        self
+    }
+
+    fn passes(&self, e: &EffectEvent) -> bool {
+        if let Some(axes) = &self.axes {
+            if !axes.contains(&e.axis) {
+                return false;
+            }
+        }
+        self.mode.keeps(e)
+    }
+}
+
+impl<S: EffectSink> EffectSink for FilterSink<S> {
+    fn emit(&mut self, event: &EffectEvent) {
+        if self.passes(event) {
+            self.inner.emit(event);
+        }
+    }
+}
+
 /// Collect events into memory — handy for tests and for buffering.
 #[derive(Default)]
 pub struct VecSink {
@@ -238,5 +305,43 @@ mod tests {
         let mut sink = VecSink::default();
         sink.emit(&EffectEvent::now("r", Axis::Network, "connect", "x", Direction::Unknown, Outcome::Attempted, "t"));
         assert_eq!(sink.events.len(), 1);
+    }
+
+    fn ev(dir: Direction, out: Outcome, axis: Axis) -> EffectEvent {
+        EffectEvent::now("r", axis, "a", "t", dir, out, "s")
+    }
+
+    #[test]
+    fn record_modes_filter_as_expected() {
+        use Direction::*;
+        use Outcome::*;
+        let within_allowed = ev(WithinTerritory, Allowed, Axis::Network);
+        let outside_allowed = ev(OutsideTerritory, Allowed, Axis::Network);
+        let within_denied = ev(WithinTerritory, Denied, Axis::File);
+
+        let run = |mode: RecordMode, e: &EffectEvent| {
+            let mut s = FilterSink::new(VecSink::default(), mode);
+            s.emit(e);
+            s.inner.events.len()
+        };
+
+        assert_eq!(run(RecordMode::Off, &outside_allowed), 0);
+        assert_eq!(run(RecordMode::All, &within_allowed), 1);
+        assert_eq!(run(RecordMode::OutsideOnly, &within_allowed), 0);
+        assert_eq!(run(RecordMode::OutsideOnly, &outside_allowed), 1);
+        assert_eq!(run(RecordMode::DeniedOnly, &outside_allowed), 0);
+        assert_eq!(run(RecordMode::DeniedOnly, &within_denied), 1);
+        assert_eq!(run(RecordMode::Boundary, &within_denied), 1); // denied
+        assert_eq!(run(RecordMode::Boundary, &outside_allowed), 1); // outside
+        assert_eq!(run(RecordMode::Boundary, &within_allowed), 0); // neither
+    }
+
+    #[test]
+    fn axis_filter_restricts() {
+        let mut s = FilterSink::new(VecSink::default(), RecordMode::All).with_axes([Axis::Secret]);
+        s.emit(&ev(Direction::OutsideTerritory, Outcome::Attempted, Axis::Network));
+        s.emit(&ev(Direction::OutsideTerritory, Outcome::Attempted, Axis::Secret));
+        assert_eq!(s.inner.events.len(), 1);
+        assert_eq!(s.inner.events[0].axis, Axis::Secret);
     }
 }
