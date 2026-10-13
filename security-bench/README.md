@@ -25,8 +25,8 @@ violation — drop it into CI.
 
 | | macOS | Linux (the Linux test host) |
 |---|---|---|
-| scenarios | 10 | 13 |
-| passed | 10/10 | 13/13 |
+| scenarios | 11 | 13 |
+| passed | 11/11 | 13/13 |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 
