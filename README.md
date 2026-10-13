@@ -24,13 +24,24 @@ Codex `0.162.1`, nono `0.79`, and `@anthropic-ai/sandbox-runtime` (measured
   box on the next `git commit`.
 - **Deny survives an ancestor rename** — renaming a parent directory must not
   relocate a protected path out from under its deny.
-- **No cross-process environment disclosure** — a confined process must not read
-  another process's environment (macOS `KERN_PROCARGS2`; Linux `/proc`).
+- **No cross-process environment disclosure (Linux)** — a confined process
+  cannot read another process's environment, via the PID namespace.
 - **Clean process lifecycle** — correct exit status on signal death, a single
   SIGINT, descendants reaped.
 
 We do **not** claim "more secure than X in every scenario." The claim is the
 narrow, measured one above.
+
+### Honest limits
+
+- **macOS environment disclosure is a platform limit, not something any Seatbelt
+  profile fixes.** We measured (2026-10-13) that `KERN_PROCARGS2` reads of another
+  process's environment still succeed under our profile with no `kern.proc.*`
+  allow and `process-info` restricted to self — so Seatbelt does not mediate it
+  at all. Codex, nono and sandbox-runtime leak it the same way. seisin's
+  mitigation is operational: run each agent under its own macOS user (so the
+  syscall's same-user limit blocks it), which the policy layer orchestrates.
+  Linux closes it in the backend via the PID namespace.
 
 ## Architecture
 

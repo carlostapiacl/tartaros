@@ -20,8 +20,12 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] live smoke (`examples/smoke.rs`) PASSES where Codex/nono failed: nested
       `.git/hooks` denied (direct + ancestor rename), hook does not run outside,
       control writes work, exit 143 on signal
-- [ ] measure the macOS env-leak (KERN_PROCARGS2) under our profile — is it
-      actually blockable by Seatbelt, or a platform limit? (honest open question)
+- [x] measured the macOS env-leak: **platform limit, not profile-fixable.** Under
+      our profile (no `kern.proc.*`, process-info self-only) KERN_PROCARGS2 still
+      reads another process's env — Seatbelt does not mediate it. Documented in
+      README "Honest limits"; mitigation is per-agent macOS user (policy layer).
+- [x] integration tests (`tests/trust_handoff.rs`, macOS): 6 live checks green,
+      including git running under the profile
 - [ ] shell rc / CI-config handoff paths beyond `.github/workflows`
 
 ## M2 — Linux backend
