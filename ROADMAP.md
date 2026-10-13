@@ -163,7 +163,11 @@ Build only where measurement shows no existing backend can enforce the policy.
       bypasses path-based confinement. Verified on the Linux test host (`p1c_fd_leak`: child can't
       read the inherited fd; smoke/net unaffected). **macOS too**: fds closed in
       sandbox-exec's pre_exec; verified (`fd_leak` PASS, tests green).
-- [ ] add: cross-backend adapters (srt / nono / openshell)
+- [x] cross-backend comparison vs nono 0.79 (fair config, the Linux test host): parity on
+      write-outside, trust-handoff advantage on nested .git, nono can't express
+      deny-in-allow. `comparison/RESULTS.md` + reproducible script. Includes a
+      /tmp-default false-positive correction (honest methodology).
+- [ ] comparisons vs anthropic-srt and OpenShell
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
 
 ## Both-OS parity (loop)
