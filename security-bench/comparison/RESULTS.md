@@ -30,8 +30,25 @@ Re-run with an outside path under `/root` (not auto-allowed), **nono blocks it**
 Recorded as parity. This is exactly the trap the review warned about: a difference
 in defaults, or a misconfiguration, must never be sold as a vulnerability.
 
+## vs sandbox-runtime (Anthropic srt 0.0.78) — measured on a Linux host
+
+| scenario | seisin-sandbox | srt 0.0.78 |
+|---|---|---|
+| write outside the granted territory | blocked | **blocked** (parity) |
+| overwrite `.claude/settings.json` | blocked | **blocked** (parity in this test) |
+
+**Honest note:** srt is the strongest competitor — it has trust-handoff-like
+protections, and in this measurement it blocked both scenarios (parity).
+We did **not** reproduce a srt disadvantage here, so none is claimed. `.claude/
+settings.json` blocked under srt 0.0.78 — to reconcile with an earlier code-level
+observation needs a version-specific check; recorded as parity until then.
+
+Where the measured rows differ: deny-inside-allow on
+Linux (nono cannot express it; srt uses bwrap). Against nono and the Codex class
+the trust-handoff advantage is public and measured (above).
+
 ## Not yet compared
 
-sandbox-runtime (Anthropic) and OpenShell (NVIDIA) backends; network/port, broker,
-lifecycle and resource scenarios across backends. Each needs its idiomatic config
-before any claim. Reproduce with `comparison/nono-scenarios.sh` on a Landlock host.
+OpenShell (NVIDIA); network/port, broker, lifecycle and resource scenarios across
+backends. Each needs its idiomatic config before any claim. Reproduce the nono side
+with `comparison/nono-scenarios.sh` on a Landlock host (not the dev Mac).
