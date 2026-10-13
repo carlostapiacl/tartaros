@@ -101,8 +101,13 @@ impl SeatbeltBackend {
                 set_rlimit(libc::RLIMIT_AS as libc::c_int, max_memory)?;
                 set_rlimit(libc::RLIMIT_NPROC as libc::c_int, max_processes)?;
                 set_rlimit(libc::RLIMIT_CPU as libc::c_int, max_cpu)?;
-                // Close every inherited fd >= 3, not a fixed 1024 cap (review P1):
-                // use the current fd limit so high-numbered fds are closed too.
+                // Mark every inherited fd >= 3 close-on-exec, up to the current fd
+                // limit (not a fixed 1024). CLOEXEC, not close(): a leaked fd still
+                // does not survive into the exec'd agent (FD-1 defense), but we must
+                // NOT close std's exec-status pipe here — close()ing it makes std
+                // abort ("output.write ... aborting") when an exec FAILS, which broke
+                // node / git / python3 under the sandbox on macOS. CLOEXEC leaves the
+                // pipe usable for std's failed-exec report and drops it on success.
                 let mut hi: libc::rlimit = std::mem::zeroed();
                 let max_fd = if libc::getrlimit(libc::RLIMIT_NOFILE, &mut hi) == 0 && hi.rlim_cur != libc::RLIM_INFINITY {
                     (hi.rlim_cur as i32).min(1 << 20)
@@ -110,7 +115,10 @@ impl SeatbeltBackend {
                     1 << 16
                 };
                 for fd in 3..max_fd {
-                    libc::close(fd);
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags >= 0 {
+                        let _ = libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                    }
                 }
                 Ok(())
             });
