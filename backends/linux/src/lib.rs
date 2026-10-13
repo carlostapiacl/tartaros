@@ -105,6 +105,11 @@ fn confined_command(
     let abi = ABI::V5;
     let read_only = AccessFs::from_read(abi);
     let all = AccessFs::from_all(abi);
+    // Write rules must NOT grant read: Landlock unions rule permissions, so a
+    // write grant that included read would re-open a read-denied secret located
+    // inside a writable root (external review P0). Read is governed solely by the
+    // read carve; writes grant write rights only.
+    let write_only = all & !read_only;
 
     // Restrict the network unless the policy explicitly opened it.
     let restrict_net = !matches!(policy.network, Some(Network::Allowed));
@@ -139,7 +144,7 @@ fn confined_command(
             Err(_) => continue, // a path that vanished between carve and open: skip
         };
         ruleset = ruleset
-            .add_rule(PathBeneath::new(fd, all))
+            .add_rule(PathBeneath::new(fd, write_only))
             .map_err(|e| err(format!("add write rule {}: {e}", p.display())))?;
     }
 
@@ -150,7 +155,7 @@ fn confined_command(
     // directory, not each node.
     let dev_fd = PathFd::new("/dev").map_err(|e| err(format!("open /dev: {e}")))?;
     ruleset = ruleset
-        .add_rule(PathBeneath::new(dev_fd, all))
+        .add_rule(PathBeneath::new(dev_fd, write_only))
         .map_err(|e| err(format!("add /dev rule: {e}")))?;
 
     // Network: allow TCP connect/bind only on the granted ports. Landlock net is
