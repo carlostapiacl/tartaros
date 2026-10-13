@@ -60,6 +60,8 @@ struct PolicySpec {
     #[serde(default)]
     read_denies: Vec<String>,
     #[serde(default)]
+    write_denies: Vec<String>,
+    #[serde(default)]
     local_ports: Vec<u16>,
     #[serde(default)]
     materialize_absent_handoff: bool,
@@ -635,6 +637,7 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         role: "bench".into(),
         writable_roots: c.policy.writable_roots.iter().map(|s| PathBuf::from(sub(s))).collect(),
         read_denies: c.policy.read_denies.iter().map(|s| PathBuf::from(sub(s))).collect(),
+        fs_rules: c.policy.write_denies.iter().map(|s| tartaros_core::FsRule { path: PathBuf::from(sub(s)), access: tartaros_core::Access::Deny, even_if_absent: true }).collect(),
         local_ports: c.policy.local_ports.clone(),
         network: Some(Network::Denied),
         materialize_absent_handoff: c.policy.materialize_absent_handoff,

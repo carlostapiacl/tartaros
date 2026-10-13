@@ -1,0 +1,28 @@
+id = "write-deny-inside-writable"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A user-declared write-deny inside a writable root must hold (seisin's
+# write_denies / never_writes): the agent writes freely in the root but cannot
+# write the denied subtree. This is the deny-inside-allow carve applied to an
+# arbitrary path, not just the fixed trust-handoff set.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/protected"]
+
+[[fixture]]
+path = "{root}/work/protected"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "echo pwned > {root}/work/protected/evil"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "{root}/work/protected/evil"
