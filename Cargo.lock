@@ -385,6 +385,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "seisin-sandbox-cli"
+version = "0.0.0"
+dependencies = [
+ "seisin-sandbox-collect",
+ "seisin-sandbox-core",
+ "seisin-sandbox-linux",
+ "seisin-sandbox-macos",
+]
+
+[[package]]
 name = "seisin-sandbox-collect"
 version = "0.0.0"
 dependencies = [

@@ -177,3 +177,9 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] FD-1 inherited-fd leak closed on macOS and Linux.
 - [x] P1-B process supervision (timeout → kill group, setrlimit, reaping) now on
       macOS too (was Linux-only). Verified: macOS timeout 2s → exit 124, bench 11/11.
+
+## M7 — CLI (adoptability)
+- [x] `seisin-sandbox run [opts] -- cmd`: policy via flags, OS backend, exit code
+      passthrough; `--log` emits the effect log of a real run (Linux). Verified on
+      macOS (confines) and the Linux test host (confines + read-deny + effect log of ~/.ssh read).
+- [ ] config file (TOML policy) and per-role profiles; macOS collectors for --log
