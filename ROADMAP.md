@@ -36,7 +36,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] wired the Landlock ruleset from the allow-list (`landlock` 0.4.5), target-
       gated so macOS still builds; read+exec everywhere, write only in the carve;
       restrict_self in the child via pre_exec
-- [x] **measured on the Linux test host (kernel 6.8, via Docker rust image): ALL PASS** —
+- [x] **measured on a Linux host (kernel 6.8, via Docker rust image): ALL PASS** —
       nested `.git/hooks` denied, `.git/objects` still writable, ancestor rename
       denied, control writes work, exit 143. The deny-in-allow that nono refuses.
       (Landlock syscalls work under Docker's default seccomp, Docker 29.)
@@ -46,7 +46,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 
 ## M3 — integration + release
 - [ ] `srt` adapter (wrap @anthropic-ai/sandbox-runtime)
-- [ ] seisin consumes tartaros through the backend abstraction
+- [ ] an orchestration layer consumes tartaros through the backend abstraction
 - [ ] make the repo public
 
 ## M4 — the other dimensions (field-detected)
@@ -62,10 +62,10 @@ Build only where measurement shows no existing backend can enforce the policy.
       v1 cmdline heuristic) — classifiers unit-tested; `proc` helpers shared
 - [x] **secret read-deny**: `Policy::read_denies` + `linux_read_allowlist`
       (symmetric read carve) and macOS `(deny file-read*)`; Linux live-verified
-      on the Linux test host (~/.ssh unreadable, /etc + /usr/bin readable). Secret dimension now
+      on a Linux host (~/.ssh unreadable, /etc + /usr/bin readable). Secret dimension now
       complete: observe (collector) + deny-read + broker (capability)
 - [ ] file-write event capture (enforced already; emit on deny)
-- [x] **observed session live on the Linux test host**: `LandlockBackend::spawn` + `collect::
+- [x] **observed session live on a Linux host**: `LandlockBackend::spawn` + `collect::
       observe_until_exit` drive the collectors while a confined agent runs; real
       effect log captured first-hand (secret read of ~/.ssh + curl exec), filtered
       by `RecordMode`. `NetworkCollector` now walks the process tree (child
@@ -77,7 +77,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] **logging modes**: `RecordMode` (Off/DeniedOnly/OutsideOnly/Boundary/All)
       + axis filter, via `FilterSink`; tested
 - [x] **Linux per-port network enforcement** via Landlock `AccessNet`/`NetPort`
-      (adopts nono #2080); live-verified on the Linux test host: granted 8001 connects, 8787 and
+      (adopts nono #2080); live-verified on a Linux host: granted 8001 connects, 8787 and
       external blocked. Honest limit: port-based not host-based (loopback vs
       external same port needs the proxy); needs kernel >= 6.7
 - [ ] domain allow-list via proxy (external hosts beyond IP)
@@ -85,10 +85,10 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] **secret broker (the single gateway)**: `broker` crate — HTTP forward
       proxy injects the secret; agent reaches ONLY the broker port, authenticates
       upstream without ever holding the token, direct egress blocked. Live-
-      verified end-to-end on the Linux test host; every forward logged as an effect.
+      verified end-to-end on a Linux host; every forward logged as an effect.
 - [x] **HTTPS via capability endpoint** (no MITM): agent speaks plain HTTP to the
       broker at `/<prefix>/…`, broker does the real HTTPS (`ureq`) and injects
-      the secret. Live-verified on the Linux test host (reached https://example.com via broker;
+      the secret. Live-verified on a Linux host (reached https://example.com via broker;
       direct 443 blocked). The agent never does TLS nor holds the token
 - [x] fix: Linux carve only excludes denies that EXIST (Landlock is inode-based;
       absent trust-handoff files are a macOS/Seatbelt strength, not Landlock's)
@@ -103,28 +103,28 @@ Build only where measurement shows no existing backend can enforce the policy.
 
 - [x] **P0 read_denies neutralized by write rule** — a read-denied path inside a
       writable root was readable because write rules granted `all` (incl. read)
-      and Landlock unions permissions. **Reproduced and fixed on the Linux test host**: write
+      and Landlock unions permissions. **Reproduced and fixed on a Linux host**: write
       rules now grant write-only; read is governed solely by the read carve.
       Repro kept: `backends/linux/examples/p0_readdeny_in_writable`.
 - [x] **P0 fail-closed on missing Landlock capabilities**: probes `landlock_fs_
       supported` / `landlock_net_supported` (HardRequirement) and refuses to run
       when FS confinement is absent, or when net is requested but unavailable.
       Verified: Docker/linuxkit (no Landlock) now refuses ("refusing to run
-      unconfined"); the Linux test host (Landlock present) still runs and enforces.
+      unconfined"); a Linux host (Landlock present) still runs and enforces.
 - [x] **P1 broker client auth**: `Broker::with_auth(token)` requires
       `X-Tartaros-Auth: <token>` per run; a process without it gets 403. Verified
-      on the Linux test host (with token 200, without 403). Destination/method scoping per
+      on a Linux host (with token 200, without 403). Destination/method scoping per
       capability remains to extend.
 - [x] **P1 absent trust-handoff paths on Linux — MITIGATED (opt-in).**
       `Policy::materialize_absent_handoff` pre-creates empty read-only
       placeholders for absent top-level trust-handoff configs so Landlock (inode-
       based) carves them; the agent can no longer create e.g. `.claude/settings.
-      json`. VERIFIED on the Linux test host (without: EVIL config created; with: blocked; normal
+      json`. VERIFIED on a Linux host (without: EVIL config created; with: blocked; normal
       writes in existing subdirs still work). Cost: new TOP-LEVEL entries in a
       root containing a protected path aren't creatable (inherent carve tradeoff).
 - [x] **P1 /proc isolation / cross-process env read on Linux — MITIGATED.**
       Primary: the kernel already blocks it — with Yama `ptrace_scope=1` (Ubuntu
-      default, confirmed on the Linux test host) an unrelated process's `/proc/<pid>/environ` is
+      default, confirmed on a Linux host) an unrelated process's `/proc/<pid>/environ` is
       not readable (measured: leak blocked even with no sandbox rule). Defense-in-
       depth: `isolate_process_info` excludes `/proc` from the read grant (covers
       `ptrace_scope=0`); measured that sh/cat/ls/curl/git/python3 still run and the
@@ -136,13 +136,13 @@ Build only where measurement shows no existing backend can enforce the policy.
       a token; `insecure_no_auth()` is an explicit test-only opt-in. Verified.
 - [x] **P0-B capability restricts actions**: each `Capability` declares allowed
       `methods` (405 otherwise, no silent GET), redirects disabled, response
-      capped (10 MB), path traversal (`..`) rejected. Verified on the Linux test host (POST→405).
+      capped (10 MB), path traversal (`..`) rejected. Verified on a Linux host (POST→405).
 - [x] **P1-A materialization hardened**: fails closed on any error, refuses a
       symlinked ancestor, creates with O_EXCL, verifies result. Verified (symlink
       rejected).
 - [x] **P1-B process supervision**: own process group (`setpgid`), wall-clock
       `timeout` kills the group (exit 124), `setrlimit` for memory/processes/CPU,
-      descendants reaped on exit. Verified on the Linux test host (timeout 2s, grandchild not
+      descendants reaped on exit. Verified on a Linux host (timeout 2s, grandchild not
       alive, memory cap hit). cgroups v2 can extend this later.
 
 ## M6 — security-bench (conformance suite) — STARTED
@@ -153,17 +153,17 @@ Build only where measurement shows no existing backend can enforce the policy.
       ancestor rename, secret read-deny, secret inside writable (P0-1), materialize
       absent handoff, network per-port, lifecycle timeout, memory limit. Runner
       extended with servers, timeout/rlimit policy, expect_exit, symlink fixtures.
-      **macOS 7/7, Linux 10/10, 0 violations, 0 legitimate ops broken**
+      **macOS 7/7, Linux/a Linux host 10/10, 0 violations, 0 legitimate ops broken**
 - [x] added: hardlink bypass, IPC unix-socket (opt-in seccomp `deny_unix_sockets`
       on Linux — found + fixed + verified; macOS blocks it natively)
 - [x] added: broker credential-egress contract (secret only in the broker; direct
-      egress blocked, via-broker works) — the Linux test host 13/13
+      egress blocked, via-broker works) — a Linux host 13/13
 - [x] **inherited-fd leak closed**: the Linux backend closes all non-stdio fds
       (`close_range`) just before exec — an fd the orchestrator left open no longer
-      bypasses path-based confinement. Verified on the Linux test host (`p1c_fd_leak`: child can't
+      bypasses path-based confinement. Verified on a Linux host (`p1c_fd_leak`: child can't
       read the inherited fd; smoke/net unaffected). **macOS too**: fds closed in
       sandbox-exec's pre_exec; verified (`fd_leak` PASS, tests green).
-- [x] cross-backend comparison vs nono 0.79 (fair config, the Linux test host): parity on
+- [x] cross-backend comparison vs nono 0.79 (fair config, a Linux host): parity on
       write-outside, trust-handoff advantage on nested .git, nono can't express
       deny-in-allow. `comparison/RESULTS.md` + reproducible script. Includes a
       /tmp-default false-positive correction (honest methodology).
@@ -172,9 +172,9 @@ Build only where measurement shows no existing backend can enforce the policy.
       claimed (honest).
 - [x] **automated competitor comparison** (`comparison/compare.sh`, review P2):
       runs the same scenarios under TartarOS (CLI) and nono, prints the table.
-      Reproducible on the Linux test host; no commercial claim without a measured row.
+      Reproducible on a Linux host; no commercial claim without a measured row.
 - [x] SRT column added to compare.sh (activates when node+bwrap+srt present).
-      TartarOS+nono path verified automated on the Linux test host; srt measured manually (parity).
+      TartarOS+nono path verified automated on a Linux host; srt measured manually (parity).
 - [ ] comparison vs OpenShell (NVIDIA); make the srt column run in CI env
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
 
@@ -186,7 +186,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 ## M7 — CLI (adoptability)
 - [x] `tartaros run [opts] -- cmd`: policy via flags, OS backend, exit code
       passthrough; `--log` emits the effect log of a real run (Linux). Verified on
-      macOS (confines) and the Linux test host (confines + read-deny + effect log of ~/.ssh read).
+      macOS (confines) and a Linux host (confines + read-deny + effect log of ~/.ssh read).
 - [x] **config file (TOML policy)**: `--config role.toml` — one policy declared
       once, applied equivalently on macOS and Linux (B2B P2). `~` expands to $HOME;
       flags override. Verified on both (control ok, secret read-deny rc=1).
@@ -221,7 +221,7 @@ Build only where measurement shows no existing backend can enforce the policy.
 
 ## Resource limits — measured finding (2026-10-13)
 - `--max-mem` (RLIMIT_AS): enforced (verified — allocation past the cap fails).
-- `--max-procs` (RLIMIT_NPROC): **best-effort only.** Measured on the Linux test host: running as
+- `--max-procs` (RLIMIT_NPROC): **best-effort only.** Measured on a Linux host: running as
   root it did NOT contain a 150-fork storm — root/CAP_SYS_RESOURCE bypasses
   RLIMIT_NPROC. Confirms the review: setrlimit is insufficient for multi-tenant.
 - [ ] **cgroups v2 (`pids.max`, `memory.max`)** for a guaranteed per-sandbox cap

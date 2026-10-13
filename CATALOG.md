@@ -15,8 +15,8 @@ agrees on what counts as "outside".
   adapters for other sources — it treats this as one replaceable source).
 - **Collectors attach to a process tree by pid** — they can watch any agent, not
   only one launched by this sandbox.
-- **An integrator**: it runs agents under the sandbox and points
-  the intent layer at the effect log. Neither library knows about the integrator.
+- **An integrator** runs agents under the sandbox and points
+  the intent layer at the effect log; neither library knows about it.
 
 ## The map
 

@@ -8,7 +8,7 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 First consolidated alpha: the open enforcement layer (policy model + macOS
 Seatbelt and Linux Landlock backends) with its differentiator, a session
 supervisor, resource confinement, a conformance suite, and low launch overhead.
-Verified on the Linux test host (Linux 6.8) and macOS 15.7.
+Verified on a Linux host (kernel 6.8) and macOS 15.7.
 
 ### Filesystem & trust-handoff (the differentiator)
 - Path-based protection of the **trust-handoff set at any depth**: nested
