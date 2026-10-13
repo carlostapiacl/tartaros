@@ -68,7 +68,11 @@ Build only where measurement shows no existing backend can enforce the policy.
       `NetworkCollector::for_policy` ties observation to the same territory
 - [x] **logging modes**: `RecordMode` (Off/DeniedOnly/OutsideOnly/Boundary/All)
       + axis filter, via `FilterSink`; tested
-- [ ] domain allow-list via proxy (external hosts beyond IP); Linux net enforce
+- [x] **Linux per-port network enforcement** via Landlock `AccessNet`/`NetPort`
+      (adopts nono #2080); live-verified on the Linux test host: granted 8001 connects, 8787 and
+      external blocked. Honest limit: port-based not host-based (loopback vs
+      external same port needs the proxy); needs kernel >= 6.7
+- [ ] domain allow-list via proxy (external hosts beyond IP)
 - [ ] **secret reads**: read-deny of secret dirs (~/.ssh, ~/.aws, keydirs)
 - [ ] **secret broker**: give the capability, not the raw value
 - [ ] **close the Linux env-leak**: restrict /proc or PID namespace

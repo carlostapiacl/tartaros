@@ -50,25 +50,36 @@ fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunErro
 #[cfg(target_os = "linux")]
 fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
     use landlock::{
-        ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
-        RulesetAttr, RulesetCreatedAttr,
+        ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, PathBeneath, PathFd,
+        Ruleset, RulesetAttr, RulesetCreatedAttr,
     };
+    use seisin_sandbox_core::Network;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let err = |m: String| RunError { reason: m };
 
-    // Best-effort across kernels: newer ABI features degrade instead of failing.
-    let abi = ABI::V1;
+    // Request up to ABI v5 (TCP port rules arrived in v4, kernel 6.7); BestEffort
+    // degrades on older kernels. NOTE: on a kernel without Landlock network
+    // support, network rules are silently dropped — net confinement needs
+    // kernel >= 6.7. Filesystem confinement still applies.
+    let abi = ABI::V5;
     let read_only = AccessFs::from_read(abi);
     let all = AccessFs::from_all(abi);
 
-    let mut ruleset = Ruleset::default()
+    // Restrict the network unless the policy explicitly opened it.
+    let restrict_net = !matches!(policy.network, Some(Network::Allowed));
+
+    let mut builder = Ruleset::default()
         .set_compatibility(CompatLevel::BestEffort)
         .handle_access(all)
-        .map_err(|e| err(format!("handle_access: {e}")))?
-        .create()
-        .map_err(|e| err(format!("create ruleset: {e}")))?;
+        .map_err(|e| err(format!("handle_access fs: {e}")))?;
+    if restrict_net {
+        builder = builder
+            .handle_access(AccessNet::ConnectTcp | AccessNet::BindTcp)
+            .map_err(|e| err(format!("handle_access net: {e}")))?;
+    }
+    let mut ruleset = builder.create().map_err(|e| err(format!("create ruleset: {e}")))?;
 
     // Read + execute everywhere so the command and its libraries load.
     ruleset = ruleset
@@ -86,6 +97,31 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
         ruleset = ruleset
             .add_rule(PathBeneath::new(fd, all))
             .map_err(|e| err(format!("add write rule {}: {e}", p.display())))?;
+    }
+
+    // Writable /dev (the directory, so Landlock covers its hierarchy) — tools
+    // need /dev/null, /dev/tty, etc. Not secrets, and a non-root process can't
+    // harm raw devices. Mirrors the macOS backend's /dev allow. A rule on a
+    // special file (e.g. /dev/stdout, a symlinked pipe) fails, so we grant the
+    // directory, not each node.
+    let dev_fd = PathFd::new("/dev").map_err(|e| err(format!("open /dev: {e}")))?;
+    ruleset = ruleset
+        .add_rule(PathBeneath::new(dev_fd, all))
+        .map_err(|e| err(format!("add /dev rule: {e}")))?;
+
+    // Network: allow TCP connect/bind only on the granted ports. Landlock net is
+    // port-based (not host-based): a granted port is reachable on any host, so
+    // loopback-vs-external is left to the proxy layer. With no granted ports and
+    // restriction on, all TCP connect/bind is denied.
+    if restrict_net {
+        for port in &policy.local_ports {
+            ruleset = ruleset
+                .add_rule(NetPort::new(*port, AccessNet::ConnectTcp))
+                .map_err(|e| err(format!("add connect port {port}: {e}")))?;
+            ruleset = ruleset
+                .add_rule(NetPort::new(*port, AccessNet::BindTcp))
+                .map_err(|e| err(format!("add bind port {port}: {e}")))?;
+        }
     }
 
     // Apply in the child, just before exec, so only the sandboxed process is
