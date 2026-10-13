@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-bench"
-version = "0.0.0"
+version = "0.1.0-alpha"
 dependencies = [
  "serde",
  "tartaros-broker",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-broker"
-version = "0.0.0"
+version = "0.1.0-alpha"
 dependencies = [
  "tartaros-core",
  "tartaros-linux",
@@ -500,7 +500,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-cli"
-version = "0.0.0"
+version = "0.1.0-alpha"
 dependencies = [
  "serde",
  "tartaros-collect",
@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-collect"
-version = "0.0.0"
+version = "0.1.0-alpha"
 dependencies = [
  "tartaros-core",
  "tartaros-linux",
@@ -520,11 +520,11 @@ dependencies = [
 
 [[package]]
 name = "tartaros-core"
-version = "0.0.0"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "tartaros-linux"
-version = "0.0.0"
+version = "0.1.0-alpha"
 dependencies = [
  "landlock",
  "libc",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-macos"
-version = "0.0.0"
+version = "0.1.0-alpha"
 dependencies = [
  "libc",
  "tartaros-core",
