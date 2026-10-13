@@ -93,6 +93,33 @@ fn ancestor_rename_cannot_relocate_protected_hook() {
 }
 
 #[test]
+fn secret_read_deny_blocks_only_the_secret() {
+    let work = mk_work();
+    let secret = work.join("vault");
+    fs::create_dir_all(&secret).unwrap();
+    fs::write(secret.join("key"), "topsecret").unwrap();
+    let be = SeatbeltBackend;
+    let mut p = policy_for(&work);
+    p.read_denies = vec![secret.clone()];
+
+    // reading the secret is denied
+    let rc = be
+        .run(&p, &["/bin/cat".into(), secret.join("key").to_string_lossy().into()])
+        .unwrap()
+        .exit_code;
+    assert_ne!(rc, 0, "reading the secret dir must be denied");
+
+    // reading elsewhere still works
+    let rc = be
+        .run(&p, &["/bin/cat".into(), "/etc/hosts".into()])
+        .unwrap()
+        .exit_code;
+    assert_eq!(rc, 0, "reading a non-secret path must still work");
+
+    fs::remove_dir_all(&work).ok();
+}
+
+#[test]
 fn exit_status_reflects_signal_death() {
     let work = mk_work();
     let be = SeatbeltBackend;

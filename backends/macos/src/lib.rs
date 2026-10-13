@@ -148,9 +148,11 @@ pub fn compile_profile(policy: &Policy) -> String {
     }
 
     // Secret read-denies (last, so they win over the broad file-read* allow).
+    // Canonicalize: Seatbelt matches the real path (e.g. /tmp -> /private/tmp).
     for path in &policy.read_denies {
-        p.push_str(&format!("(deny file-read* (subpath {}))\n", quote(path)));
-        p.push_str(&format!("(deny file-read* (literal {}))\n", quote(path)));
+        let real = path.canonicalize().unwrap_or_else(|_| path.clone());
+        p.push_str(&format!("(deny file-read* (subpath {}))\n", quote(&real)));
+        p.push_str(&format!("(deny file-read* (literal {}))\n", quote(&real)));
     }
 
     p
