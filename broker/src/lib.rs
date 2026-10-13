@@ -48,12 +48,20 @@ pub struct Capability {
 pub struct Broker {
     injections: Vec<Injection>,
     capabilities: Vec<Capability>,
+    auth_token: Option<String>,
     role: String,
 }
 
 impl Broker {
     pub fn new(role: impl Into<String>, injections: Vec<Injection>) -> Self {
-        Broker { injections, capabilities: Vec::new(), role: role.into() }
+        Broker { injections, capabilities: Vec::new(), auth_token: None, role: role.into() }
+    }
+
+    /// Require every request to carry `X-Seisin-Auth: <token>` (P1-1). Give the
+    /// token only to the authorized agent; others reaching the port get 403.
+    pub fn with_auth(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
+        self
     }
 
     /// Add capability endpoints (HTTPS upstreams reached by plain HTTP to the
@@ -91,21 +99,40 @@ impl Broker {
         if parts.len() < 3 {
             return Ok(());
         }
-        let (method, abs_uri, _version) = (parts[0], parts[1], parts[2]);
+        let (method, abs_uri, version) = (parts[0], parts[1], parts[2]);
+
+        // Read all request headers once.
+        let mut headers: Vec<(String, String)> = Vec::new();
+        loop {
+            let mut h = String::new();
+            if reader.read_line(&mut h)? == 0 || h == "\r\n" || h == "\n" {
+                break;
+            }
+            if let Some((k, v)) = h.trim_end().split_once(':') {
+                headers.push((k.trim().to_string(), v.trim().to_string()));
+            }
+        }
+
+        // Client authentication (P1-1): when a per-run token is set, require it,
+        // so a stray local process that reaches the port cannot use the
+        // credential. The token is stripped before forwarding upstream.
+        if let Some(tok) = &self.auth_token {
+            let ok = headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("x-seisin-auth") && v == tok);
+            if !ok {
+                let _ = client
+                    .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                return Ok(());
+            }
+        }
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-seisin-auth"));
 
         // Capability mode: origin-form request (/prefix/…) to an HTTPS upstream.
         if abs_uri.starts_with('/') {
-            // drain remaining request headers
-            loop {
-                let mut h = String::new();
-                if reader.read_line(&mut h)? == 0 || h == "\r\n" || h == "\n" {
-                    break;
-                }
-            }
             return self.handle_capability(method, abs_uri, &mut client, sink);
         }
 
-        let version = _version;
         let (host, port, path) = match parse_abs_uri(abs_uri) {
             Some(t) => t,
             None => {
@@ -113,21 +140,6 @@ impl Broker {
                 return Ok(());
             }
         };
-
-        // Read headers (we drop any client-supplied auth and set our own).
-        let mut headers: Vec<(String, String)> = Vec::new();
-        loop {
-            let mut h = String::new();
-            if reader.read_line(&mut h)? == 0 {
-                break;
-            }
-            if h == "\r\n" || h == "\n" {
-                break;
-            }
-            if let Some((k, v)) = h.trim_end().split_once(':') {
-                headers.push((k.trim().to_string(), v.trim().to_string()));
-            }
-        }
 
         // Inject the secret(s) for this host — the agent never saw them.
         let mut injected = false;
