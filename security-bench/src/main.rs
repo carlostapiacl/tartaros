@@ -39,6 +39,8 @@ struct Contract {
     server: Vec<ServerSpec>,
     #[serde(default)]
     unix_server: Vec<UnixServerSpec>,
+    #[serde(default)]
+    broker: Option<BrokerSpec>,
     attack: Op,
     control: Op,
     #[serde(default)]
@@ -77,6 +79,24 @@ struct ServerSpec {
 #[derive(Deserialize)]
 struct UnixServerSpec {
     path: String,
+}
+
+/// A broker the runner starts for credential scenarios. The secret lives only
+/// here — never in the policy or the agent's command.
+#[derive(Deserialize)]
+struct BrokerSpec {
+    port: u16,
+    token: String,
+    #[serde(default)]
+    capability: Vec<CapSpec>,
+}
+
+#[derive(Deserialize)]
+struct CapSpec {
+    prefix: String,
+    upstream_base: String,
+    inject_header: String,
+    inject_value: String,
 }
 
 #[derive(Deserialize)]
@@ -244,7 +264,32 @@ fn run_scenario(c: Contract) -> Outcome {
             unix_paths.push(path);
         }
     }
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    // broker (credential scenarios): secret lives only in the broker config.
+    if let Some(bs) = &c.broker {
+        use seisin_sandbox_broker::{Broker, Capability, Injection};
+        let caps: Vec<Capability> = bs
+            .capability
+            .iter()
+            .map(|cp| Capability {
+                prefix: cp.prefix.clone(),
+                upstream_base: sub(&cp.upstream_base),
+                methods: vec!["GET".into()],
+                injections: vec![Injection {
+                    host: None,
+                    header: cp.inject_header.clone(),
+                    value: cp.inject_value.clone(),
+                }],
+            })
+            .collect();
+        let broker = Broker::new("bench", vec![]).with_auth(bs.token.clone()).with_capabilities(caps);
+        if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", bs.port)) {
+            std::thread::spawn(move || {
+                let mut sink = seisin_sandbox_core::VecSink::default();
+                let _ = broker.serve(l, &mut sink);
+            });
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
 
     let policy = Policy {
         role: "bench".into(),

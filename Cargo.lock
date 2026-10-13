@@ -417,6 +417,7 @@ dependencies = [
 name = "seisin-security-bench"
 version = "0.0.0"
 dependencies = [
+ "seisin-sandbox-broker",
  "seisin-sandbox-core",
  "seisin-sandbox-linux",
  "seisin-sandbox-macos",
