@@ -689,4 +689,90 @@ mod tests {
 
         fs::remove_dir_all(&tmp).ok();
     }
+
+    /// Randomized property test (fuzz) of the write carve over many random
+    /// directory trees and random deny-sets. Asserts the two core invariants that
+    /// a carve bug (the P0-1 class) would break:
+    ///   SAFETY: no path equal-to-or-under any deny is ever granted — not even
+    ///           via an accidentally-granted ancestor of the deny.
+    ///   MONOTONICITY: adding one more deny never grants a path that was denied.
+    /// Deterministic (fixed seed) so a failure reproduces; the tree, deny-set and
+    /// offending path are printed.
+    #[test]
+    fn carve_fuzz_invariants() {
+        // xorshift64 — a tiny deterministic PRNG, no external deps.
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        let mut rng = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        // Build a random tree under `dir` up to `depth`; collect every node path.
+        fn build(dir: &Path, depth: u32, rng: &mut dyn FnMut() -> u64, nodes: &mut Vec<PathBuf>) {
+            let n = (rng() % 4) as usize; // 0..=3 children
+            for i in 0..n {
+                let is_dir = depth > 0 && rng() % 2 == 0;
+                let name = format!("{}{}", if is_dir { "d" } else { "f" }, i);
+                let p = dir.join(&name);
+                if is_dir {
+                    let _ = fs::create_dir_all(&p);
+                    nodes.push(p.clone());
+                    build(&p, depth - 1, rng, nodes);
+                } else {
+                    let _ = fs::write(&p, b"x");
+                    nodes.push(p);
+                }
+            }
+        }
+
+        for iter in 0..120 {
+            let tmp = std::env::temp_dir().join(format!("sbx-fuzz-{}-{}", std::process::id(), iter));
+            let root = tmp.join("work");
+            fs::create_dir_all(&root).unwrap();
+            let mut nodes = Vec::new();
+            build(&root, 4, &mut rng, &mut nodes);
+            if nodes.is_empty() {
+                fs::remove_dir_all(&tmp).ok();
+                continue;
+            }
+
+            // Random deny subset.
+            let deny: Vec<PathBuf> =
+                nodes.iter().filter(|_| rng() % 3 == 0).cloned().collect();
+            let mut out = Vec::new();
+            carve(&root, &deny, &mut out);
+
+            // SAFETY: nothing at/under a deny may be granted.
+            for d in &deny {
+                for x in &nodes {
+                    if x.starts_with(d) {
+                        assert!(
+                            !granted(&out, x),
+                            "SAFETY broken (iter {iter}): {} granted though under deny {}",
+                            x.display(), d.display()
+                        );
+                    }
+                }
+            }
+
+            // MONOTONICITY: adding one more deny never newly grants anything.
+            if let Some(extra) = nodes.iter().find(|n| !deny.contains(n)) {
+                let mut deny2 = deny.clone();
+                deny2.push(extra.clone());
+                let mut out2 = Vec::new();
+                carve(&root, &deny2, &mut out2);
+                for x in &nodes {
+                    assert!(
+                        !(granted(&out2, x) && !granted(&out, x)),
+                        "MONOTONICITY broken (iter {iter}): adding deny {} granted {}",
+                        extra.display(), x.display()
+                    );
+                }
+            }
+
+            fs::remove_dir_all(&tmp).ok();
+        }
+    }
 }
