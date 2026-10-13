@@ -1,0 +1,44 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: cargo build --workspace
+      - name: unit tests
+        run: cargo test --workspace --lib
+      - name: detect Landlock
+        id: ll
+        run: |
+          if grep -q landlock /sys/kernel/security/lsm 2>/dev/null; then
+            echo "have=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::Landlock not available on this runner; enforcement tests and the security-bench are skipped"
+          fi
+      - name: integration tests (Landlock)
+        if: steps.ll.outputs.have == '1'
+        run: cargo test --workspace
+      - name: security-bench (Landlock)
+        if: steps.ll.outputs.have == '1'
+        run: |
+          cargo build -p seisin-security-bench
+          cd security-bench && ../target/debug/seisin-security-bench corpus
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: cargo build --workspace
+      - name: tests
+        run: cargo test --workspace
+      - name: security-bench
+        run: |
+          cargo build -p seisin-security-bench
+          cd security-bench && ../target/debug/seisin-security-bench corpus
