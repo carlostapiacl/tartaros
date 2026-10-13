@@ -21,29 +21,26 @@ when the agent runs as root**.
 ## What makes it different (measured, not claimed)
 
 Reproducible with [`security-bench/`](security-bench/). Measured on the Linux test host
-(Linux 6.8) and macOS 15.7, 2026-10-13. Against Codex `0.162.1`, nono `0.79`,
-`@anthropic-ai/sandbox-runtime`:
+(Linux 6.8) and macOS 15.7, 2026-10-13. The genuine differentiators versus the
+measured competitors (Codex `0.162.1`, nono, `@anthropic-ai/sandbox-runtime`):
 
-- **Trust-handoff protected at any depth** — a nested `.git/hooks` is not
-  writable, and renaming an ancestor cannot relocate a protected path out from
-  under its deny. The others leave nested hooks writable.
+- **Trust-handoff protected at *any* depth, path-based** — a nested `.git/hooks`
+  or `.claude/settings.json` is non-writable however deep, and an ancestor rename
+  cannot relocate it out from under its deny. The nearest comparison,
+  sandbox-runtime, path-protects nested hooks on Linux only up to a depth cap
+  (default 3); nono uses cryptographic attestation rather than path protection.
 - **Deny-inside-allow on Linux** — expressed as a carved Landlock allow-list.
   nono cannot even express this policy (it refuses to start).
-- **Root-proof resource caps** — a fork bomb, a memory balloon or a CPU spin is
-  contained even as root: processes via a cgroup v2 `pids.max` (the kernel
-  rejects the fork, not RLIMIT), memory via `memory.max`, CPU via RLIMIT_CPU.
-- **Nothing outlives the box** — on timeout or exit the whole run is torn down
-  with `cgroup.kill`, which reaps even a daemon that double-forked and `setsid`'d
-  out of the process group.
-- **The agent cannot see the host** (`--isolate-pids`) — a private PID + mount
-  namespace: it sees only its own subtree (host 293 → 4 pids), cannot enumerate,
-  inspect or signal host processes.
-- **No protocol leaves** (`--isolate-net`) — Landlock mediates only TCP, so a
-  Landlock-only deny still lets UDP (DNS exfil) and ICMP out; an empty network
-  namespace closes TCP, UDP, ICMP and raw at once, loopback-only.
+- **The sandbox protects its *own* config by default** — the trust-handoff set
+  includes the files a trusted tool would re-read; we do not leave our own
+  settings writable for the agent to poison.
 
-We do **not** claim "more secure than X in every scenario." The claims are the
-narrow, measured ones above, and the honest limits are listed below.
+The rest of the hardening below (root-proof cgroup caps, `cgroup.kill` teardown,
+`--isolate-pids`, `--isolate-net`, `--seccomp-strict`) is strong but **not**
+claimed as unique: nono and sandbox-runtime close network egress and process
+caps by their own means (seccomp socket-family / network-namespace; cgroup
+`pids.max`). We do **not** claim "more secure than X in every scenario," and we
+do not sell a competitor's default or scope choice as a vulnerability.
 
 ## Capabilities
 
