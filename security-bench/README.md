@@ -72,6 +72,11 @@ materialization · network per-port · lifecycle timeout (kills the group) · me
 inherited-fd IPC, hardlink-via-different-fs, and cross-backend adapters (anthropic-srt / nono / openshell). Kernel-escape
 benchmarks (AgentEscapeBench) run only on disposable VMs, never here.
 
+## Covered by examples (special setup, not generic TOML)
+
+inherited-fd leak (`backends/linux/examples/p1c_fd_leak`), broker HTTP/HTTPS
+(`broker/examples/*`), lifecycle/resources (`backends/linux/examples/p1b_lifecycle`).
+
 ## Other backends
 
 The runner targets seisin today. Adapters for `anthropic-srt`, `nono` and

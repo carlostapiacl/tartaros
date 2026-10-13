@@ -253,16 +253,33 @@ fn confined_command(
             if deny_unix {
                 apply_deny_af_unix()?;
             }
-            // Landlock last: least privilege right before exec.
+            // Landlock.
             created
                 .take()
                 .expect("restrict_self called once")
                 .restrict_self()
-                .map(|_| ())
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            // Close inherited non-stdio fds just before exec (defense-in-depth):
+            // an fd opened by the parent bypasses path-based confinement because
+            // the open already happened. Done last so the ruleset fd was still live.
+            close_inherited_fds();
+            Ok(())
         });
     }
     Ok(cmd)
+}
+
+/// Close every inherited fd >= 3 (keep stdio) just before exec. `close_range`
+/// (Linux 5.9+) is a single async-signal-safe syscall; fall back to a bounded
+/// loop if it is unavailable.
+#[cfg(target_os = "linux")]
+unsafe fn close_inherited_fds() {
+    let rc = libc::syscall(libc::SYS_close_range, 3u64, u32::MAX as u64, 0u64);
+    if rc != 0 {
+        for fd in 3..1024 {
+            libc::close(fd);
+        }
+    }
 }
 
 /// Deny creating `AF_UNIX` sockets via seccomp (IPC-1). Everything else is
