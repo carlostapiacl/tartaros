@@ -289,6 +289,14 @@ fn explain(p: &Policy) {
     println!("\ntrust-handoff protected (deny write, any depth):");
     for r in p.trust_handoff_rules() { println!("  ! {}", r.path.display()); }
 
+    // What this policy ACTUALLY enforces on THIS host (probed), so guarantees can
+    // be verified up front rather than discovered from stderr warnings at runtime.
+    println!("\nenforcement on this host:");
+    #[cfg(target_os = "macos")]
+    for line in tartaros_macos::enforcement_report(p) { println!("  · {line}"); }
+    #[cfg(target_os = "linux")]
+    for line in tartaros_linux::enforcement_report(p) { println!("  · {line}"); }
+
     #[cfg(target_os = "macos")]
     {
         println!("\n--- macOS Seatbelt profile ---");

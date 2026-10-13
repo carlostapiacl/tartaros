@@ -891,6 +891,76 @@ fn landlock_net_supported() -> bool {
         .is_ok()
 }
 
+/// Is there a usable (writable) cgroup v2 on this host? Read-only probe: try to
+/// create and remove a throwaway cgroup. Mirrors `create_cgroup`'s requirement.
+#[cfg(target_os = "linux")]
+fn cgroup_usable() -> bool {
+    if !std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
+        return false;
+    }
+    let dir = format!("/sys/fs/cgroup/tartaros-probe-{}-{}", std::process::id(), now_nanos());
+    if std::fs::create_dir(&dir).is_ok() {
+        let _ = std::fs::remove_dir(&dir);
+        true
+    } else {
+        false
+    }
+}
+
+/// Resolve what this policy will ACTUALLY enforce on THIS host, so a user can
+/// verify guarantees before running instead of relying on stderr warnings
+/// (adversarial-audit: queryable `AppliedPolicy`). Each line is
+/// `<knob>: <GUARANTEED|BEST-EFFORT|PARTIAL|UNAVAILABLE> (<how>)`.
+#[cfg(target_os = "linux")]
+pub fn enforcement_report(policy: &Policy) -> Vec<String> {
+    use tartaros_core::Network;
+    let mut out = Vec::new();
+    out.push(if landlock_fs_supported() {
+        "filesystem / trust-handoff: GUARANTEED (Landlock)".into()
+    } else {
+        "filesystem / trust-handoff: UNAVAILABLE (needs Linux >= 5.13) — run aborts".into()
+    });
+    let net_denied = matches!(policy.network, Some(Network::Denied));
+    if net_denied || !policy.local_ports.is_empty() {
+        out.push(if landlock_net_supported() {
+            "network (TCP, per-port): GUARANTEED (Landlock ABI v4+)".into()
+        } else {
+            "network (TCP): UNAVAILABLE (needs Linux >= 6.7) — run aborts when denial is required".into()
+        });
+    }
+    if policy.isolate_network {
+        out.push("network (all protocols off): GUARANTEED via network namespace if CAP_SYS_ADMIN — run aborts otherwise".into());
+    }
+    let cg = cgroup_usable();
+    if policy.max_processes.is_some() {
+        out.push(if cg {
+            "process cap (--max-procs): GUARANTEED (cgroup pids.max, root-proof)".into()
+        } else {
+            "process cap (--max-procs): BEST-EFFORT (RLIMIT_NPROC — bypassable by root; no usable cgroup here)".into()
+        });
+    }
+    if policy.max_memory_bytes.is_some() {
+        out.push(if cg {
+            "memory cap (--max-mem): GUARANTEED (RLIMIT_AS + cgroup memory.max)".into()
+        } else {
+            "memory cap (--max-mem): PARTIAL (RLIMIT_AS address-space cap only; cgroup memory.max unavailable here)".into()
+        });
+    }
+    if policy.max_cpu_secs.is_some() {
+        out.push("cpu cap (--max-cpu): GUARANTEED (RLIMIT_CPU, no capability bypass)".into());
+    }
+    if policy.isolate_pids {
+        out.push("pid isolation (--isolate-pids): GUARANTEED via namespaces if CAP_SYS_ADMIN — run aborts otherwise".into());
+    }
+    if policy.harden_syscalls {
+        out.push("seccomp hardening (--seccomp-strict): GUARANTEED (fails closed)".into());
+    }
+    if policy.deny_unix_sockets {
+        out.push("AF_UNIX deny (--deny-unix): GUARANTEED (seccomp, fails closed)".into());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
