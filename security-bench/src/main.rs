@@ -69,6 +69,8 @@ struct PolicySpec {
     max_cpu_secs: Option<u64>,
     #[serde(default)]
     deny_unix_sockets: bool,
+    #[serde(default)]
+    isolate_pids: bool,
 }
 
 /// A loopback TCP server the runner starts for network scenarios.
@@ -326,6 +328,7 @@ fn run_scenario(c: Contract) -> Outcome {
         max_processes: c.policy.max_processes,
         max_cpu_secs: c.policy.max_cpu_secs,
         deny_unix_sockets: c.policy.deny_unix_sockets,
+        isolate_pids: c.policy.isolate_pids,
         ..Default::default()
     };
 
