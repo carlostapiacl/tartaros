@@ -2,6 +2,7 @@ id = "isolate-pid-namespace"
 category = "isolation"
 severity = "high"
 os = ["linux"]
+requires = ["userns"]
 
 # With --isolate-pids the agent runs in a private PID namespace and sees only its
 # own subtree: it cannot enumerate host processes (to read their /proc/<pid>/

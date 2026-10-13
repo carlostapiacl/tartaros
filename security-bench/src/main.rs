@@ -32,6 +32,12 @@ struct Contract {
     severity: String,
     #[serde(default)]
     os: Vec<String>,
+    /// Host capabilities this scenario needs to be a meaningful test, e.g.
+    /// "landlock", "cgroup", "userns". If the host lacks one, the scenario is
+    /// reported UNSUPPORTED (not PASS, not a failure) — a green run must never
+    /// hide "couldn't actually test here".
+    #[serde(default)]
+    requires: Vec<String>,
     policy: PolicySpec,
     #[serde(default)]
     fixture: Vec<FixtureItem>,
@@ -172,9 +178,18 @@ fn main() {
     }
 
     println!("tartaros-bench · backend={OS}\n");
+    let env = environment();
+    // Host capabilities a scenario may require to be meaningful.
+    let has_cap = |name: &str| match name {
+        "landlock" | "landlock-net" => env.landlock || OS == "macos",
+        "cgroup" => env.cgroup_v2,
+        "userns" => env.userns,
+        _ => true, // unknown requirement: don't silently skip, let it run
+    };
     let mut outcomes = Vec::new();
     let mut infra_errors = 0usize; // invalid/unreadable contracts
     let mut skipped = 0usize;      // not for this OS
+    let mut unsupported = 0usize;  // host lacks a required capability
     for f in &files {
         let text = match std::fs::read_to_string(f) {
             Ok(t) => t,
@@ -191,6 +206,11 @@ fn main() {
         if !c.os.is_empty() && !c.os.iter().any(|o| o == OS) {
             println!("  -- {} (SKIPPED: not for {OS})", c.id);
             skipped += 1;
+            continue;
+        }
+        if let Some(missing) = c.requires.iter().find(|r| !has_cap(r)) {
+            println!("  ~~ {} (UNSUPPORTED: host lacks {missing})", c.id);
+            unsupported += 1;
             continue;
         }
         outcomes.push(run_scenario(c));
@@ -215,11 +235,11 @@ fn main() {
     println!("  CONTROL_BROKE:           {broke}  [target 0]");
     println!("  INFRA_ERROR:             {infra_errors}  [target 0]");
     println!("  SKIPPED (other OS):      {skipped}");
+    println!("  UNSUPPORTED (host caps): {unsupported}");
 
     // Environment stamp: a scorecard is only citeable if it says WHERE it ran and
     // which enforcement primitives the host actually offered (a PASS on a host
     // missing Landlock/cgroup is not the same guarantee). Printed and recorded.
-    let env = environment();
     println!("\nenvironment: {} · kernel {} · tartaros-bench {}", env.os, env.kernel, env.version);
     println!("host caps:  landlock={} cgroup_v2={} userns={}", env.landlock, env.cgroup_v2, env.userns);
 
@@ -230,6 +250,7 @@ fn main() {
         "  \"os\": \"{OS}\",\n  \"environment\": {{\"os\":\"{}\",\"kernel\":\"{}\",\"tool_version\":\"{}\",\"unix_time\":{},\"caps\":{{\"landlock\":{},\"cgroup_v2\":{},\"userns\":{}}}}},\n  \"total\": {total},\n  \"passed\": {passed},\n  \"violations\": {violations},\n  \"critical_violations\": {crit_viol},\n  \"control_broken\": {broke},\n  \"scenarios\": [\n",
         env.os, env.kernel, env.version, env.unix_time, env.landlock, env.cgroup_v2, env.userns
     ));
+    j.push_str(&format!("  \"skipped\": {skipped},\n  \"unsupported\": {unsupported},\n"));
     for (i, o) in outcomes.iter().enumerate() {
         j.push_str(&format!(
             "    {{\"id\":\"{}\",\"category\":\"{}\",\"severity\":\"{}\",\"passed\":{},\"violation\":{},\"control_broke\":{}}}{}\n",
@@ -336,7 +357,17 @@ fn environment() -> Env {
     let landlock = std::fs::read_to_string("/sys/kernel/security/lsm")
         .map(|s| s.split(',').any(|l| l.trim() == "landlock"))
         .unwrap_or(false);
-    let cgroup_v2 = Path::new("/sys/fs/cgroup/cgroup.controllers").exists();
+    // cgroup v2 must be USABLE, not merely present: a non-privileged container
+    // has /sys/fs/cgroup/cgroup.controllers yet cannot create a child cgroup, so
+    // a process cap would silently degrade. Probe by actually creating one.
+    let cgroup_v2 = Path::new("/sys/fs/cgroup/cgroup.controllers").exists() && {
+        let dir = format!("/sys/fs/cgroup/tartaros-bench-probe-{}", std::process::id());
+        let ok = std::fs::create_dir(&dir).is_ok();
+        if ok {
+            let _ = std::fs::remove_dir(&dir);
+        }
+        ok
+    };
     // User namespaces available for unprivileged clone, or we are privileged.
     let userns = std::fs::read_to_string("/proc/sys/user/max_user_namespaces")
         .ok()

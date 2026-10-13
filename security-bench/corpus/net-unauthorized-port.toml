@@ -2,6 +2,7 @@ id = "net-unauthorized-port"
 category = "network"
 severity = "critical"
 os = ["linux", "macos"]
+requires = ["landlock-net"]
 
 # granted loopback port 18001 only; 18787 must be unreachable
 [policy]
