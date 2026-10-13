@@ -152,14 +152,38 @@ pub(crate) unsafe fn set_pdeathsig_kill() {
     }
 }
 
-/// Close every inherited fd >= 3 (keep stdio) just before exec. `close_range`
-/// (Linux 5.9+) is a single async-signal-safe syscall; fall back to a bounded
-/// loop if it is unavailable.
+/// Close every inherited fd >= 3 (keep stdio). Used by the init shim, which must
+/// actually release std's exec-status pipe so the parent's spawn() unblocks.
 pub(crate) unsafe fn close_inherited_fds() {
     let rc = libc::syscall(libc::SYS_close_range, 3u64, u32::MAX as u64, 0u64);
     if rc != 0 {
         for fd in 3..1024 {
             libc::close(fd);
+        }
+    }
+}
+
+/// Mark every inherited fd >= 3 close-on-exec, so an fd the orchestrator leaked
+/// into the child does NOT survive into the exec'd agent (the FD-1 defense) —
+/// WITHOUT close()ing them here. This matters just before exec in the agent:
+/// close()ing std's exec-status pipe would make std abort when reporting a failed
+/// exec; CLOEXEC leaves it usable for that report and still drops it on a
+/// successful exec. `CLOSE_RANGE_CLOEXEC` (Linux 5.11+) is one syscall; fall back
+/// to per-fd F_SETFD.
+pub(crate) unsafe fn cloexec_inherited_fds() {
+    const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
+    let rc = libc::syscall(
+        libc::SYS_close_range,
+        3u64,
+        u32::MAX as u64,
+        CLOSE_RANGE_CLOEXEC as u64,
+    );
+    if rc != 0 {
+        for fd in 3..1024 {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                let _ = libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
         }
     }
 }
