@@ -74,7 +74,13 @@ Build only where measurement shows no existing backend can enforce the policy.
       external same port needs the proxy); needs kernel >= 6.7
 - [ ] domain allow-list via proxy (external hosts beyond IP)
 - [ ] **secret reads**: read-deny of secret dirs (~/.ssh, ~/.aws, keydirs)
-- [ ] **secret broker**: give the capability, not the raw value
+- [x] **secret broker (the single gateway)**: `broker` crate — HTTP forward
+      proxy injects the secret; agent reaches ONLY the broker port, authenticates
+      upstream without ever holding the token, direct egress blocked. Live-
+      verified end-to-end on the Linux test host; every forward logged as an effect. HTTPS
+      (CONNECT) needs TLS termination — out of prototype scope
+- [x] fix: Linux carve only excludes denies that EXIST (Landlock is inode-based;
+      absent trust-handoff files are a macOS/Seatbelt strength, not Landlock's)
 - [ ] **close the Linux env-leak**: restrict /proc or PID namespace
 - [ ] **resources, not paths**: evolve `Policy` toward capabilities
 

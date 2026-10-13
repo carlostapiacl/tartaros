@@ -62,6 +62,7 @@ name = "seisin-sandbox-broker"
 version = "0.0.0"
 dependencies = [
  "seisin-sandbox-core",
+ "seisin-sandbox-linux",
 ]
 
 [[package]]
