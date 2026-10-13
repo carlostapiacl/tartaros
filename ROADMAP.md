@@ -111,11 +111,15 @@ Build only where measurement shows no existing backend can enforce the policy.
       when FS confinement is absent, or when net is requested but unavailable.
       Verified: Docker/linuxkit (no Landlock) now refuses ("refusing to run
       unconfined"); the Linux test host (Landlock present) still runs and enforces.
-- [ ] **P1 broker has no client-identity auth** (any local process reaching the
-      port can use the capability; example uses `Injection{host:None}`). Fix:
-      bind each credential to an authorized run identity; scope destination,
-      method and path per capability.
-- [ ] **P1 absent trust-handoff paths unprotected on Linux** (inode limit): a
-      config a trusted tool later runs, created after launch, is not covered.
-      macOS/Seatbelt covers absent paths; Linux needs fanotify/FUSE or a check.
-- [ ] **P1 /proc isolation**: close cross-process env read on Linux (PID namespace).
+- [x] **P1 broker client auth**: `Broker::with_auth(token)` requires
+      `X-Seisin-Auth: <token>` per run; a process without it gets 403. Verified
+      on the Linux test host (with token 200, without 403). Destination/method scoping per
+      capability remains to extend.
+- [~] **P1 absent trust-handoff paths on Linux** (inode limit): deferred. Real
+      fix needs dynamic monitoring (fanotify/FUSE); no portable static fix.
+      macOS/Seatbelt already covers absent paths. Documented limitation.
+- [~] **P1 /proc isolation / cross-process env read on Linux**: deferred. Proper
+      fix is a PID namespace, but `unshare --user --pid` is **Operation not
+      permitted** under Docker's default seccomp/userns (measured on the Linux test host) — not
+      portable. Mitigation: run each agent under its own UID (kernel's own /proc
+      permission blocks cross-UID environ reads), same as the macOS platform limit.
