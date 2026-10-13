@@ -77,8 +77,8 @@ fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunErro
 #[cfg(target_os = "linux")]
 fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
     let mut cmd = confined_command(policy, command)?;
-    let status = cmd.status().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
-    Ok(RunOutcome { exit_code: exit_code_of(status) })
+    let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+    Ok(RunOutcome { exit_code: supervise(child, policy.timeout) })
 }
 
 /// Build a `Command` that applies the Landlock ruleset in the child just before
@@ -98,28 +98,46 @@ fn confined_command(
 
     let err = |m: String| RunError { reason: m };
 
-    // P1-2 mitigation (opt-in): materialize absent trust-handoff placeholders so
-    // Landlock (inode-based) can carve them. Create read-only so even before the
-    // carve applies they are not writable; the carve then excludes them from the
-    // write allow-list because they now exist.
+    // P1-2 mitigation (opt-in), hardened per review P1-A: materialize absent
+    // trust-handoff placeholders so Landlock (inode-based) can carve them. This
+    // FAILS CLOSED (never runs with partial protection), refuses to act through a
+    // symlinked ancestor (anti-TOCTOU), creates with O_EXCL, and verifies.
     if policy.materialize_absent_handoff {
+        use std::os::unix::fs::PermissionsExt;
         for p in policy.handoff_placeholders() {
-            if let Some(parent) = p.parent() {
-                let _ = std::fs::create_dir_all(parent);
+            if has_symlink_component(&p) {
+                return Err(err(format!(
+                    "materialize: refusing to act through a symlinked path: {}",
+                    p.display()
+                )));
             }
-            // `.github/workflows` is a directory; the rest are files.
+            let parent = p
+                .parent()
+                .ok_or_else(|| err(format!("materialize: no parent for {}", p.display())))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| err(format!("materialize mkdir {}: {e}", parent.display())))?;
+
             let is_dir = p.file_name().map(|n| n == "workflows").unwrap_or(false);
             if is_dir {
-                let _ = std::fs::create_dir_all(&p);
+                std::fs::create_dir_all(&p)
+                    .map_err(|e| err(format!("materialize mkdir {}: {e}", p.display())))?;
             } else {
-                let _ = std::fs::write(&p, b"");
+                // O_CREAT|O_EXCL: no clobber, no check-then-write race.
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(err(format!("materialize create {}: {e}", p.display()))),
+                }
             }
-            // make the placeholder read-only (0444)
-            if let Ok(meta) = std::fs::metadata(&p) {
-                let mut perm = meta.permissions();
-                use std::os::unix::fs::PermissionsExt;
-                perm.set_mode(0o444);
-                let _ = std::fs::set_permissions(&p, perm);
+            let mut perm = std::fs::symlink_metadata(&p)
+                .map_err(|e| err(format!("materialize stat {}: {e}", p.display())))?
+                .permissions();
+            perm.set_mode(0o444);
+            std::fs::set_permissions(&p, perm)
+                .map_err(|e| err(format!("materialize chmod {}: {e}", p.display())))?;
+            // verify
+            if !p.exists() {
+                return Err(err(format!("materialize: {} missing after create", p.display())));
             }
         }
     }
@@ -215,10 +233,22 @@ fn confined_command(
     // Apply in the child, just before exec, so only the sandboxed process is
     // restricted. The ruleset fd was built here in the parent.
     let mut created = Some(ruleset);
+    let max_memory = policy.max_memory_bytes;
+    let max_processes = policy.max_processes;
+    let max_cpu = policy.max_cpu_secs;
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
     unsafe {
         cmd.pre_exec(move || {
+            // Own process group so the supervisor can signal the whole tree.
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Resource limits (P1-B) before dropping into the sandbox.
+            set_rlimit(libc::RLIMIT_AS, max_memory)?;
+            set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
+            set_rlimit(libc::RLIMIT_CPU, max_cpu)?;
+            // Landlock last: least privilege right before exec.
             created
                 .take()
                 .expect("restrict_self called once")
@@ -228,6 +258,52 @@ fn confined_command(
         });
     }
     Ok(cmd)
+}
+
+/// Apply one `setrlimit` (cur=max=limit) when a limit is set. Returns an io error
+/// so a failure aborts the launch (fail closed).
+#[cfg(target_os = "linux")]
+fn set_rlimit(resource: libc::__rlimit_resource_t, limit: Option<u64>) -> std::io::Result<()> {
+    if let Some(v) = limit {
+        let rl = libc::rlimit { rlim_cur: v as libc::rlim_t, rlim_max: v as libc::rlim_t };
+        if unsafe { libc::setrlimit(resource, &rl) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Supervise a confined child (P1-B): enforce the wall-clock timeout, then reap
+/// the whole process group so no descendant is left behind.
+#[cfg(target_os = "linux")]
+fn supervise(mut child: std::process::Child, timeout: Option<std::time::Duration>) -> i32 {
+    use std::time::{Duration, Instant};
+    let pid = child.id() as i32;
+    let start = Instant::now();
+    let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // reap any surviving descendants in the group
+                kill_group(libc::SIGKILL);
+                return exit_code_of(status);
+            }
+            Ok(None) => {
+                if let Some(t) = timeout {
+                    if start.elapsed() >= t {
+                        kill_group(libc::SIGTERM);
+                        std::thread::sleep(Duration::from_millis(500));
+                        kill_group(libc::SIGKILL);
+                        let _ = child.wait();
+                        kill_group(libc::SIGKILL);
+                        return 124; // timed out
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return -1,
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -240,6 +316,23 @@ fn exit_code_of(status: std::process::ExitStatus) -> i32 {
     } else {
         -1
     }
+}
+
+/// True if any EXISTING component along `p` is a symlink (P1-A: never
+/// materialize through a symlinked ancestor — avoids escaping the workspace or a
+/// TOCTOU swap).
+#[cfg(target_os = "linux")]
+fn has_symlink_component(p: &std::path::Path) -> bool {
+    let mut cur = std::path::PathBuf::new();
+    for comp in p.components() {
+        cur.push(comp);
+        if let Ok(m) = std::fs::symlink_metadata(&cur) {
+            if m.file_type().is_symlink() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Probe (fail-closed, P0-2): can this kernel enforce Landlock filesystem rules?

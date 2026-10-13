@@ -5,6 +5,7 @@
 //! OS enforces it (the backends). Backends are swappable; the policy is not.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub mod catalog;
 pub mod effect;
@@ -91,6 +92,14 @@ pub struct Policy {
     /// later runs. Landlock protects by inode, so a path must exist to be carved;
     /// this materializes it. A workspace side effect — hence opt-in.
     pub materialize_absent_handoff: bool,
+    /// Wall-clock limit; on expiry the whole process group is killed (exit 124).
+    pub timeout: Option<Duration>,
+    /// Address-space (memory) limit in bytes (`RLIMIT_AS`).
+    pub max_memory_bytes: Option<u64>,
+    /// Max processes for the user (`RLIMIT_NPROC`).
+    pub max_processes: Option<u64>,
+    /// CPU-time limit in seconds (`RLIMIT_CPU`).
+    pub max_cpu_secs: Option<u64>,
 }
 
 impl Policy {
