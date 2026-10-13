@@ -60,6 +60,20 @@ a secret without the wall seeing it. So the sandbox is the trustworthy effect
 collector that intent analysis needs: the numerator (what was attempted) and the
 denominator (what was in scope) both come from the same kernel-level log.
 
+## Independence — who depends on whom
+
+Nothing here is a hard dependency chain. The **effect log is a neutral format**
+(JSON Lines), and that format is the only contract:
+
+- **The intent layer does not import seisin-sandbox**, and vice versa. The intent layer reads the
+  log through its own adapter and treats it as one replaceable source (it has
+  others). 
+- **Collectors attach to a process tree by pid** — they can watch any agent.
+- **An integrator** that runs agents under the sandbox and points
+  the intent layer at the log. The libraries don't know about the integrator.
+
+The full list of what we capture, by axis, is in [`CATALOG.md`](CATALOG.md).
+
 ## The bridge: a complete effect log
 
 The highest-leverage piece is the log itself. Today seisin records denied writes;

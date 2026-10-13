@@ -6,6 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod catalog;
+pub mod effect;
+pub use effect::{Axis, Collector, Direction, EffectEvent, EffectSink, JsonlSink, Outcome, VecSink};
+
 /// What a confined process may do with a filesystem path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
