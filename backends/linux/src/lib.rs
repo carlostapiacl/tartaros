@@ -114,6 +114,19 @@ fn confined_command(
     // Restrict the network unless the policy explicitly opened it.
     let restrict_net = !matches!(policy.network, Some(Network::Allowed));
 
+    // FAIL CLOSED (external review P0-2): never run under-confined. If the kernel
+    // lacks a capability the policy requires, abort instead of silently degrading.
+    if !landlock_fs_supported() {
+        return Err(err(
+            "Landlock filesystem confinement unavailable (needs Linux >= 5.13); refusing to run unconfined".into(),
+        ));
+    }
+    if restrict_net && !landlock_net_supported() {
+        return Err(err(
+            "network confinement requested but Landlock network rules unavailable (needs Linux >= 6.7); refusing to run with unrestricted network".into(),
+        ));
+    }
+
     let mut builder = Ruleset::default()
         .set_compatibility(CompatLevel::BestEffort)
         .handle_access(all)
@@ -201,6 +214,31 @@ fn exit_code_of(status: std::process::ExitStatus) -> i32 {
     } else {
         -1
     }
+}
+
+/// Probe (fail-closed, P0-2): can this kernel enforce Landlock filesystem rules?
+/// Builds a ruleset with HardRequirement — it errors if the capability is absent.
+/// Creates no restriction (never calls restrict_self); the fd is dropped.
+#[cfg(target_os = "linux")]
+fn landlock_fs_supported() -> bool {
+    use landlock::{ABI, Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr};
+    Ruleset::default()
+        .set_compatibility(CompatLevel::HardRequirement)
+        .handle_access(AccessFs::from_all(ABI::V1))
+        .and_then(|r| r.create())
+        .is_ok()
+}
+
+/// Probe (fail-closed, P0-2): can this kernel enforce Landlock TCP network rules
+/// (ABI v4, Linux >= 6.7)?
+#[cfg(target_os = "linux")]
+fn landlock_net_supported() -> bool {
+    use landlock::{AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr};
+    Ruleset::default()
+        .set_compatibility(CompatLevel::HardRequirement)
+        .handle_access(AccessNet::ConnectTcp | AccessNet::BindTcp)
+        .and_then(|r| r.create())
+        .is_ok()
 }
 
 #[cfg(test)]
