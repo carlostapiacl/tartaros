@@ -59,6 +59,14 @@ needs are not built yet:
   syscall's same-user limit blocks it), which the policy layer orchestrates.
   Linux closes it in the backend via the PID namespace.
 
+## CLI
+
+```
+seisin-sandbox run --write ./repo --read-deny ~/.ssh --timeout 600 --log effects.jsonl -- <cmd>
+```
+
+Run a command confined by a policy on the OS backend, with an optional first-hand effect log. See [`cli/README.md`](cli/README.md).
+
 ## Architecture
 
 Two layers — the walls (this repo) and intent analysis (a separate intent-analysis layer) — both reading from the kernel, outside the agent. Full picture and diagram in [`ARCHITECTURE.md`](ARCHITECTURE.md).

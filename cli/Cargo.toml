@@ -1,0 +1,22 @@
+[package]
+name = "seisin-sandbox-cli"
+description = "seisin-sandbox command-line: run a command confined by a policy, on the OS backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "seisin-sandbox"
+path = "src/main.rs"
+
+[dependencies]
+seisin-sandbox-core = { path = "../core" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+seisin-sandbox-linux = { path = "../backends/linux" }
+seisin-sandbox-collect = { path = "../collect" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+seisin-sandbox-macos = { path = "../backends/macos" }
