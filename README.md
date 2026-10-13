@@ -24,6 +24,10 @@ Codex `0.162.1`, nono `0.79`, and `@anthropic-ai/sandbox-runtime` (measured
   box on the next `git commit`.
 - **Deny survives an ancestor rename** — renaming a parent directory must not
   relocate a protected path out from under its deny.
+- **Deny-inside-allow enforced on Linux** — a nested `.git/hooks` is not
+  writable and its ancestor cannot be renamed, under Landlock, via a carved
+  allow-list. nono cannot even express this policy (it refuses to start);
+  measured on the Linux test host (kernel 6.8).
 - **No cross-process environment disclosure (Linux)** — a confined process
   cannot read another process's environment, via the PID namespace.
 - **Clean process lifecycle** — correct exit status on signal death, a single
