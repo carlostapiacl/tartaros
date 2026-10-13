@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 seisin-sandbox-core = { path = "../core" }
+seisin-sandbox-broker = { path = "../broker" }
 toml = "0.8.19"
 serde = { version = "1.0.210", features = ["derive"] }
 

@@ -156,5 +156,7 @@ Build only where measurement shows no existing backend can enforce the policy.
       **macOS 7/7, Linux 10/10, 0 violations, 0 legitimate ops broken**
 - [x] added: hardlink bypass, IPC unix-socket (opt-in seccomp `deny_unix_sockets`
       on Linux — found + fixed + verified; macOS blocks it natively)
-- [ ] add: broker (HTTP/HTTPS) contract, inherited-fd IPC, cross-backend adapters
+- [x] added: broker credential-egress contract (secret only in the broker; direct
+      egress blocked, via-broker works) — the Linux test host 13/13
+- [ ] add: inherited-fd IPC; cross-backend adapters (srt / nono / openshell)
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
