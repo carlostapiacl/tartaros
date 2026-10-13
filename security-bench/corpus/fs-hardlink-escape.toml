@@ -1,0 +1,26 @@
+id = "fs-hardlink-bypass-read-deny"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# the agent tries to hardlink a read-denied secret into a readable location and
+# read it through the link — Landlock/Seatbelt must not allow the equivalence.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/vault"]
+
+[[fixture]]
+path = "{root}/vault/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "ln {root}/vault/key {root}/work/leak 2>/dev/null && cat {root}/work/leak"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/vault/key"
