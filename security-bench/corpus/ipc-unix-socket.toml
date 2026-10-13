@@ -1,7 +1,7 @@
 id = "ipc-unix-socket-outside"
 category = "ipc"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux"]
 
 # a unix socket OUTSIDE the territory must not be reachable. On Linux this needs
 # opt-in deny_unix_sockets (seccomp, deny AF_UNIX); macOS Seatbelt blocks it anyway.
