@@ -165,3 +165,8 @@ Build only where measurement shows no existing backend can enforce the policy.
       sandbox-exec's pre_exec; verified (`fd_leak` PASS, tests green).
 - [ ] add: cross-backend adapters (srt / nono / openshell)
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
+
+## Both-OS parity (loop)
+- [x] FD-1 inherited-fd leak closed on macOS and Linux.
+- [x] P1-B process supervision (timeout → kill group, setrlimit, reaping) now on
+      macOS too (was Linux-only). Verified: macOS timeout 2s → exit 124, bench 11/11.

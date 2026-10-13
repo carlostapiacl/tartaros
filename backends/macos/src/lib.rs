@@ -42,26 +42,31 @@ impl Backend for SeatbeltBackend {
         let profile = compile_profile(policy);
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
         cmd.arg("-p").arg(&profile).arg("--").args(command);
-        // Close inherited non-stdio fds before the chain execs (defense-in-depth,
-        // FD-1): an fd the orchestrator left open would otherwise bypass the
-        // path-based profile. Runs in the sandbox-exec child, so the confined
-        // command does not inherit them either.
+        let max_memory = policy.max_memory_bytes;
+        let max_processes = policy.max_processes;
+        let max_cpu = policy.max_cpu_secs;
         #[cfg(unix)]
         unsafe {
             use std::os::unix::process::CommandExt;
-            cmd.pre_exec(|| {
+            cmd.pre_exec(move || {
+                // Own process group so the supervisor can signal the whole tree.
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                set_rlimit(libc::RLIMIT_AS, max_memory)?;
+                set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
+                set_rlimit(libc::RLIMIT_CPU, max_cpu)?;
+                // Close inherited non-stdio fds (FD-1) before the chain execs.
                 for fd in 3..1024 {
                     libc::close(fd);
                 }
                 Ok(())
             });
         }
-        let status = cmd
-            .status()
+        let child = cmd
+            .spawn()
             .map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })?;
-
-        let exit_code = exit_code_of(status);
-        Ok(RunOutcome { exit_code })
+        Ok(RunOutcome { exit_code: supervise(child, policy.timeout) })
     }
 }
 
@@ -80,6 +85,50 @@ fn exit_code_of(status: std::process::ExitStatus) -> i32 {
 #[cfg(not(unix))]
 fn exit_code_of(status: std::process::ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
+}
+
+/// Apply one `setrlimit` (cur=max=limit) when set; a failure aborts the launch.
+#[cfg(unix)]
+fn set_rlimit(resource: libc::c_int, limit: Option<u64>) -> std::io::Result<()> {
+    if let Some(v) = limit {
+        let rl = libc::rlimit { rlim_cur: v as libc::rlim_t, rlim_max: v as libc::rlim_t };
+        if unsafe { libc::setrlimit(resource as _, &rl) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Supervise the confined child: enforce the wall-clock timeout, then reap the
+/// whole process group so no descendant is left behind.
+#[cfg(unix)]
+fn supervise(mut child: std::process::Child, timeout: Option<std::time::Duration>) -> i32 {
+    use std::time::{Duration, Instant};
+    let pid = child.id() as i32;
+    let start = Instant::now();
+    let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                kill_group(libc::SIGKILL);
+                return exit_code_of(status);
+            }
+            Ok(None) => {
+                if let Some(t) = timeout {
+                    if start.elapsed() >= t {
+                        kill_group(libc::SIGTERM);
+                        std::thread::sleep(Duration::from_millis(500));
+                        kill_group(libc::SIGKILL);
+                        let _ = child.wait();
+                        kill_group(libc::SIGKILL);
+                        return 124;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return -1,
+        }
+    }
 }
 
 /// Build the Seatbelt SBPL profile. In SBPL the LAST matching rule wins, so
