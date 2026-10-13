@@ -293,6 +293,25 @@ struct SandboxNet {
 /// Apply a sandbox-runtime settings file strictly: map the fields we can enforce
 /// onto the generic policy, and REFUSE (exit) on any field we cannot guarantee,
 /// rather than running under-enforced. "Apply fully or do not start."
+/// Does the string use shell-glob metacharacters (so it is a pattern, not a path)?
+fn is_glob(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
+}
+
+/// Is this glob pattern already covered by the built-in trust-handoff set (which
+/// protects these surfaces at ANY depth under every writable root)? We match on
+/// the config/git handoff names, and on the config DIRECTORIES they live in
+/// (.claude, .vscode, .github, .git) so a `**/.claude` style pattern is accepted:
+/// the dangerous surfaces inside are already denied at any depth.
+fn handoff_covers(pattern: &str) -> bool {
+    use tartaros_core::{HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES};
+    HANDOFF_CONFIG_NAMES
+        .iter()
+        .chain(HANDOFF_GIT_NAMES.iter())
+        .any(|name| pattern.contains(name))
+        || [".claude", ".vscode", ".github", ".git"].iter().any(|d| pattern.contains(d))
+}
+
 fn apply_settings_file(p: &mut Policy, path: &str) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| { eprintln!("read {path}: {e}"); exit(2); });
     let s: SandboxSettings = serde_json::from_str(&text).unwrap_or_else(|e| { eprintln!("parse {path}: {e}"); exit(2); });
@@ -300,11 +319,38 @@ fn apply_settings_file(p: &mut Policy, path: &str) {
         eprintln!("tartaros: --settings: cannot guarantee {what} on this backend; refusing to run (apply-fully-or-refuse).");
         exit(2);
     };
-    // Filesystem: fully expressible with the generic carve.
-    p.writable_roots = s.filesystem.allow_write.iter().map(|x| PathBuf::from(expand(x))).collect();
-    p.read_denies = s.filesystem.deny_read.iter().map(|x| PathBuf::from(expand(x))).collect();
-    p.read_allows = s.filesystem.allow_read.iter().map(|x| PathBuf::from(expand(x))).collect();
-    p.fs_rules.extend(s.filesystem.deny_write.iter().map(|x| FsRule { path: PathBuf::from(expand(x)), access: Access::Deny, even_if_absent: true }));
+    // Glob handling (honesty): TartarOS has no arbitrary-glob engine — Landlock
+    // matches by inode and Seatbelt by path/regex, neither expands a `**` path. A
+    // glob taken as a literal path would NEVER match a real inode, so the deny
+    // would protect nothing while LOOKING enforced. So: a glob that targets the
+    // built-in trust-handoff surfaces (.git/hooks, .claude/*, .mcp.json, …) is
+    // already covered at ANY depth and maps to that; any OTHER glob is refused
+    // rather than silently ignored.
+    let check_glob = |x: &str, is_deny: bool| {
+        if !is_glob(x) {
+            return;
+        }
+        if is_deny && handoff_covers(x) {
+            eprintln!("tartaros: --settings: '{x}' is covered by the built-in trust-handoff set at any depth; applying that instead of the glob.");
+            return;
+        }
+        eprintln!("tartaros: --settings: cannot enforce the glob pattern '{x}' — TartarOS has no glob engine (Landlock matches by inode, Seatbelt by path), so a '**' taken literally would protect nothing. Use concrete paths, or rely on the built-in trust-handoff set (.git/.claude/.mcp.json/…). Refusing (apply-fully-or-refuse).");
+        exit(2);
+    };
+    // Filesystem: concrete paths map to the generic carve; globs are gated above.
+    for x in &s.filesystem.allow_write { check_glob(x, false); }
+    for x in &s.filesystem.allow_read { check_glob(x, false); }
+    for x in &s.filesystem.deny_read { check_glob(x, false); }
+    for x in &s.filesystem.deny_write { check_glob(x, true); }
+    p.writable_roots = s.filesystem.allow_write.iter().filter(|x| !is_glob(x)).map(|x| PathBuf::from(expand(x))).collect();
+    p.read_denies = s.filesystem.deny_read.iter().filter(|x| !is_glob(x)).map(|x| PathBuf::from(expand(x))).collect();
+    p.read_allows = s.filesystem.allow_read.iter().filter(|x| !is_glob(x)).map(|x| PathBuf::from(expand(x))).collect();
+    // Concrete deny-writes become carve rules; trust-handoff globs are already
+    // enforced by the built-in set, so they drop out here (no literal rule).
+    p.fs_rules.extend(
+        s.filesystem.deny_write.iter().filter(|x| !is_glob(x))
+            .map(|x| FsRule { path: PathBuf::from(expand(x)), access: Access::Deny, even_if_absent: true }),
+    );
     // Network: we default-deny. Anything we cannot enforce in-sandbox is refused.
     p.network = Some(Network::Denied);
     // Per-domain egress IS enforceable: the broker runs as a CONNECT/forward proxy
@@ -313,8 +359,21 @@ fn apply_settings_file(p: &mut Policy, path: &str) {
     if !s.network.denied_domains.is_empty() {
         refuse("per-domain deny lists");
     }
-    if !s.network.allow_unix_sockets.is_empty() {
-        refuse("a specific AF_UNIX socket (seccomp is all-or-nothing on Linux)");
+    // AF_UNIX: macOS Seatbelt allows specific socket paths; the Linux/seccomp
+    // backend filters AF_UNIX all-or-nothing (cannot allow one socket by path).
+    #[cfg(target_os = "macos")]
+    {
+        p.allow_unix_socket_paths =
+            s.network.allow_unix_sockets.iter().map(|x| PathBuf::from(expand(x))).collect();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if s.network.allow_unix_sockets.is_empty() {
+            p.deny_unix_sockets = true; // [] = no AF_UNIX at all
+        } else {
+            eprintln!("tartaros: --settings: cannot allow a specific AF_UNIX socket by path — the Linux/seccomp backend filters AF_UNIX all-or-nothing, not per path. Use an empty list to deny all, or run the macOS (Seatbelt) backend for per-path allow. Refusing (apply-fully-or-refuse).");
+            exit(2);
+        }
     }
     if s.network.allow_local_binding {
         refuse("blanket local binding (grant a concrete port with a port rule instead)");

@@ -137,6 +137,12 @@ pub struct Policy {
     /// pathname unix sockets). Default off — real agents use unix sockets, so this
     /// is a strict mode the policy turns on when that is acceptable.
     pub deny_unix_sockets: bool,
+    /// Specific AF_UNIX socket paths the agent MAY connect to. On macOS Seatbelt
+    /// this is enforced per path (`remote unix-socket (path-literal …)`), so a
+    /// single audit/IPC socket can be allowed while everything else stays denied.
+    /// The Linux/seccomp backend cannot filter AF_UNIX by path (it is all-or-
+    /// nothing), so a non-empty list there is a policy error, surfaced by the CLI.
+    pub allow_unix_socket_paths: Vec<PathBuf>,
     /// Opt-in (Linux): run the agent in a private PID + mount namespace so it
     /// sees ONLY its own process subtree — it cannot enumerate, inspect
     /// (`/proc/<pid>/cmdline`) or signal host processes, and a fresh `/proc` is
@@ -250,11 +256,22 @@ impl Policy {
             o
         };
         // Re-allow explicit read_allows: a Landlock read grant on a subtree that
-        // lies inside a denied parent re-permits exactly that branch, while the
-        // rest of the denied dir stays ungranted (unreadable).
+        // lies inside a denied parent re-permits exactly that branch — but a MORE
+        // SPECIFIC deny inside that branch must stay denied (deny runs/ → allow
+        // runs/mine/ → deny runs/mine/settings.json). A flat grant of the branch
+        // would re-open the deeper secret (security bug). So we carve the
+        // re-allowed subtree too, excluding any denies that fall within it. The
+        // deepest rule wins, matching the macOS specificity order.
         for a in &self.read_allows {
-            if a.exists() {
+            if !a.exists() {
+                continue;
+            }
+            let inner: Vec<PathBuf> =
+                denied.iter().filter(|d| d.starts_with(a) && d.as_path() != a.as_path()).cloned().collect();
+            if inner.is_empty() {
                 out.push(a.clone());
+            } else {
+                carve(a, &inner, &mut out);
             }
         }
         out
@@ -840,5 +857,39 @@ mod tests {
 
             fs::remove_dir_all(&tmp).ok();
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")] // carves the real "/" tree; Linux has real dirs
+    fn read_allow_does_not_reopen_a_deeper_deny() {
+        // Specificity rule: deny a dir, re-allow a branch within it, then deny a
+        // deeper path inside that branch. The deeper deny must still win — a flat
+        // re-allow of the branch would re-open the secret (the reported bug).
+        let tmp = std::env::temp_dir().join(format!("sbx-readcarve-{}", std::process::id()));
+        let runs = tmp.join("runs");
+        let mine = runs.join("mine");
+        fs::create_dir_all(&mine).unwrap();
+        fs::write(mine.join("otro"), b"ok").unwrap();
+        fs::write(mine.join("settings.json"), b"SECRET").unwrap();
+        fs::write(runs.join("ajeno"), b"other").unwrap();
+
+        let p = Policy {
+            read_denies: vec![runs.clone(), mine.join("settings.json")],
+            read_allows: vec![mine.clone()],
+            ..Default::default()
+        };
+        let allow = p.linux_read_allowlist();
+
+        // The re-allowed branch is readable...
+        assert!(granted(&allow, &mine.join("otro")), "re-allowed branch must be readable");
+        // ...but the deeper deny within it is NOT (security property)...
+        assert!(
+            !granted(&allow, &mine.join("settings.json")),
+            "a deny inside a re-allow must stay denied, got reopened: {allow:?}"
+        );
+        // ...and a sibling under the original deny stays denied.
+        assert!(!granted(&allow, &runs.join("ajeno")), "sibling under the deny stays denied");
+
+        fs::remove_dir_all(&tmp).ok();
     }
 }

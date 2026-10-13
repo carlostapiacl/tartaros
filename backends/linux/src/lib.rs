@@ -42,7 +42,19 @@ impl Backend for LandlockBackend {
         if policy.writable_roots.is_empty() {
             return Err(PolicyError { reason: "no writable roots".into() });
         }
-        // TartarOS can always express the policy by restructuring (nono rejects).
+        // AF_UNIX cannot be filtered by path on the seccomp backend (it is
+        // all-or-nothing). Honouring an allow-one-socket request by ignoring it
+        // would silently widen the sandbox, so refuse — the caller uses
+        // --deny-unix for all-or-nothing, or runs on macOS for per-path allow.
+        if !policy.allow_unix_socket_paths.is_empty() {
+            return Err(PolicyError {
+                reason: "allow_unix_socket_paths is unsupported on Linux: the seccomp backend \
+                         filters AF_UNIX all-or-nothing, not per path. Use deny_unix_sockets for \
+                         all-or-nothing, or the macOS (Seatbelt) backend for per-path allow."
+                    .into(),
+            });
+        }
+        // TartarOS can always express the rest of the policy by restructuring.
         let _allow = policy.linux_write_allowlist();
         Ok(())
     }

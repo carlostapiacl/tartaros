@@ -315,6 +315,17 @@ pub fn compile_profile(policy: &Policy) -> String {
     for port in &policy.local_ports {
         p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));
     }
+    // Specific AF_UNIX sockets the agent may reach (e.g. a per-run audit socket).
+    // Everything else stays denied by `(deny default)` — Seatbelt can scope this
+    // to one path, which the Linux/seccomp backend cannot. Canonicalize so the
+    // literal matches the real path (symlinked temp dirs).
+    for path in &policy.allow_unix_socket_paths {
+        let real = path.canonicalize().unwrap_or_else(|_| path.clone());
+        p.push_str(&format!(
+            "(allow network-outbound (remote unix-socket (path-literal {})))\n",
+            quote(&real)
+        ));
+    }
 
     // Writable roots.
     for root in &policy.writable_roots {
@@ -343,19 +354,30 @@ pub fn compile_profile(policy: &Policy) -> String {
         emit_handoff_regex(&mut p, root);
     }
 
-    // Secret read-denies (last, so they win over the broad file-read* allow).
-    // Canonicalize: Seatbelt matches the real path (e.g. /tmp -> /private/tmp).
+    // Read carve: deny-reads and re-allow-reads interleave by SPECIFICITY — the
+    // most specific (deepest) path wins, which is the sandbox-runtime rule. A naive
+    // "all denies then all allows" is wrong: a deny that sits INSIDE a re-allowed
+    // branch (deny runs/ → allow runs/mine/ → deny runs/mine/settings.json) must
+    // still win, but emitting all allows last would re-open it. Seatbelt is
+    // last-match-wins, so we sort every read rule by path depth ascending and emit
+    // least-specific first; the deepest rule lands last and takes precedence.
+    // Canonicalize first (Seatbelt matches the real path, e.g. /tmp -> /private/tmp).
+    let mut read_rules: Vec<(PathBuf, bool)> = Vec::new(); // (path, is_allow)
     for path in &policy.read_denies {
-        let real = path.canonicalize().unwrap_or_else(|_| path.clone());
-        p.push_str(&format!("(deny file-read* (subpath {}))\n", quote(&real)));
-        p.push_str(&format!("(deny file-read* (literal {}))\n", quote(&real)));
+        read_rules.push((path.canonicalize().unwrap_or_else(|_| path.clone()), false));
     }
-
-    // Read re-allows LAST, so they win over a read-deny they sit inside
-    // (deny a broad dir, re-open one branch). Seatbelt is last-match-wins.
     for path in &policy.read_allows {
-        let real = path.canonicalize().unwrap_or_else(|_| path.clone());
-        p.push_str(&format!("(allow file-read* (subpath {}))\n", quote(&real)));
+        read_rules.push((path.canonicalize().unwrap_or_else(|_| path.clone()), true));
+    }
+    // Specificity = number of path components, then string length as a tiebreak.
+    read_rules.sort_by_key(|(path, _)| (path.components().count(), path.as_os_str().len()));
+    for (real, is_allow) in &read_rules {
+        if *is_allow {
+            p.push_str(&format!("(allow file-read* (subpath {}))\n", quote(real)));
+        } else {
+            p.push_str(&format!("(deny file-read* (subpath {}))\n", quote(real)));
+            p.push_str(&format!("(deny file-read* (literal {}))\n", quote(real)));
+        }
     }
 
     p
@@ -475,6 +497,34 @@ mod tests {
         // ancestor move-blocking present
         assert!(prof.contains("(deny file-write-unlink (literal \"/work/nested/.git\"))"));
         assert!(prof.contains("(deny file-write-unlink (literal \"/work/nested\"))"));
+    }
+
+    #[test]
+    fn read_deny_inside_a_read_allow_wins_by_specificity() {
+        // deny a dir, re-allow a branch, deny a deeper path inside the branch.
+        // Seatbelt is last-match-wins, so the compiled rules must appear in
+        // specificity order (least → most) and the deepest deny must come LAST.
+        // (Nonexistent paths canonicalize to themselves, so this is pure string
+        // order — no filesystem dependency.)
+        let policy = Policy {
+            writable_roots: vec![PathBuf::from("/work")],
+            read_denies: vec![
+                PathBuf::from("/vault/runs"),
+                PathBuf::from("/vault/runs/mine/settings.json"),
+            ],
+            read_allows: vec![PathBuf::from("/vault/runs/mine")],
+            ..Default::default()
+        };
+        let prof = compile_profile(&policy);
+        let deny_runs = prof.find("(deny file-read* (subpath \"/vault/runs\"))").unwrap();
+        let allow_mine = prof.find("(allow file-read* (subpath \"/vault/runs/mine\"))").unwrap();
+        let deny_settings =
+            prof.find("(deny file-read* (subpath \"/vault/runs/mine/settings.json\"))").unwrap();
+        assert!(deny_runs < allow_mine, "re-allow must come after the broad deny");
+        assert!(
+            allow_mine < deny_settings,
+            "the deeper deny must come after the re-allow so it wins (specificity)"
+        );
     }
 
     #[test]
