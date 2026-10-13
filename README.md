@@ -61,6 +61,8 @@ needs are not built yet:
 
 ## Architecture
 
+Two layers — the walls (this repo) and intent analysis (a separate intent-analysis layer) — both reading from the kernel, outside the agent. Full picture and diagram in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ```
           your policy  ─────────────┐
                                      ▼
