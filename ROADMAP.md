@@ -106,9 +106,11 @@ Build only where measurement shows no existing backend can enforce the policy.
       and Landlock unions permissions. **Reproduced and fixed on the Linux test host**: write
       rules now grant write-only; read is governed solely by the read carve.
       Repro kept: `backends/linux/examples/p0_readdeny_in_writable`.
-- [ ] **P0 Landlock BestEffort can silently drop net restrictions** on kernels
-      without the required ABI → fail-open for network. Fix: probe the ABI and
-      fail closed when the policy needs capabilities the kernel lacks.
+- [x] **P0 fail-closed on missing Landlock capabilities**: probes `landlock_fs_
+      supported` / `landlock_net_supported` (HardRequirement) and refuses to run
+      when FS confinement is absent, or when net is requested but unavailable.
+      Verified: Docker/linuxkit (no Landlock) now refuses ("refusing to run
+      unconfined"); the Linux test host (Landlock present) still runs and enforces.
 - [ ] **P1 broker has no client-identity auth** (any local process reaching the
       port can use the capability; example uses `Injection{host:None}`). Fix:
       bind each credential to an authorized run identity; scope destination,
