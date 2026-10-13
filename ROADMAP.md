@@ -209,3 +209,10 @@ Build only where measurement shows no existing backend can enforce the policy.
       1024 cap), so high-numbered inherited fds are closed too.
 - [x] **P1 observed vs guaranteed**: documented that the effect log is sampled
       (may miss short-lived events) while enforcement is guaranteed.
+
+## CI
+- [x] GitHub Actions workflow written (build + unit tests + integration + security-
+      bench, Linux & macOS; Landlock auto-detected). Correct and committed.
+- [ ] BLOCKED: Actions returns startup_failure on this account's private repos
+      (account-level issue since 2026-10-12, not the YAML). Verify green once cleared,
+      or mirror to a runner that works.
