@@ -9,3 +9,9 @@ repository.workspace = true
 
 [dependencies]
 seisin-sandbox-core = { path = "../../core" }
+
+# Landlock enforcement is Linux-only; on other targets the backend compiles as a
+# fail-closed stub so the workspace still builds (e.g. on macOS during dev).
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.5"
+libc = "0.2.177"

@@ -33,11 +33,16 @@ Build only where measurement shows no existing backend can enforce the policy.
       (grant safe subtrees, exclude the protected branch) — makes expressible
       what nono refuses. Unit test with nested `.git`. The seisin Linux edge.
 - [x] `validate` ACCEPTS deny-inside-allow by restructuring (nono rejects)
-- [ ] wire the Landlock ruleset from the allow-list (`rust-landlock`) — needs a
-      Linux kernel; test on the Linux test host (kernel 6.8, Landlock confirmed)
+- [x] wired the Landlock ruleset from the allow-list (`landlock` 0.4.5), target-
+      gated so macOS still builds; read+exec everywhere, write only in the carve;
+      restrict_self in the child via pre_exec
+- [x] **measured on the Linux test host (kernel 6.8, via Docker rust image): ALL PASS** —
+      nested `.git/hooks` denied, `.git/objects` still writable, ancestor rename
+      denied, control writes work, exit 143. The deny-in-allow that nono refuses.
+      (Landlock syscalls work under Docker's default seccomp, Docker 29.)
 - [ ] bwrap fallback for paths where direct-file-creation in an on-path dir
       matters, with Codex's flock mount registry (our report #4)
-- [ ] run the bench on the Linux test host; show deny-in-allow works where nono refuses
+- [ ] ABI probe (V1..V6 best-of) instead of fixed V1; Refer/Truncate hardening
 
 ## M3 — integration + release
 - [ ] `srt` adapter (wrap @anthropic-ai/sandbox-runtime)
