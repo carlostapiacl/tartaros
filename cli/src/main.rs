@@ -18,7 +18,7 @@
 //!
 //! Exit code is the command's (128+signal on signal death, 124 on timeout).
 
-use seisin_sandbox_core::{Backend, Network, Policy};
+use seisin_sandbox_core::{Network, Policy};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::exit;
@@ -184,31 +184,41 @@ fn explain(p: &Policy) {
 
 #[cfg(target_os = "linux")]
 fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
-    use seisin_sandbox_collect::{observe_until_exit, NetworkCollector, ProcessCollector, SecretCollector};
-    use seisin_sandbox_core::{Collector, FilterSink, JsonlSink, RecordMode};
+    run_common(&seisin_sandbox_linux::LandlockBackend, policy, cmd, log, true)
+}
 
-    let be = seisin_sandbox_linux::LandlockBackend;
+#[cfg(target_os = "macos")]
+fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
+    run_common(&seisin_sandbox_macos::SeatbeltBackend, policy, cmd, log, true)
+}
+
+/// Shared run path (both OS): `--log` goes through `run_observed`, which uses the
+/// SAME supervisor (timeout, limits, reaping) as `run` — enabling the log never
+/// changes the enforcement guarantees (review P0). `net` selects whether to add
+/// the network collector.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn run_common<B>(be: &B, policy: &Policy, cmd: &[String], log: Option<&str>, net: bool) -> i32
+where
+    B: RunObserved,
+{
+    use seisin_sandbox_collect::{NetworkCollector, ProcessCollector, SecretCollector};
+    use seisin_sandbox_core::{Collector, FilterSink, JsonlSink, RecordMode};
     match log {
         Some(path) => {
-            // spawn + observe so we can write the effect log of this real run.
-            let mut child = match be.spawn(policy, cmd) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); return 1; }
+            let f = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Ok(f) => f,
+                Err(e) => { eprintln!("seisin-sandbox: cannot open log {path}: {e}"); return 1; }
             };
-            let pid = child.id();
-            let mut collectors: Vec<Box<dyn Collector>> = vec![
-                Box::new(NetworkCollector::for_policy(pid, policy)),
-                Box::new(SecretCollector::for_policy(pid, policy)),
-                Box::new(ProcessCollector::for_policy(pid, policy)),
-            ];
-            let file = std::fs::OpenOptions::new().create(true).append(true).open(path);
-            match file {
-                Ok(f) => {
-                    let mut sink = FilterSink::new(JsonlSink::new(f), RecordMode::Boundary);
-                    observe_until_exit(&mut child, &mut collectors, &mut sink, Duration::from_millis(80))
-                }
-                Err(e) => { eprintln!("seisin-sandbox: cannot open log {path}: {e}"); let _ = child.wait(); 1 }
-            }
+            let mut sink = FilterSink::new(JsonlSink::new(f), RecordMode::Boundary);
+            let pol = policy.clone();
+            let res = be.run_observed(policy, cmd, &mut sink, move |pid| {
+                let mut v: Vec<Box<dyn Collector>> = Vec::new();
+                if net { v.push(Box::new(NetworkCollector::for_policy(pid, &pol))); }
+                v.push(Box::new(SecretCollector::for_policy(pid, &pol)));
+                v.push(Box::new(ProcessCollector::for_policy(pid, &pol)));
+                v
+            });
+            match res { Ok(o) => o.exit_code, Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); 1 } }
         }
         None => match be.run(policy, cmd) {
             Ok(o) => o.exit_code,
@@ -217,36 +227,35 @@ fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
     }
 }
 
+/// Minimal trait so `run_common` can call either backend's `run_observed`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+trait RunObserved: seisin_sandbox_core::Backend {
+    fn run_observed<F>(
+        &self,
+        policy: &Policy,
+        command: &[String],
+        sink: &mut dyn seisin_sandbox_core::EffectSink,
+        make: F,
+    ) -> Result<seisin_sandbox_core::RunOutcome, seisin_sandbox_core::RunError>
+    where
+        F: FnOnce(u32) -> Vec<Box<dyn seisin_sandbox_core::Collector>>;
+}
+
+#[cfg(target_os = "linux")]
+impl RunObserved for seisin_sandbox_linux::LandlockBackend {
+    fn run_observed<F>(&self, policy: &Policy, command: &[String], sink: &mut dyn seisin_sandbox_core::EffectSink, make: F)
+        -> Result<seisin_sandbox_core::RunOutcome, seisin_sandbox_core::RunError>
+    where F: FnOnce(u32) -> Vec<Box<dyn seisin_sandbox_core::Collector>> {
+        seisin_sandbox_linux::LandlockBackend::run_observed(self, policy, command, sink, make)
+    }
+}
+
 #[cfg(target_os = "macos")]
-fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
-    use seisin_sandbox_collect::{observe_until_exit, NetworkCollector, ProcessCollector, SecretCollector};
-    use seisin_sandbox_core::{Collector, FilterSink, JsonlSink, RecordMode};
-    let be = seisin_sandbox_macos::SeatbeltBackend;
-    match log {
-        Some(path) => {
-            // macOS collectors sample via lsof/ps (secret + process; network TBD).
-            let mut child = match be.spawn(policy, cmd) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); return 1; }
-            };
-            let pid = child.id();
-            let mut collectors: Vec<Box<dyn Collector>> = vec![
-                Box::new(NetworkCollector::for_policy(pid, policy)),
-                Box::new(SecretCollector::for_policy(pid, policy)),
-                Box::new(ProcessCollector::for_policy(pid, policy)),
-            ];
-            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                Ok(f) => {
-                    let mut sink = FilterSink::new(JsonlSink::new(f), RecordMode::Boundary);
-                    observe_until_exit(&mut child, &mut collectors, &mut sink, Duration::from_millis(120))
-                }
-                Err(e) => { eprintln!("seisin-sandbox: cannot open log {path}: {e}"); let _ = child.wait(); 1 }
-            }
-        }
-        None => match be.run(policy, cmd) {
-            Ok(o) => o.exit_code,
-            Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); 1 }
-        },
+impl RunObserved for seisin_sandbox_macos::SeatbeltBackend {
+    fn run_observed<F>(&self, policy: &Policy, command: &[String], sink: &mut dyn seisin_sandbox_core::EffectSink, make: F)
+        -> Result<seisin_sandbox_core::RunOutcome, seisin_sandbox_core::RunError>
+    where F: FnOnce(u32) -> Vec<Box<dyn seisin_sandbox_core::Collector>> {
+        seisin_sandbox_macos::SeatbeltBackend::run_observed(self, policy, command, sink, make)
     }
 }
 

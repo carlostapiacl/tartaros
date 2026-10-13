@@ -15,7 +15,9 @@
 //! Enforcement is Linux-only. On other targets this compiles as a fail-closed
 //! stub so the workspace still builds during development.
 
-use seisin_sandbox_core::{Backend, Policy, PolicyError, RunError, RunOutcome};
+use seisin_sandbox_core::{
+    Backend, Collector, EffectSink, Policy, PolicyError, RunError, RunOutcome,
+};
 
 pub struct LandlockBackend;
 
@@ -67,6 +69,44 @@ impl LandlockBackend {
     ) -> Result<std::process::Child, RunError> {
         Err(RunError { reason: "spawn is Linux-only".into() })
     }
+
+    /// Run confined AND observe it with collectors, under the SAME supervisor as
+    /// [`Backend::run`] (timeout, resource limits, process-group reaping). Enabling
+    /// observation never changes the enforcement guarantees (external review P0).
+    #[cfg(target_os = "linux")]
+    pub fn run_observed<F>(
+        &self,
+        policy: &Policy,
+        command: &[String],
+        sink: &mut dyn EffectSink,
+        make_collectors: F,
+    ) -> Result<RunOutcome, RunError>
+    where
+        F: FnOnce(u32) -> Vec<Box<dyn Collector>>,
+    {
+        self.validate(policy).map_err(|e| RunError { reason: e.reason })?;
+        if command.is_empty() {
+            return Err(RunError { reason: "empty command".into() });
+        }
+        let mut cmd = confined_command(policy, command)?;
+        let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+        let mut cols = make_collectors(child.id());
+        Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut cols, sink) })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn run_observed<F>(
+        &self,
+        _policy: &Policy,
+        _command: &[String],
+        _sink: &mut dyn EffectSink,
+        _make_collectors: F,
+    ) -> Result<RunOutcome, RunError>
+    where
+        F: FnOnce(u32) -> Vec<Box<dyn Collector>>,
+    {
+        Err(RunError { reason: "run_observed is Linux-only".into() })
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -76,9 +116,11 @@ fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunErro
 
 #[cfg(target_os = "linux")]
 fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
+    use seisin_sandbox_core::VecSink;
     let mut cmd = confined_command(policy, command)?;
     let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
-    Ok(RunOutcome { exit_code: supervise(child, policy.timeout) })
+    // Same supervisor as run_observed, with no collectors.
+    Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut [], &mut VecSink::default()) })
 }
 
 /// Build a `Command` that applies the Landlock ruleset in the child just before
@@ -337,15 +379,27 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, limit: Option<u64>) -> std::i
 /// Supervise a confined child (P1-B): enforce the wall-clock timeout, then reap
 /// the whole process group so no descendant is left behind.
 #[cfg(target_os = "linux")]
-fn supervise(mut child: std::process::Child, timeout: Option<std::time::Duration>) -> i32 {
+fn supervise(
+    mut child: std::process::Child,
+    timeout: Option<std::time::Duration>,
+    collectors: &mut [Box<dyn Collector>],
+    sink: &mut dyn EffectSink,
+) -> i32 {
     use std::time::{Duration, Instant};
     let pid = child.id() as i32;
     let start = Instant::now();
     let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
     loop {
+        // Poll collectors in the same loop (no-op when there are none), so
+        // observation never alters the supervision/timeout behaviour.
+        for c in collectors.iter_mut() {
+            c.poll(sink);
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
-                // reap any surviving descendants in the group
+                for c in collectors.iter_mut() {
+                    c.poll(sink);
+                }
                 kill_group(libc::SIGKILL);
                 return exit_code_of(status);
             }
