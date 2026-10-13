@@ -1,4 +1,4 @@
-# seisin-sandbox CLI
+# tartaros CLI
 
 Two subcommands: `run` (confine a command) and `explain` (print what a policy
 grants, without running — for auditing a profile before deploying it).
@@ -6,7 +6,7 @@ grants, without running — for auditing a profile before deploying it).
 Run a command confined by a policy, on the OS backend (Landlock / Seatbelt).
 
 ```
-seisin-sandbox run [options] -- <command> [args...]
+tartaros run [options] -- <command> [args...]
 ```
 
 | option | meaning |
@@ -28,7 +28,7 @@ seisin-sandbox run [options] -- <command> [args...]
 Example — run an agent over a repo, deny its SSH keys, log what it attempts:
 
 ```
-seisin-sandbox run --role dev --write ./repo --read-deny ~/.ssh \
+tartaros run --role dev --write ./repo --read-deny ~/.ssh \
   --port 8001 --timeout 600 --log effects.jsonl -- claude -p "fix the build"
 ```
 
@@ -46,7 +46,7 @@ timeout_secs = 600
 ```
 
 ```
-seisin-sandbox run --config role-dev.toml -- claude -p "fix the build"
+tartaros run --config role-dev.toml -- claude -p "fix the build"
 ```
 
 See [`examples/role-dev.toml`](examples/role-dev.toml).
@@ -57,7 +57,7 @@ The exit code is the command's (128+signal on signal death, 124 on timeout).
 ## explain — audit a policy
 
 ```
-seisin-sandbox explain --config role-dev.toml
+tartaros explain --config role-dev.toml
 ```
 
 Prints the role, network/ports, writable roots, read-denied secrets, the

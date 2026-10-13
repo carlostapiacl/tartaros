@@ -4,7 +4,7 @@
 //! set. It is a heuristic over cmdline, not a protocol parser; good enough to
 //! surface "a role loaded an MCP it shouldn't" until a precise source exists.
 
-use seisin_sandbox_core::{Axis, Collector, Direction, EffectEvent, EffectSink, Outcome};
+use tartaros_core::{Axis, Collector, Direction, EffectEvent, EffectSink, Outcome};
 use std::collections::HashSet;
 
 use crate::proc;

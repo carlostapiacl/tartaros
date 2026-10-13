@@ -4,7 +4,7 @@ severity = "high"
 os = ["linux"]
 
 # A command that double-forks and setsid's a daemon leaves the process group, so
-# the timeout's kill(-pgid) misses it and it would outlive the sandbox. seisin
+# the timeout's kill(-pgid) misses it and it would outlive the sandbox. TartarOS
 # puts every run in a per-run cgroup and tears it down with cgroup.kill, which
 # reaps the escaped daemon too. The daemon here only writes "dirty" at t+2s; the
 # run is killed at t+1s, so after settling the marker must still read "clean".

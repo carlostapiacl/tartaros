@@ -3,8 +3,8 @@
 //! macOS only (needs /usr/bin/sandbox-exec).
 #![cfg(target_os = "macos")]
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_macos::SeatbeltBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_macos::SeatbeltBackend;
 use std::fs;
 
 fn mk_work() -> std::path::PathBuf {

@@ -1,4 +1,4 @@
-# Cross-backend comparison — seisin-sandbox vs nono
+# Cross-backend comparison — tartaros vs nono
 
 Honest comparison of the same scenarios, **fairly configured** on each backend.
 Measured on the Linux test host (Ubuntu 24.04, kernel 6.8, Landlock) 2026-10-13. nono 0.79.0.
@@ -8,7 +8,7 @@ Measured on the Linux test host (Ubuntu 24.04, kernel 6.8, Landlock) 2026-10-13.
 > - "Cannot express" is recorded as a capability gap, **not** a vulnerability.
 > - A difference in defaults is not a vulnerability. (See the lesson below.)
 
-| scenario | seisin-sandbox | nono 0.79 (`--allow work`) |
+| scenario | tartaros | nono 0.79 (`--allow work`) |
 |---|---|---|
 | write outside the granted territory | blocked | **blocked** (parity) |
 | nested `.git/hooks` (trust-handoff) | **blocked** | **allowed — hook planted** |
@@ -18,7 +18,7 @@ Measured on the Linux test host (Ubuntu 24.04, kernel 6.8, Landlock) 2026-10-13.
 
 With both backends granted the same writable `work/` dir, nono lets the agent
 write `work/nested/.git/hooks/pre-commit` — it has no trust-handoff layer, so a
-planted hook runs outside the box on the next `git commit`. seisin denies it (and
+planted hook runs outside the box on the next `git commit`. TartarOS denies it (and
 the ancestor-rename variant). This is the gap the market research flagged and it
 holds up apples-to-apples.
 
@@ -32,7 +32,7 @@ in defaults, or a misconfiguration, must never be sold as a vulnerability.
 
 ## vs sandbox-runtime (Anthropic srt 0.0.78) — measured on a Linux host
 
-| scenario | seisin-sandbox | srt 0.0.78 |
+| scenario | tartaros | srt 0.0.78 |
 |---|---|---|
 | write outside the granted territory | blocked | **blocked** (parity) |
 | overwrite `.claude/settings.json` | blocked | **blocked** (parity in this test) |
@@ -45,7 +45,7 @@ observation needs a version-specific check; recorded as parity until then.
 
 `compare.sh` now supports a third column for srt (when node + bwrap + srt are
 present): srt blocks write-outside and nested `.git/hooks` (via its glob deny) —
-parity with seisin — and nono allows the nested hook (the measured differentiator).
+parity with TartarOS — and nono allows the nested hook (the measured differentiator).
 The srt column activates only where the tooling is installed.
 
 Where the measured rows differ: deny-inside-allow on

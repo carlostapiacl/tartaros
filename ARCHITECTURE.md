@@ -2,7 +2,7 @@
 
 Two layers, one vantage point — the kernel, outside the agent.
 
-- **seisin-sandbox — the walls + the first-hand effect log.** What the agent *can*
+- **tartaros — the walls + the first-hand effect log.** What the agent *can*
   do, enforced below it; and a record of every effect it attempted, allowed or
   denied.
 - **a separate intent-analysis layer — the intent.** What the
@@ -15,7 +15,7 @@ Two layers, one vantage point — the kernel, outside the agent.
                                          │
                                          │  compiles the policy
                                          ▼
-   ┌─────────────────────────────  seisin-sandbox  ─────────────────────────────┐
+   ┌─────────────────────────────  tartaros  ─────────────────────────────┐
    │                      THE WALLS  (kernel level, OUTSIDE the agent)           │
    │                                                                             │
    │     ┌───────────────┐                                                       │
@@ -65,7 +65,7 @@ denominator (what was in scope) both come from the same kernel-level log.
 Nothing here is a hard dependency chain. The **effect log is a neutral format**
 (JSON Lines), and that format is the only contract:
 
-- **The intent layer does not import seisin-sandbox**, and vice versa. The intent layer reads the
+- **The intent layer does not import tartaros**, and vice versa. The intent layer reads the
   log through its own adapter and treats it as one replaceable source (it has
   others). 
 - **Collectors attach to a process tree by pid** — they can watch any agent.
@@ -76,10 +76,10 @@ The full list of what we capture, by axis, is in [`CATALOG.md`](CATALOG.md).
 
 ## The bridge: a complete effect log
 
-The highest-leverage piece is the log itself. Today seisin records denied writes;
+The highest-leverage piece is the log itself. Today TartarOS records denied writes;
 the full design records **allowed and denied** events across all four axes, per
 role, with timestamps. That single addition closes a sandbox gap *and* gives the
-intent layer its first-hand feed. the intent layer treats seisin as a replaceable source,
+intent layer its first-hand feed. the intent layer treats TartarOS as a replaceable source,
 not a hard dependency (there are adapters for other effect collectors).
 
 ## Status

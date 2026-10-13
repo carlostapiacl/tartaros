@@ -1,7 +1,7 @@
 //! Linux backend — Landlock.
 //!
 //! Landlock cannot express "allow X but deny X/y", so nono refuses such a
-//! policy. seisin restructures instead: [`Policy::linux_write_allowlist`] carves
+//! policy. TartarOS restructures instead: [`Policy::linux_write_allowlist`] carves
 //! the deny out of the allow (grant safe subtrees, exclude the protected
 //! branch). This backend turns that allow-list into a Landlock ruleset:
 //!   - read + execute everywhere (so ordinary tools run);
@@ -15,7 +15,7 @@
 //! Enforcement is Linux-only. On other targets this compiles as a fail-closed
 //! stub so the workspace still builds during development.
 
-use seisin_sandbox_core::{
+use tartaros_core::{
     Backend, Collector, EffectSink, Policy, PolicyError, RunError, RunOutcome,
 };
 
@@ -30,7 +30,7 @@ impl Backend for LandlockBackend {
         if policy.writable_roots.is_empty() {
             return Err(PolicyError { reason: "no writable roots".into() });
         }
-        // seisin can always express the policy by restructuring (nono rejects).
+        // TartarOS can always express the policy by restructuring (nono rejects).
         let _allow = policy.linux_write_allowlist();
         Ok(())
     }
@@ -120,7 +120,7 @@ fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunErro
 
 #[cfg(target_os = "linux")]
 fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
-    use seisin_sandbox_core::VecSink;
+    use tartaros_core::VecSink;
     let cg = create_cgroup(policy);
     let procs = cg.as_ref().map(|d| format!("{d}/cgroup.procs"));
     let mut cmd = confined_command(policy, command, procs)?;
@@ -142,7 +142,7 @@ fn confined_command(
         ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, PathBeneath, PathFd,
         Ruleset, RulesetAttr, RulesetCreatedAttr,
     };
-    use seisin_sandbox_core::Network;
+    use tartaros_core::Network;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
@@ -481,7 +481,7 @@ fn apply_deny_af_unix() -> std::io::Result<()> {
 fn warn_cgroup_degraded(policy: &Policy) {
     if policy.max_processes.is_some() {
         eprintln!(
-            "seisin-sandbox: warning: cgroup v2 unavailable; --max-procs degraded to \
+            "tartaros: warning: cgroup v2 unavailable; --max-procs degraded to \
              RLIMIT_NPROC (best-effort, bypassable by root). Run on a cgroup-v2 host \
              with write access to /sys/fs/cgroup for a hard process cap."
         );
@@ -500,7 +500,7 @@ fn create_cgroup(policy: &Policy) -> Option<String> {
     let base = "/sys/fs/cgroup";
     // enable controllers in the root subtree (best-effort).
     let _ = std::fs::write(format!("{base}/cgroup.subtree_control"), "+pids +memory");
-    let dir = format!("{base}/seisin-{}-{}", std::process::id(), now_nanos());
+    let dir = format!("{base}/tartaros-{}-{}", std::process::id(), now_nanos());
     if std::fs::create_dir(&dir).is_err() {
         warn_cgroup_degraded(policy);
         return None;
@@ -721,7 +721,7 @@ fn landlock_net_supported() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seisin_sandbox_core::Policy;
+    use tartaros_core::Policy;
     use std::path::PathBuf;
 
     #[test]

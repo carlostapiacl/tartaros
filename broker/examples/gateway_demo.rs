@@ -1,5 +1,5 @@
 //! End-to-end proof of the single gateway (Linux). Run on a Landlock kernel:
-//! `cargo run -p seisin-sandbox-broker --example gateway_demo`. Needs curl.
+//! `cargo run -p tartaros-broker --example gateway_demo`. Needs curl.
 //!
 //! - upstream: returns "AUTHENTICATED" only if it receives the right secret.
 //! - broker: holds the secret, injects it, forwards. Runs OUTSIDE the box.
@@ -8,9 +8,9 @@
 //! Expect: via the broker the agent gets "AUTHENTICATED" without ever holding
 //! the token; a direct connection to the upstream is blocked by the sandbox.
 
-use seisin_sandbox_broker::{Broker, Injection};
-use seisin_sandbox_core::{Backend, JsonlSink, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_broker::{Broker, Injection};
+use tartaros_core::{Backend, JsonlSink, Network, Policy};
+use tartaros_linux::LandlockBackend;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;

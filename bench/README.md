@@ -1,6 +1,6 @@
 # Benchmark — conformance suite for agent sandboxes
 
-The measured basis for seisin-sandbox's claims: a set of checks any agent
+The measured basis for tartaros's claims: a set of checks any agent
 sandbox either passes or fails, run against the real binaries.
 
 - control (writes land in the workspace, not in HOME)

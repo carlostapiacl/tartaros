@@ -1,11 +1,11 @@
 //! Live check of Landlock per-port network enforcement (Linux). Needs python3
-//! and curl. Run on a kernel >= 6.7: `cargo run -p seisin-sandbox-linux --example netcheck`.
+//! and curl. Run on a kernel >= 6.7: `cargo run -p tartaros-linux --example netcheck`.
 //!
 //! Policy grants loopback port 8001 only. Expect: connect to 8001 works, 8787 is
 //! blocked (port not granted), and an external host is blocked.
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_linux::LandlockBackend;
 use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;

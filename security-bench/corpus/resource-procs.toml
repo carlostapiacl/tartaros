@@ -8,7 +8,7 @@ os = ["linux"]
 # enforced with a cgroup v2 `pids.max`. Spawning past the cap must fail; it must
 # not take down the host. Requires a cgroup-v2 host with write access to
 # /sys/fs/cgroup (a container without cgroup delegation degrades to RLIMIT and
-# seisin warns on stderr — there this scenario is expected to flag non-enforcement).
+# TartarOS warns on stderr — there this scenario is expected to flag non-enforcement).
 [policy]
 writable_roots = ["{root}/work"]
 max_processes = 25

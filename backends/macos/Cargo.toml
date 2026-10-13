@@ -1,6 +1,6 @@
 [package]
-name = "seisin-sandbox-macos"
-description = "macos backend for seisin-sandbox"
+name = "tartaros-macos"
+description = "macos backend for tartaros"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-seisin-sandbox-core = { path = "../../core" }
+tartaros-core = { path = "../../core" }
 libc = "0.2.177"
 
 [dev-dependencies]

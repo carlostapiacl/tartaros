@@ -1,11 +1,11 @@
 //! Live smoke test of the macOS backend against the trust-handoff checks —
 //! the ones where Codex/nono/srt were measured to fail (nested .git, ancestor
-//! rename). Run: `cargo run -p seisin-sandbox-macos --example smoke`
+//! rename). Run: `cargo run -p tartaros-macos --example smoke`
 //!
 //! Touches only a fresh temp dir and one marker file; cleans up on exit.
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_macos::SeatbeltBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_macos::SeatbeltBackend;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;

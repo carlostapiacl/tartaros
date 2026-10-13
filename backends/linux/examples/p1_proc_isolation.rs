@@ -1,10 +1,10 @@
 //! Measure a portable mitigation for P1-3 (cross-process env read) WITHOUT a PID
 //! namespace: exclude /proc from the read grant via read_denies. Uses a real
 //! victim process holding a secret, and checks tool impact (incl. /proc/self).
-//! `cargo run -p seisin-sandbox-linux --example p1_proc_isolation`
+//! `cargo run -p tartaros-linux --example p1_proc_isolation`
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_linux::LandlockBackend;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread::sleep;

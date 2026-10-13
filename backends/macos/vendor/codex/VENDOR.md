@@ -9,6 +9,6 @@ NOT compiled (they live outside any crate's module tree) and still reference
 Codex's own crates (`codex_protocol`, `codex_network_proxy`, …).
 
 The macOS backend (`../../src/lib.rs`) will adapt this generator to
-`seisin_sandbox_core::Policy`. When a file here is modified, it gets a notice at
+`tartaros_core::Policy`. When a file here is modified, it gets a notice at
 its top saying so, per Apache-2.0 §4(b), and the change is logged in
 `THIRD_PARTY_NOTICES.md`.

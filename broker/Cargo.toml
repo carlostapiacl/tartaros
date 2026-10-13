@@ -1,5 +1,5 @@
 [package]
-name = "seisin-sandbox-broker"
+name = "tartaros-broker"
 description = "Capability gateway — the one door out of the box: injects secrets so the agent uses a credential without ever holding it"
 version.workspace = true
 edition.workspace = true
@@ -8,8 +8,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-seisin-sandbox-core = { path = "../core" }
+tartaros-core = { path = "../core" }
 ureq = "2.12.1"
 
 [dev-dependencies]
-seisin-sandbox-linux = { path = "../backends/linux" }
+tartaros-linux = { path = "../backends/linux" }

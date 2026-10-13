@@ -1,12 +1,12 @@
 //! Live smoke of the Linux (Landlock) backend. Run on a Landlock-capable
-//! kernel: `cargo run -p seisin-sandbox-linux --example smoke`.
+//! kernel: `cargo run -p tartaros-linux --example smoke`.
 //!
-//! Proves the seisin Linux edge: a deny-inside-allow policy (which nono refuses)
+//! Proves the TartarOS Linux edge: a deny-inside-allow policy (which nono refuses)
 //! is enforced — writes land in safe subtrees, a nested `.git/hooks` is not
 //! writable, and renaming its ancestor is denied.
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_linux::LandlockBackend;
 use std::fs;
 use std::process::Command;
 

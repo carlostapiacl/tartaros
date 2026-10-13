@@ -11,7 +11,7 @@
 //! termination (a trusted CA) to inject into, or a capability-endpoint style;
 //! out of scope here. Every forwarded request is logged as an `EffectEvent`.
 
-use seisin_sandbox_core::{Axis, Direction, EffectEvent, EffectSink, Outcome};
+use tartaros_core::{Axis, Direction, EffectEvent, EffectSink, Outcome};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
@@ -70,7 +70,7 @@ impl Broker {
         }
     }
 
-    /// Require every request to carry `X-Seisin-Auth: <token>`. Give the token
+    /// Require every request to carry `X-Tartaros-Auth: <token>`. Give the token
     /// only to the authorized agent; others reaching the port get 403.
     pub fn with_auth(mut self, token: impl Into<String>) -> Self {
         self.auth_token = Some(token.into());
@@ -147,14 +147,14 @@ impl Broker {
         if let Some(tok) = &self.auth_token {
             let ok = headers
                 .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case("x-seisin-auth") && v == tok);
+                .any(|(k, v)| k.eq_ignore_ascii_case("x-tartaros-auth") && v == tok);
             if !ok {
                 let _ = client
                     .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 return Ok(());
             }
         }
-        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-seisin-auth"));
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-tartaros-auth"));
 
         // Capability mode: origin-form request (/prefix/…) to an HTTPS upstream.
         if abs_uri.starts_with('/') {
@@ -321,7 +321,7 @@ mod tests {
         use std::net::TcpListener;
         let b = Broker::new("qa", vec![]);
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let mut sink = seisin_sandbox_core::VecSink::default();
+        let mut sink = tartaros_core::VecSink::default();
         // no auth, not insecure -> must refuse immediately
         assert!(b.serve(l, &mut sink).is_err());
     }

@@ -1,10 +1,10 @@
 //! Adversarial repro (external review P0): a `read_denies` path INSIDE a
 //! writable root. If the write rule (`all`, which includes read) re-opens read,
 //! the secret is readable despite read_denies — a policy contradiction.
-//! `cargo run -p seisin-sandbox-linux --example p0_readdeny_in_writable`
+//! `cargo run -p tartaros-linux --example p0_readdeny_in_writable`
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_linux::LandlockBackend;
 
 fn main() {
     let work = std::env::temp_dir().join(format!("sbx-p0-{}", std::process::id()));

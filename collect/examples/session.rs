@@ -1,13 +1,13 @@
 //! A real observed session (Linux): spawn a confined agent and let the
 //! collectors watch its process tree, producing the effect log — the first-hand
 //! record that feeds the intent layer. Run on a Landlock kernel; needs curl.
-//! `cargo run -p seisin-sandbox-collect --example session`
+//! `cargo run -p tartaros-collect --example session`
 
-use seisin_sandbox_collect::{
+use tartaros_collect::{
     observe_until_exit, NetworkCollector, ProcessCollector, SecretCollector,
 };
-use seisin_sandbox_core::{Collector, FilterSink, JsonlSink, Network, Policy, RecordMode};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Collector, FilterSink, JsonlSink, Network, Policy, RecordMode};
+use tartaros_linux::LandlockBackend;
 use std::io::Write;
 use std::net::TcpListener;
 use std::thread;

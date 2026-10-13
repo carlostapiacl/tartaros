@@ -1,9 +1,9 @@
 //! Live check of secret read-deny (Linux/Landlock). The agent may read the rest
 //! of the filesystem but NOT the denied secret dir.
-//! `cargo run -p seisin-sandbox-linux --example readdeny`
+//! `cargo run -p tartaros-linux --example readdeny`
 
-use seisin_sandbox_core::{Backend, Network, Policy};
-use seisin_sandbox_linux::LandlockBackend;
+use tartaros_core::{Backend, Network, Policy};
+use tartaros_linux::LandlockBackend;
 use std::path::PathBuf;
 
 fn main() {

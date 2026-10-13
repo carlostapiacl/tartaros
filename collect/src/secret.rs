@@ -3,8 +3,8 @@
 //! secret is worth recording even when the policy allowed it: it is the data a
 //! later exfil connect would carry.
 
-use seisin_sandbox_core::catalog::looks_like_secret;
-use seisin_sandbox_core::{Axis, Collector, Direction, EffectEvent, EffectSink, Outcome};
+use tartaros_core::catalog::looks_like_secret;
+use tartaros_core::{Axis, Collector, Direction, EffectEvent, EffectSink, Outcome};
 use std::collections::HashSet;
 
 use crate::proc;
@@ -20,7 +20,7 @@ impl SecretCollector {
         SecretCollector { role: role.into(), root_pid, seen: HashSet::new() }
     }
 
-    pub fn for_policy(root_pid: u32, policy: &seisin_sandbox_core::Policy) -> Self {
+    pub fn for_policy(root_pid: u32, policy: &tartaros_core::Policy) -> Self {
         Self::new(policy.role.clone(), root_pid)
     }
 
@@ -65,7 +65,7 @@ impl Collector for SecretCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seisin_sandbox_core::{Axis, Direction};
+    use tartaros_core::{Axis, Direction};
 
     #[test]
     fn flags_secret_fd_only() {
