@@ -53,7 +53,7 @@ narrow, measured ones above, and the honest limits are listed below.
 | FS reads of on-disk secrets (`~/.ssh`, `~/.aws`, `.env`) | ✅ carved read grant | ✅ `(deny file-read*)` |
 | Network: default-deny + per-port (TCP) | ✅ Landlock (ABI v4+, port-based) | ✅ |
 | Network: complete off, all protocols (`--isolate-net`) | ✅ empty netns (TCP/UDP/ICMP/raw) | ❌ |
-| Secret broker (capability, not raw token) | ✅ HTTP + HTTPS capability endpoint, client auth | ✅ |
+| Secret broker (capability, not raw token) | ✅ HTTP+HTTPS, client auth, TTL+quota, host allow-list | ✅ |
 | Resource: memory / processes / CPU | ✅ RLIMIT + cgroup (`memory.max`, `pids.max`), root-proof | 🟡 RLIMIT only |
 | Lifecycle: timeout + reliable teardown | ✅ `cgroup.kill` (reaps escaped daemons) | 🟡 `kill(-pgid)` best-effort |
 | Process isolation (`--isolate-pids`) | ✅ PID + mount namespace | ❌ (no primitive) |
