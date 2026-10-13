@@ -85,8 +85,11 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] **secret broker (the single gateway)**: `broker` crate — HTTP forward
       proxy injects the secret; agent reaches ONLY the broker port, authenticates
       upstream without ever holding the token, direct egress blocked. Live-
-      verified end-to-end on the Linux test host; every forward logged as an effect. HTTPS
-      (CONNECT) needs TLS termination — out of prototype scope
+      verified end-to-end on the Linux test host; every forward logged as an effect.
+- [x] **HTTPS via capability endpoint** (no MITM): agent speaks plain HTTP to the
+      broker at `/<prefix>/…`, broker does the real HTTPS (`ureq`) and injects
+      the secret. Live-verified on the Linux test host (reached https://example.com via broker;
+      direct 443 blocked). The agent never does TLS nor holds the token
 - [x] fix: Linux carve only excludes denies that EXIST (Landlock is inode-based;
       absent trust-handoff files are a macOS/Seatbelt strength, not Landlock's)
 - [ ] **close the Linux env-leak**: restrict /proc or PID namespace

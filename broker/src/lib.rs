@@ -33,14 +33,34 @@ impl Injection {
     }
 }
 
+/// A capability endpoint: the agent speaks plain HTTP to the broker at
+/// `/<prefix>/…`, and the broker makes the real **HTTPS** request to
+/// `upstream_base/…` with the secret injected. The agent never does TLS and
+/// never holds the token. This is how a secret used over HTTPS (a GitHub token,
+/// an OAuth bearer) is brokered without MITM.
+#[derive(Debug, Clone)]
+pub struct Capability {
+    pub prefix: String,
+    pub upstream_base: String,
+    pub injections: Vec<Injection>,
+}
+
 pub struct Broker {
     injections: Vec<Injection>,
+    capabilities: Vec<Capability>,
     role: String,
 }
 
 impl Broker {
     pub fn new(role: impl Into<String>, injections: Vec<Injection>) -> Self {
-        Broker { injections, role: role.into() }
+        Broker { injections, capabilities: Vec::new(), role: role.into() }
+    }
+
+    /// Add capability endpoints (HTTPS upstreams reached by plain HTTP to the
+    /// broker). See [`Capability`].
+    pub fn with_capabilities(mut self, caps: Vec<Capability>) -> Self {
+        self.capabilities = caps;
+        self
     }
 
     /// Bind to a loopback port (0 = any free port). Returns the broker's port.
@@ -71,8 +91,21 @@ impl Broker {
         if parts.len() < 3 {
             return Ok(());
         }
-        let (method, abs_uri, version) = (parts[0], parts[1], parts[2]);
+        let (method, abs_uri, _version) = (parts[0], parts[1], parts[2]);
 
+        // Capability mode: origin-form request (/prefix/…) to an HTTPS upstream.
+        if abs_uri.starts_with('/') {
+            // drain remaining request headers
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h)? == 0 || h == "\r\n" || h == "\n" {
+                    break;
+                }
+            }
+            return self.handle_capability(method, abs_uri, &mut client, sink);
+        }
+
+        let version = _version;
         let (host, port, path) = match parse_abs_uri(abs_uri) {
             Some(t) => t,
             None => {
@@ -133,6 +166,72 @@ impl Broker {
         let mut buf = Vec::new();
         upstream.read_to_end(&mut buf)?;
         client.write_all(&buf)?;
+        client.flush()?;
+        Ok(())
+    }
+}
+
+impl Broker {
+    /// Serve a capability: plain-HTTP `/<prefix>/rest` from the agent becomes an
+    /// HTTPS request to `upstream_base/rest` with the secret injected. The agent
+    /// never does TLS and never sees the token.
+    fn handle_capability(
+        &self,
+        method: &str,
+        path: &str,
+        client: &mut TcpStream,
+        sink: &mut dyn EffectSink,
+    ) -> std::io::Result<()> {
+        let cap = self.capabilities.iter().find(|c| {
+            path == c.prefix || path.starts_with(&format!("{}/", c.prefix))
+        });
+        let cap = match cap {
+            Some(c) => c,
+            None => {
+                let _ = client.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+                return Ok(());
+            }
+        };
+        let rest = &path[cap.prefix.len()..];
+        let rest = if rest.is_empty() { "/" } else { rest };
+        let url = format!("{}{}", cap.upstream_base.trim_end_matches('/'), rest);
+
+        sink.emit(&EffectEvent::now(
+            self.role.clone(),
+            Axis::Secret,
+            "broker-inject",
+            url.clone(),
+            Direction::OutsideTerritory,
+            Outcome::Allowed,
+            "broker/capability",
+        ));
+
+        // The broker does the TLS. Inject the secret header(s) here.
+        let mut req = match method {
+            "POST" => ureq::post(&url),
+            "PUT" => ureq::put(&url),
+            "DELETE" => ureq::delete(&url),
+            _ => ureq::get(&url),
+        };
+        for inj in &cap.injections {
+            req = req.set(&inj.header, &inj.value);
+        }
+        let (status, body) = match req.call() {
+            Ok(resp) => {
+                let s = resp.status();
+                (s, resp.into_string().unwrap_or_default())
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                (code, resp.into_string().unwrap_or_default())
+            }
+            Err(e) => (502, format!("broker upstream error: {e}")),
+        };
+        let resp = format!(
+            "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        client.write_all(resp.as_bytes())?;
         client.flush()?;
         Ok(())
     }
