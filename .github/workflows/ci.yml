@@ -1,3 +1,6 @@
+# NOTE (2026-10-13): GitHub Actions currently returns startup_failure on this
+# account's private repos (an account-level issue since 2026-10-12, not this file
+# â YAML validates locally). The workflow is correct and will run once that clears.
 name: ci
 on:
   push:
