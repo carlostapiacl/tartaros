@@ -53,6 +53,10 @@ pub struct Capability {
 /// Largest upstream response the broker relays back (P0-B: bound the response).
 const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Timeout for the upstream connect and each read/write in the HTTP forward
+/// proxy, so a slow or unresponsive upstream cannot pin a broker thread.
+const UPSTREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Caps on the agent-supplied request, so a giant line or a header flood can't
 /// exhaust the broker (which runs in the trusted supervisor).
 const MAX_LINE_BYTES: usize = 8 * 1024;
@@ -388,7 +392,13 @@ impl Broker {
         };
 
         // Forward to the real upstream (the verified, non-internal address).
-        let mut upstream = TcpStream::connect(target)?;
+        // Bound the connect and every read/write with a timeout so a slow or
+        // unresponsive upstream cannot pin a broker thread (the broker runs in
+        // the trusted supervisor). connect_timeout needs a SocketAddr, which we
+        // already have (resolved + SSRF-checked above).
+        let mut upstream = TcpStream::connect_timeout(&target, UPSTREAM_TIMEOUT)?;
+        upstream.set_read_timeout(Some(UPSTREAM_TIMEOUT))?;
+        upstream.set_write_timeout(Some(UPSTREAM_TIMEOUT))?;
         let mut req = format!("{method} {path} {version}\r\n");
         // ensure Host header
         if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("host")) {
@@ -400,10 +410,18 @@ impl Broker {
         req.push_str("Connection: close\r\n\r\n");
         upstream.write_all(req.as_bytes())?;
 
-        // Stream the response back to the client.
-        let mut buf = Vec::new();
-        upstream.read_to_end(&mut buf)?;
-        client.write_all(&buf)?;
+        // Stream the response back to the client, bounded to MAX_RESPONSE_BYTES
+        // (P0): the HTTP forward-proxy must cap the body like the capability
+        // endpoint does, or an authorized-but-huge upstream response could grow
+        // the supervisor's memory without bound. io::copy streams, so we never
+        // buffer the whole body, and `take` enforces the ceiling.
+        let mut limited = upstream.take(MAX_RESPONSE_BYTES);
+        let copied = std::io::copy(&mut limited, &mut client)?;
+        if copied == MAX_RESPONSE_BYTES {
+            // hit the ceiling: the response may be truncated; close the client so
+            // it does not treat a cut body as complete. (Connection: close above.)
+            let _ = client.flush();
+        }
         client.flush()?;
         Ok(())
     }
@@ -614,6 +632,45 @@ mod tests {
         let _ = c.read_to_string(&mut resp);
         assert!(resp.contains("403"), "SSRF to loopback must be 403, got: {resp:?}");
         assert!(resp.contains("internal destination"), "got: {resp:?}");
+    }
+
+    #[test]
+    fn live_caps_forward_proxy_response() {
+        // Upstream that sends far more than MAX_RESPONSE_BYTES.
+        let up = TcpListener::bind("127.0.0.1:0").unwrap();
+        let up_port = up.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in up.incoming().flatten() {
+                let mut s = s;
+                let body = vec![b'A'; (MAX_RESPONSE_BYTES as usize) + 1024 * 1024]; // +1 MiB
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+                let _ = s.write_all(&body);
+            }
+        });
+        // allow_internal so the broker will connect to the loopback test upstream.
+        let b = Broker::new("qa", vec![]).insecure_no_auth().with_allow_internal(true);
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        c.write_all(format!("GET http://127.0.0.1:{up_port}/ HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut got = Vec::new();
+        let _ = c.read_to_end(&mut got);
+        // The forward proxy must cap what it relays: never more than the ceiling.
+        assert!(
+            (got.len() as u64) <= MAX_RESPONSE_BYTES,
+            "forward-proxy relayed {} bytes, over the {} cap",
+            got.len(),
+            MAX_RESPONSE_BYTES
+        );
+        // And it should have reached the cap (upstream sent more), proving it
+        // actually truncated rather than the upstream being small.
+        assert_eq!(got.len() as u64, MAX_RESPONSE_BYTES, "should relay exactly up to the cap");
     }
 
     #[test]
