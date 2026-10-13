@@ -449,4 +449,93 @@ mod tests {
 
         fs::remove_dir_all(&tmp).ok();
     }
+
+    /// Does the allow-list grant `x` (the backend grants PathBeneath per entry, so
+    /// a path is allowed iff it is under or equal to a granted entry)?
+    fn granted(allow: &[PathBuf], x: &Path) -> bool {
+        allow.iter().any(|a| x.starts_with(a))
+    }
+
+    /// Monotonicity of the policy compiler: a MORE restrictive policy must never
+    /// allow an operation a LESS restrictive one forbade —
+    /// `P2 ⊆ P1 ⟹ Allowed(P2) ⊆ Allowed(P1)`. This is the invariant that a
+    /// carve bug (e.g. P0-1: a deny that accidentally widened the grant) breaks.
+    /// We check the two restriction axes of the write carve exhaustively on a
+    /// fixed tree: (a) adding any deny, (b) shrinking the writable roots. The read
+    /// carve uses the same `carve` primitive, rooted at `/`.
+    #[test]
+    fn compiler_is_monotone_under_restriction() {
+        let tmp = std::env::temp_dir().join(format!("sbx-mono-{}", std::process::id()));
+        let root = tmp.join("work");
+        for d in ["a/sub/deep", "b", "c"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for f in ["top.txt", "a/f1.txt", "a/sub/f2.txt", "a/sub/deep/f3.txt", "b/f4.txt"] {
+            fs::write(root.join(f), b"x").unwrap();
+        }
+
+        // Candidate paths probed for the Allowed set — existing and absent.
+        let candidates: Vec<PathBuf> = [
+            "top.txt", "a", "a/f1.txt", "a/sub", "a/sub/f2.txt", "a/sub/deep",
+            "a/sub/deep/f3.txt", "b", "b/f4.txt", "c",
+            "a/new.txt", "a/sub/new", "a/sub/deep/new.txt", "c/new", // absent
+        ]
+        .iter()
+        .map(|p| root.join(p))
+        .collect();
+
+        // Deny universe: a mix of dirs and a file inside the tree.
+        let universe: Vec<PathBuf> = ["a", "a/sub", "a/sub/deep", "b", "a/f1.txt"]
+            .iter()
+            .map(|p| root.join(p))
+            .collect();
+
+        let write_allow = |denied: &[PathBuf]| -> Vec<PathBuf> {
+            let mut out = Vec::new();
+            carve(&root, denied, &mut out);
+            out
+        };
+        let allowed_set = |allow: &[PathBuf]| -> Vec<bool> {
+            candidates.iter().map(|x| granted(allow, x)).collect()
+        };
+
+        // (a) Adding ANY single deny to ANY base deny-set only shrinks Allowed.
+        // Single-element monotonicity implies it for arbitrary added sets.
+        let n = universe.len();
+        for mask in 0u32..(1 << n) {
+            let base: Vec<PathBuf> =
+                (0..n).filter(|i| mask & (1 << i) != 0).map(|i| universe[i].clone()).collect();
+            let base_allowed = allowed_set(&write_allow(&base));
+            for extra in &universe {
+                if base.iter().any(|d| d == extra) {
+                    continue;
+                }
+                let mut more = base.clone();
+                more.push(extra.clone());
+                let more_allowed = allowed_set(&write_allow(&more));
+                for (i, x) in candidates.iter().enumerate() {
+                    assert!(
+                        !(more_allowed[i] && !base_allowed[i]),
+                        "non-monotone: adding deny {} made {} writable (base denies {:?})",
+                        extra.display(), x.display(), base
+                    );
+                }
+            }
+        }
+
+        // (b) Shrinking the writable roots only shrinks Allowed.
+        let p_big = Policy { writable_roots: vec![root.join("a"), root.join("b")], ..Default::default() };
+        let p_small = Policy { writable_roots: vec![root.join("a")], ..Default::default() };
+        let big = p_big.linux_write_allowlist();
+        let small = p_small.linux_write_allowlist();
+        for x in &candidates {
+            assert!(
+                !(granted(&small, x) && !granted(&big, x)),
+                "non-monotone: dropping a writable root made {} writable",
+                x.display()
+            );
+        }
+
+        fs::remove_dir_all(&tmp).ok();
+    }
 }
