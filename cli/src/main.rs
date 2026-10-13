@@ -14,6 +14,7 @@
 //!   --timeout SECS         kill the process group after SECS (exit 124)
 //!   --max-mem BYTES        address-space limit
 //!   --max-procs N          process limit
+//!   --max-cpu SECS         total CPU-seconds limit (RLIMIT_CPU; root-proof)
 //!   --log FILE             write the effect log (JSON Lines) here (Linux)
 //!
 //! Exit code is the command's (128+signal on signal death, 124 on timeout).
@@ -50,6 +51,8 @@ struct PolicyFile {
     max_memory_bytes: Option<u64>,
     #[serde(default)]
     max_processes: Option<u64>,
+    #[serde(default)]
+    max_cpu_secs: Option<u64>,
 }
 
 /// Expand a leading `~` to $HOME so policy files are portable.
@@ -121,6 +124,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
         p.timeout = pf.timeout_secs.map(Duration::from_secs);
         p.max_memory_bytes = pf.max_memory_bytes;
         p.max_processes = pf.max_processes;
+        p.max_cpu_secs = pf.max_cpu_secs;
     }
 
     let mut log: Option<String> = None;
@@ -139,6 +143,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
             "--timeout" => p.timeout = Some(Duration::from_secs(val().parse().unwrap_or(0))),
             "--max-mem" => p.max_memory_bytes = Some(val().parse().unwrap_or(0)),
             "--max-procs" => p.max_processes = Some(val().parse().unwrap_or(0)),
+            "--max-cpu" => p.max_cpu_secs = Some(val().parse().unwrap_or(0)),
             "--isolate-proc" => p.isolate_process_info = true,
             "--log" => log = Some(val()),
             other => { eprintln!("unknown option: {other}"); exit(2); }
@@ -159,6 +164,8 @@ fn explain(p: &Policy) {
     println!("isolate /proc (env reads): {}", p.isolate_process_info);
     if let Some(t) = p.timeout { println!("timeout: {}s", t.as_secs()); }
     if let Some(m) = p.max_memory_bytes { println!("max memory: {m} bytes"); }
+    if let Some(n) = p.max_processes { println!("max processes: {n}"); }
+    if let Some(c) = p.max_cpu_secs { println!("max cpu: {c}s (RLIMIT_CPU)"); }
     println!("\nwritable roots:");
     for r in &p.writable_roots { println!("  + {}", r.display()); }
     println!("\nread-denied (secrets):");
