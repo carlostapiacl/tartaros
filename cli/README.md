@@ -19,7 +19,8 @@ seisin-sandbox run [options] -- <command> [args...]
 | `--deny-unix` | deny AF_UNIX sockets (Linux, seccomp) |
 | `--materialize` | pre-create absent trust-handoff placeholders (Linux) |
 | `--timeout SECS` | kill the process group after SECS (exit 124) |
-| `--max-mem BYTES` / `--max-procs N` | resource limits |
+| `--max-mem BYTES` | address-space limit (`RLIMIT_AS`; enforced for all uids) |
+| `--max-procs N` | process limit (`RLIMIT_NPROC`; **best-effort — root/CAP_SYS_RESOURCE bypasses it**; for a guaranteed PID cap use cgroups v2, planned) |
 | `--isolate-proc` | exclude /proc from reads (Linux) |
 | `--log FILE` | write the effect log (JSON Lines) of the run (both OS) |
 | `--config FILE` | load a TOML policy file (flags override it); `~` expands to $HOME |

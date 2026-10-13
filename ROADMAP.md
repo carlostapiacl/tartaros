@@ -218,3 +218,11 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [ ] BLOCKED: Actions returns startup_failure on this account's private repos
       (account-level issue since 2026-10-12, not the YAML). Verify green once cleared,
       or mirror to a runner that works.
+
+## Resource limits — measured finding (2026-10-13)
+- `--max-mem` (RLIMIT_AS): enforced (verified — allocation past the cap fails).
+- `--max-procs` (RLIMIT_NPROC): **best-effort only.** Measured on the Linux test host: running as
+  root it did NOT contain a 150-fork storm — root/CAP_SYS_RESOURCE bypasses
+  RLIMIT_NPROC. Confirms the review: setrlimit is insufficient for multi-tenant.
+- [ ] **cgroups v2 (`pids.max`, `memory.max`)** for a guaranteed per-sandbox cap
+      regardless of uid/caps — the real multi-tenant fix. (next)
