@@ -151,17 +151,24 @@ fn main() {
 
     println!("seisin-security-bench · backend={OS}\n");
     let mut outcomes = Vec::new();
+    let mut infra_errors = 0usize; // invalid/unreadable contracts
+    let mut skipped = 0usize;      // not for this OS
     for f in &files {
-        let text = std::fs::read_to_string(f).unwrap();
+        let text = match std::fs::read_to_string(f) {
+            Ok(t) => t,
+            Err(e) => { println!("  !! {}: read error: {e}", f.display()); infra_errors += 1; continue; }
+        };
         let c: Contract = match toml::from_str(&text) {
             Ok(c) => c,
             Err(e) => {
-                println!("  !! {}: parse error: {e}", f.display());
+                println!("  !! {}: parse error (INFRA_ERROR): {e}", f.display());
+                infra_errors += 1;
                 continue;
             }
         };
         if !c.os.is_empty() && !c.os.iter().any(|o| o == OS) {
-            println!("  -- {} (skip: not for {OS})", c.id);
+            println!("  -- {} (SKIPPED: not for {OS})", c.id);
+            skipped += 1;
             continue;
         }
         outcomes.push(run_scenario(c));
@@ -180,10 +187,12 @@ fn main() {
     let broke = outcomes.iter().filter(|o| o.control_broke).count();
     let crit_viol = outcomes.iter().filter(|o| o.violation && o.severity == "critical").count();
     println!("\n== scorecard ==");
-    println!("  scenarios:               {total}");
-    println!("  passed:                  {passed}/{total}");
-    println!("  security violations:     {violations}  (critical: {crit_viol})  [target 0]");
-    println!("  legitimate ops broken:   {broke}  [target 0]");
+    println!("  scenarios run:           {total}");
+    println!("  PASS:                    {passed}/{total}");
+    println!("  VIOLATION:               {violations}  (critical: {crit_viol})  [target 0]");
+    println!("  CONTROL_BROKE:           {broke}  [target 0]");
+    println!("  INFRA_ERROR:             {infra_errors}  [target 0]");
+    println!("  SKIPPED (other OS):      {skipped}");
 
     // write a JSON report
     let _ = std::fs::create_dir_all("reports");
@@ -200,9 +209,15 @@ fn main() {
     let _ = std::fs::write("reports/last.json", j);
     println!("\nreport: reports/last.json");
 
-    if crit_viol > 0 {
+    // CI gate: fail on ANY violation, broken control, or infra error — not just
+    // critical violations (review P1). A green run means every scenario actually
+    // executed and passed.
+    let _ = crit_viol;
+    if violations > 0 || broke > 0 || infra_errors > 0 {
+        eprintln!("\nFAIL: {violations} violation(s), {broke} broken control(s), {infra_errors} infra error(s)");
         std::process::exit(1);
     }
+    println!("\nOK: all {total} scenarios passed ({skipped} skipped for other OS)");
 }
 
 fn run_scenario(c: Contract) -> Outcome {

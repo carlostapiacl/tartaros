@@ -27,6 +27,8 @@ use seisin_sandbox_core::{Collector, EffectSink};
 use std::process::Child;
 use std::time::Duration;
 
+/// NOTE: this does NOT supervise (no timeout/limits). For an enforced run with
+/// observation, use a backend `run_observed` (same supervisor as `run`).
 /// Drive a set of collectors while a child runs: poll them on `interval` until
 /// the child exits, then poll once more to catch late effects. Returns the
 /// child's exit code (128 + signal when killed by a signal).

@@ -63,3 +63,14 @@ Prints the role, network/ports, writable roots, read-denied secrets, the
 trust-handoff protected set expanded to any depth, and the generated Seatbelt
 profile (macOS) or Landlock allow-lists (Linux). "Política verificable": a
 security team reviews exactly what a profile grants before it ships.
+
+## Observed audit vs guaranteed enforcement
+
+Enforcement (confinement, resource limits, timeout) is **guaranteed** and identical
+whether `--log` is on or off — both paths use the same supervisor.
+
+The effect log is **observed** by sampling (`/proc` on Linux, `lsof`/`ps` on macOS):
+a very short-lived connection or file read may end between samples and not appear.
+It is first-hand and trustworthy, but it is not a complete kernel-event trace — for
+that, point a kernel-event collector (eBPF/ES) at the process and feed its output to
+the same effect-log format. The sandbox's *guarantees* never depend on the log.

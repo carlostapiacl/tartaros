@@ -193,3 +193,16 @@ Build only where measurement shows no existing backend can enforce the policy.
       process (ps) — `--log` fully at parity on both OS. Verified on macOS: secret
       read of ~/.ssh and an out-of-territory connect both captured.
 - [ ] per-role profile discovery; OpenShell comparison; cgroups v2
+
+## Security findings (external review #3, 2026-10-13)
+- [x] **P0 unified supervisor**: `--log` now runs through `run_observed`, which uses
+      the SAME supervisor (timeout, limits, process-group reaping) as `run`. Enabling
+      the log never changes the guarantees. Verified: timeout 2s -> exit 124 with AND
+      without --log, on macOS and Linux.
+- [x] **P1 bench CI gate**: fails on ANY violation, broken control, or INFRA_ERROR
+      (invalid/unreadable contract), not just critical violations. Reports PASS/
+      VIOLATION/CONTROL_BROKE/INFRA_ERROR/SKIPPED. Exit 0 only if all ran and passed.
+- [x] **P1 macOS fd-close**: closes fds up to the real RLIMIT_NOFILE (not a fixed
+      1024 cap), so high-numbered inherited fds are closed too.
+- [x] **P1 observed vs guaranteed**: documented that the effect log is sampled
+      (may miss short-lived events) while enforcement is guaranteed.

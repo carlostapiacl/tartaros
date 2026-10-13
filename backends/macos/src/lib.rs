@@ -9,7 +9,10 @@
 //!      EVERY protected path at any depth, via `Policy::trust_handoff_rules`;
 //!   2. we never emit a `kern.proc.*` sysctl allow.
 
-use seisin_sandbox_core::{Access, Backend, FsRule, Network, Policy, PolicyError, RunError, RunOutcome};
+use seisin_sandbox_core::{
+    Access, Backend, Collector, EffectSink, FsRule, Network, Policy, PolicyError, RunError,
+    RunOutcome,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -39,8 +42,9 @@ impl Backend for SeatbeltBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
+        use seisin_sandbox_core::VecSink;
         let child = self.spawn(policy, command)?;
-        Ok(RunOutcome { exit_code: supervise(child, policy.timeout) })
+        Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut [], &mut VecSink::default()) })
     }
 }
 
@@ -68,13 +72,39 @@ impl SeatbeltBackend {
                 set_rlimit(libc::RLIMIT_AS, max_memory)?;
                 set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
                 set_rlimit(libc::RLIMIT_CPU, max_cpu)?;
-                for fd in 3..1024 {
+                // Close every inherited fd >= 3, not a fixed 1024 cap (review P1):
+                // use the current fd limit so high-numbered fds are closed too.
+                let mut hi: libc::rlimit = std::mem::zeroed();
+                let max_fd = if libc::getrlimit(libc::RLIMIT_NOFILE, &mut hi) == 0 && hi.rlim_cur != libc::RLIM_INFINITY {
+                    (hi.rlim_cur as i32).min(1 << 20)
+                } else {
+                    1 << 16
+                };
+                for fd in 3..max_fd {
                     libc::close(fd);
                 }
                 Ok(())
             });
         }
         cmd.spawn().map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })
+    }
+
+    /// Run confined AND observe with collectors, under the SAME supervisor as
+    /// `run` (timeout, limits, reaping). Observation never changes the guarantees
+    /// (external review P0).
+    pub fn run_observed<F>(
+        &self,
+        policy: &Policy,
+        command: &[String],
+        sink: &mut dyn EffectSink,
+        make_collectors: F,
+    ) -> Result<RunOutcome, RunError>
+    where
+        F: FnOnce(u32) -> Vec<Box<dyn Collector>>,
+    {
+        let child = self.spawn(policy, command)?;
+        let mut cols = make_collectors(child.id());
+        Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut cols, sink) })
     }
 }
 
@@ -110,14 +140,25 @@ fn set_rlimit(resource: libc::c_int, limit: Option<u64>) -> std::io::Result<()> 
 /// Supervise the confined child: enforce the wall-clock timeout, then reap the
 /// whole process group so no descendant is left behind.
 #[cfg(unix)]
-fn supervise(mut child: std::process::Child, timeout: Option<std::time::Duration>) -> i32 {
+fn supervise(
+    mut child: std::process::Child,
+    timeout: Option<std::time::Duration>,
+    collectors: &mut [Box<dyn Collector>],
+    sink: &mut dyn EffectSink,
+) -> i32 {
     use std::time::{Duration, Instant};
     let pid = child.id() as i32;
     let start = Instant::now();
     let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
     loop {
+        for c in collectors.iter_mut() {
+            c.poll(sink);
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
+                for c in collectors.iter_mut() {
+                    c.poll(sink);
+                }
                 kill_group(libc::SIGKILL);
                 return exit_code_of(status);
             }
