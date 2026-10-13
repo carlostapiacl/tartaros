@@ -82,12 +82,71 @@ fn main() {
     match args.first().map(|s| s.as_str()) {
         Some("run") => cmd_run(&args[1..]),
         Some("explain") => cmd_explain(&args[1..]),
-        _ => {
-            eprintln!("usage:\n  tartaros run [options] -- <command> [args...]\n  tartaros explain [options]   # print what a policy grants, without running");
+        Some("version" | "--version" | "-V") => {
+            println!("tartaros {} ({})", env!("CARGO_PKG_VERSION"), backend_os());
+            exit(0);
+        }
+        Some("help" | "--help" | "-h") | None => {
+            print!("{HELP}");
+            exit(if args.first().is_none() { 2 } else { 0 });
+        }
+        Some(other) => {
+            eprintln!("tartaros: unknown command `{other}`\n");
+            print!("{HELP}");
             exit(2);
         }
     }
 }
+
+fn backend_os() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "linux/landlock+seccomp+cgroup+ns"
+    } else if cfg!(target_os = "macos") {
+        "macos/seatbelt"
+    } else {
+        "unsupported"
+    }
+}
+
+const HELP: &str = "\
+TartarOS — secure agent runtime. NOTHING ESCAPES THE BOUNDARY.
+
+USAGE:
+  tartaros run [options] -- <command> [args...]   run a command confined by a policy
+  tartaros explain [options]                      print what a policy grants, without running
+  tartaros version                                print version and backend
+  tartaros help                                   this help
+
+PROFILE (preset threat model; flags still extend it):
+  --profile local-agent|hostile-code|multi-tenant
+
+POLICY:
+  --config FILE          load a TOML policy (flags override it)
+  --role NAME            label for the effect log
+  --write DIR            a writable root (repeatable)
+  --read-deny DIR        deny reads of this path, e.g. a secret dir (repeatable)
+  --port N               allow loopback TCP to this port (repeatable)
+  --net                  allow all network (default: denied)
+
+HARDENING (Linux; the hostile/multi-tenant profiles set these):
+  --isolate-pids         private PID+mount namespace (hide host processes)
+  --isolate-net          empty network namespace (no egress, any protocol)
+  --seccomp-strict       deny dangerous syscalls (shrink kernel attack surface)
+  --deny-unix            deny AF_UNIX sockets
+  --isolate-proc         deny reads of other processes' /proc
+  --materialize          pre-create absent trust-handoff placeholders
+
+LIMITS:
+  --timeout SECS         kill the run after SECS (exit 124)
+  --max-mem BYTES        address-space / cgroup memory cap
+  --max-procs N          process cap (cgroup pids.max; root-proof)
+  --max-cpu SECS         total CPU-seconds cap
+
+OBSERVABILITY:
+  --log FILE             write the first-hand effect log (JSON Lines)
+
+Exit code is the command's (128+signal on signal death, 124 on timeout).
+";
 
 fn cmd_run(rest: &[String]) -> ! {
     let split = rest.iter().position(|a| a == "--");
