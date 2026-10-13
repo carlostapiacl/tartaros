@@ -28,13 +28,25 @@ Codex `0.162.1`, nono `0.79`, and `@anthropic-ai/sandbox-runtime` (measured
   writable and its ancestor cannot be renamed, under Landlock, via a carved
   allow-list. nono cannot even express this policy (it refuses to start);
   measured on the Linux test host (kernel 6.8).
-- **No cross-process environment disclosure (Linux)** — a confined process
-  cannot read another process's environment, via the PID namespace.
-- **Clean process lifecycle** — correct exit status on signal death, a single
-  SIGINT, descendants reaped.
+- **Clean process lifecycle** — correct exit status on signal death.
 
 We do **not** claim "more secure than X in every scenario." The claim is the
 narrow, measured one above.
+
+### What is done, and what is not
+
+seisin-sandbox today is **the filesystem write / trust-handoff core** — the
+differentiator — on macOS and Linux. The other dimensions a complete sandbox
+needs are not built yet:
+
+| dimension | status |
+|---|---|
+| FS writes + trust-handoff (nested `.git`, ancestor rename) | **done, measured** (both OS) |
+| FS reads of on-disk secrets (`~/.ssh`, `~/.aws`, `.env`) | **not done** — reads are allowed everywhere so tools run |
+| Network confinement | macOS: default-denied by the profile (untested). **Linux: not restricted yet** |
+| Secret broker (capability instead of raw token) | **not started** |
+| Cross-process env read (another process's secrets) | macOS: platform limit (see below). **Linux: not closed yet** — we grant broad read, so `/proc/<pid>/environ` is readable; closing it means restricting reads or a PID namespace |
+| Process lifecycle beyond exit code (timeouts, reaping) | **minimal** |
 
 ### Honest limits
 
