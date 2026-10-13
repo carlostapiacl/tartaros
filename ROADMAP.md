@@ -118,8 +118,11 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [~] **P1 absent trust-handoff paths on Linux** (inode limit): deferred. Real
       fix needs dynamic monitoring (fanotify/FUSE); no portable static fix.
       macOS/Seatbelt already covers absent paths. Documented limitation.
-- [~] **P1 /proc isolation / cross-process env read on Linux**: deferred. Proper
-      fix is a PID namespace, but `unshare --user --pid` is **Operation not
-      permitted** under Docker's default seccomp/userns (measured on the Linux test host) — not
-      portable. Mitigation: run each agent under its own UID (kernel's own /proc
-      permission blocks cross-UID environ reads), same as the macOS platform limit.
+- [x] **P1 /proc isolation / cross-process env read on Linux — MITIGATED.**
+      Primary: the kernel already blocks it — with Yama `ptrace_scope=1` (Ubuntu
+      default, confirmed on the Linux test host) an unrelated process's `/proc/<pid>/environ` is
+      not readable (measured: leak blocked even with no sandbox rule). Defense-in-
+      depth: `isolate_process_info` excludes `/proc` from the read grant (covers
+      `ptrace_scope=0`); measured that sh/cat/ls/curl/git/python3 still run and the
+      full suite (smoke/net/readdeny/P0) stays green. PID namespace stays out
+      (`unshare` not portable under Docker).

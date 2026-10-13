@@ -133,6 +133,15 @@ impl Policy {
     /// write carve — only existing paths are carved.
     pub fn linux_read_allowlist(&self) -> Vec<PathBuf> {
         let mut denied: Vec<PathBuf> = self.read_denies.clone();
+        // Defense-in-depth for cross-process env reads (P1-3): exclude /proc from
+        // the read grant so `/proc/<pid>/environ` of another process is not
+        // readable. NOTE: the primary protection is the kernel — with Yama
+        // `ptrace_scope >= 1` (Ubuntu default) an unrelated process's environ is
+        // already blocked; this also covers `ptrace_scope = 0`. Measured: ordinary
+        // tools (sh, cat, ls, curl, git, python3) still run with /proc excluded.
+        if self.isolate_process_info {
+            denied.push(PathBuf::from("/proc"));
+        }
         denied.retain(|p| p.exists());
         if denied.is_empty() {
             return vec![PathBuf::from("/")];
