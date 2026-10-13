@@ -4,6 +4,29 @@
 
 use tartaros_core::Policy;
 
+/// RAII owner of a per-run cgroup: tears it down (`cgroup.kill` + rmdir) on drop,
+/// so the cgroup is cleaned up on EVERY exit path — including an early return
+/// when `confined_command` or `spawn` fails after the cgroup was created (which
+/// used to leak the directory).
+pub(crate) struct Cgroup {
+    dir: String,
+}
+
+impl Cgroup {
+    pub(crate) fn dir(&self) -> &str {
+        &self.dir
+    }
+    pub(crate) fn procs_path(&self) -> String {
+        format!("{}/cgroup.procs", self.dir)
+    }
+}
+
+impl Drop for Cgroup {
+    fn drop(&mut self) {
+        destroy_cgroup(&self.dir);
+    }
+}
+
 /// Create a cgroup v2 with the policy's pid/memory caps, if the cgroup fs is
 /// writable (needs a delegated/privileged cgroup). Returns the cgroup dir, whose
 /// `cgroup.procs` the child writes its pid into. Guaranteed regardless of uid/caps
@@ -25,7 +48,7 @@ fn warn_cgroup_degraded(policy: &Policy) {
     }
 }
 
-pub(crate) fn create_cgroup(policy: &Policy) -> Option<String> {
+pub(crate) fn create_cgroup(policy: &Policy) -> Option<Cgroup> {
     // Always build a per-run cgroup when the cgroup fs is usable — not only to
     // enforce pid/memory caps but for reliable teardown. On exit/timeout the
     // caller runs `cgroup.kill`, which reaps EVERY member, including a process
@@ -83,7 +106,7 @@ pub(crate) fn create_cgroup(policy: &Policy) -> Option<String> {
         warn_cgroup_degraded(policy);
         return None;
     }
-    Some(dir)
+    Some(Cgroup { dir })
 }
 
 /// Fork a child that does nothing but park briefly, move it into `dir`, and check

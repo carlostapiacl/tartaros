@@ -104,13 +104,14 @@ impl LandlockBackend {
         if policy.strict && cg.is_none() && (policy.max_processes.is_some() || policy.max_memory_bytes.is_some()) {
             return Err(RunError { reason: "strict mode: requested resource caps cannot be guaranteed on this host (no usable cgroup v2); refusing to run".into() });
         }
-        let procs = cg.as_ref().map(|d| format!("{d}/cgroup.procs"));
+        let procs = cg.as_ref().map(|c| c.procs_path());
+        // If confined_command or spawn fails here, `cg` drops and tears down the
+        // cgroup — no explicit cleanup, no leak on the error paths.
         let mut cmd = confined_command(policy, command, procs)?;
         let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
         let mut cols = make_collectors(child.id());
-        let code = supervise(child, policy.timeout, cg.as_deref(), &mut cols, sink);
-        if let Some(d) = cg { cgroup::destroy_cgroup(&d); }
-        Ok(RunOutcome { exit_code: code })
+        let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut cols, sink);
+        Ok(RunOutcome { exit_code: code }) // cg drops here -> cgroup torn down
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -140,11 +141,11 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
     if policy.strict && cg.is_none() && (policy.max_processes.is_some() || policy.max_memory_bytes.is_some()) {
         return Err(RunError { reason: "strict mode: requested resource caps cannot be guaranteed on this host (no usable cgroup v2); refusing to run".into() });
     }
-    let procs = cg.as_ref().map(|d| format!("{d}/cgroup.procs"));
+    let procs = cg.as_ref().map(|c| c.procs_path());
+    // `cg` drops on every exit path (incl. the `?` below) -> cgroup torn down.
     let mut cmd = confined_command(policy, command, procs)?;
     let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
-    let code = supervise(child, policy.timeout, cg.as_deref(), &mut [], &mut VecSink::default());
-    if let Some(d) = cg { cgroup::destroy_cgroup(&d); }
+    let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut [], &mut VecSink::default());
     Ok(RunOutcome { exit_code: code })
 }
 
@@ -370,7 +371,7 @@ fn confined_command(
             // Close inherited non-stdio fds just before exec (defense-in-depth):
             // an fd opened by the parent bypasses path-based confinement because
             // the open already happened. Done last so the ruleset fd was still live.
-            namespace::close_inherited_fds();
+            namespace::cloexec_inherited_fds();
             Ok(())
         });
     }
