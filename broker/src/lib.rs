@@ -266,6 +266,16 @@ impl Broker {
             return Ok(());
         }
 
+        // CONNECT tunnel (HTTPS egress): establish a blind TCP tunnel to an
+        // allow-listed authority WITHOUT terminating TLS. This is what makes
+        // domain-scoped egress work for real agents — git-over-https, fetch, pip,
+        // npm — which all speak HTTPS through a proxy via CONNECT. The broker
+        // never sees plaintext; it mediates only the destination (allow-list +
+        // SSRF), which is exactly the egress boundary we want.
+        if method.eq_ignore_ascii_case("CONNECT") {
+            return self.handle_connect(abs_uri, reader, client, sink);
+        }
+
         // Capability mode: origin-form request (/prefix/…) to an HTTPS upstream.
         if abs_uri.starts_with('/') {
             return self.handle_capability(method, abs_uri, &mut client, sink);
@@ -392,6 +402,126 @@ impl Broker {
             let _ = client.flush();
         }
         client.flush()?;
+        Ok(())
+    }
+
+    /// Resolve `host:port` and return the first address that passes the SSRF
+    /// policy (non-internal, unless `allow_internal`). None = no acceptable
+    /// address (unresolvable, or every address is internal and internal is off).
+    /// Connecting to the resolved address (not the name) closes the
+    /// resolve-then-reresolve rebinding window.
+    fn resolve_external(&self, host: &str, port: u16) -> Option<std::net::SocketAddr> {
+        use std::net::ToSocketAddrs;
+        let addrs: Vec<std::net::SocketAddr> =
+            (host, port).to_socket_addrs().map(|i| i.collect()).unwrap_or_default();
+        addrs
+            .into_iter()
+            .find(|a| self.allow_internal || !egress::is_internal_ip(&a.ip()))
+    }
+
+    /// Handle a CONNECT tunnel: `CONNECT host:port`. Mediate the destination
+    /// (allow-list + SSRF), then, if permitted, reply 200 and copy bytes blindly
+    /// in both directions until either side closes. TLS is tunneled end-to-end;
+    /// the broker never terminates it, so no CA and no plaintext — only the
+    /// destination is policed. The broker is per-run and dies with it, so an idle
+    /// tunnel is bounded by the run's lifetime (no per-read timeout, which would
+    /// otherwise break a legitimately long or quiet transfer).
+    fn handle_connect(
+        &self,
+        authority: &str,
+        client_reader: BufReader<TcpStream>,
+        mut client: TcpStream,
+        sink: &mut dyn EffectSink,
+    ) -> std::io::Result<()> {
+        let refuse = |c: &mut TcpStream, status: &str, body: &[u8]| -> std::io::Result<()> {
+            let _ = c.write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+            let _ = c.write_all(body);
+            Ok(())
+        };
+
+        // Parse host:port (rsplit so IPv6 literals like [::1]:443 keep their colons).
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) => {
+                let h = h.trim_start_matches('[').trim_end_matches(']');
+                match p.parse::<u16>() {
+                    Ok(p) => (h.to_string(), p),
+                    Err(_) => return refuse(&mut client, "400 Bad Request", b"bad authority"),
+                }
+            }
+            None => return refuse(&mut client, "400 Bad Request", b"bad authority"),
+        };
+
+        // Egress allow-list — refuse before any DNS or connection.
+        if !self.host_allowed(&host) {
+            sink.emit(&EffectEvent::now(
+                self.role.clone(),
+                Axis::Network,
+                "broker-connect-denied",
+                format!("{host}:{port}"),
+                Direction::OutsideTerritory,
+                Outcome::Denied,
+                "broker",
+            ));
+            return refuse(&mut client, "403 Forbidden", b"host not allowed");
+        }
+
+        // SSRF / DNS-rebinding defense: refuse internal destinations.
+        let target = match self.resolve_external(&host, port) {
+            Some(a) => a,
+            None => {
+                sink.emit(&EffectEvent::now(
+                    self.role.clone(),
+                    Axis::Network,
+                    "broker-connect-internal-denied",
+                    format!("{host}:{port}"),
+                    Direction::OutsideTerritory,
+                    Outcome::Denied,
+                    "broker",
+                ));
+                return refuse(&mut client, "403 Forbidden", b"internal destination blocked");
+            }
+        };
+
+        // Connect upstream (bounded connect; no per-read timeout on the tunnel).
+        let upstream = match TcpStream::connect_timeout(&target, UPSTREAM_TIMEOUT) {
+            Ok(s) => s,
+            Err(_) => return refuse(&mut client, "502 Bad Gateway", b"upstream connect failed"),
+        };
+
+        sink.emit(&EffectEvent::now(
+            self.role.clone(),
+            Axis::Network,
+            "broker-connect",
+            format!("{host}:{port}"),
+            Direction::OutsideTerritory,
+            Outcome::Allowed,
+            "broker",
+        ));
+        client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
+        client.flush()?;
+
+        // Blind bidirectional copy. One direction runs on a thread; the other on
+        // this one. Each closes its write half on EOF so the peer sees the close.
+        // client_reader carries any bytes BufReader already read past the headers
+        // (a pipelined client), so we copy FROM it, not from a fresh clone.
+        let upstream_w = upstream.try_clone()?;
+        let mut upstream_r = upstream;
+        let mut client_w = client.try_clone()?;
+        let t = std::thread::spawn(move || {
+            let mut cr = client_reader;
+            let mut uw = upstream_w;
+            let _ = std::io::copy(&mut cr, &mut uw);
+            let _ = uw.shutdown(std::net::Shutdown::Write);
+        });
+        let _ = std::io::copy(&mut upstream_r, &mut client_w);
+        let _ = client_w.shutdown(std::net::Shutdown::Write);
+        let _ = t.join();
         Ok(())
     }
 }
@@ -656,6 +786,69 @@ mod tests {
         assert!(w.host_allowed("uploads.api.github.com"));
         assert!(!w.host_allowed("github.com.evil.com"));
         assert!(!w.host_allowed("evilgithub.com"));
+    }
+
+    #[test]
+    fn live_connect_tunnels_to_allowed_host() {
+        // A raw TCP "upstream" that echoes one line — stands in for a TLS server;
+        // CONNECT tunnels bytes blindly, so the payload need not be TLS.
+        let up = TcpListener::bind("127.0.0.1:0").unwrap();
+        let up_port = up.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in up.incoming().flatten() {
+                let mut s = s;
+                let mut buf = [0u8; 16];
+                if let Ok(n) = s.read(&mut buf) {
+                    let _ = s.write_all(&buf[..n]); // echo
+                }
+            }
+        });
+        // allow_internal so the broker will tunnel to the loopback test upstream,
+        // and allow-list the loopback host it lives on.
+        let b = Broker::new("qa", vec![])
+            .insecure_no_auth()
+            .with_allow_internal(true)
+            .with_allowed_hosts(vec!["127.0.0.1".into()]);
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c.write_all(format!("CONNECT 127.0.0.1:{up_port} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes())
+            .unwrap();
+        // Read the 200 status line.
+        let mut status = [0u8; 12];
+        c.read_exact(&mut status).unwrap();
+        assert_eq!(&status, b"HTTP/1.1 200", "CONNECT to allowed host must be established");
+        // Drain the rest of the status line / blank line, then tunnel a payload.
+        let mut hdr = [0u8; 64];
+        let _ = c.read(&mut hdr);
+        c.write_all(b"ping").unwrap();
+        let mut echo = [0u8; 4];
+        c.read_exact(&mut echo).unwrap();
+        assert_eq!(&echo, b"ping", "tunnel must carry bytes end-to-end");
+    }
+
+    #[test]
+    fn live_connect_refuses_disallowed_host() {
+        let b = Broker::new("qa", vec![])
+            .insecure_no_auth()
+            .with_allowed_hosts(vec!["github.com".into()]);
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        c.write_all(b"CONNECT evil.com:443 HTTP/1.1\r\nHost: evil.com\r\n\r\n").unwrap();
+        let mut resp = String::new();
+        let _ = c.read_to_string(&mut resp);
+        assert!(resp.contains("403"), "CONNECT to a host off the allow-list must be 403, got: {resp:?}");
     }
 
     #[test]
