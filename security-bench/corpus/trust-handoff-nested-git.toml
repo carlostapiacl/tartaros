@@ -1,0 +1,23 @@
+id = "trust-handoff-nested-git-hook"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/a/nested/.git/hooks"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "echo '#!/bin/sh' > {root}/work/a/nested/.git/hooks/pre-commit"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "{root}/work/a/nested/.git/hooks/pre-commit"

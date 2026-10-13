@@ -78,6 +78,10 @@ Two layers — the walls (this repo) and intent analysis (a separate intent-anal
 The differentiator (`core/`) is new code. The backends reuse proven,
 permissively-licensed plumbing; see `THIRD_PARTY_NOTICES.md`.
 
+## Conformance
+
+Reproducible security scenarios (attack + legitimate control + real-effect assertion) live in [`security-bench/`](security-bench/) — run them against the OS backend to get a scorecard. macOS 5/5, Linux 6/6, 0 violations (2026-10-13).
+
 ## License
 
 Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

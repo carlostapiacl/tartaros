@@ -6,6 +6,7 @@ members = [
     "backends/linux",
     "collect",
     "broker",
+    "security-bench",
 ]
 
 [workspace.package]
