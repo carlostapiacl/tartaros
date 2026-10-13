@@ -22,3 +22,4 @@ seisin-sandbox-collect = { path = "../collect" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 seisin-sandbox-macos = { path = "../backends/macos" }
+seisin-sandbox-collect = { path = "../collect" }

@@ -21,7 +21,7 @@ seisin-sandbox run [options] -- <command> [args...]
 | `--timeout SECS` | kill the process group after SECS (exit 124) |
 | `--max-mem BYTES` / `--max-procs N` | resource limits |
 | `--isolate-proc` | exclude /proc from reads (Linux) |
-| `--log FILE` | write the effect log (JSON Lines) of the run (Linux) |
+| `--log FILE` | write the effect log (JSON Lines) of the run (both OS) |
 | `--config FILE` | load a TOML policy file (flags override it); `~` expands to $HOME |
 
 Example — run an agent over a repo, deny its SSH keys, log what it attempts:

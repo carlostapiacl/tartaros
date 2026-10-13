@@ -189,4 +189,7 @@ Build only where measurement shows no existing backend can enforce the policy.
       read-denies, trust-handoff set at any depth, the Seatbelt profile / Landlock
       allow-lists) without running — auditable "política verificable". Verified
       on macOS and Linux.
-- [ ] per-role profile discovery; macOS collectors for --log
+- [x] **macOS effect-log collectors**: SecretCollector + ProcessCollector via
+      lsof/ps (sampling) — `--log` now works on macOS too (secret read of ~/.ssh
+      captured). Network collector on macOS (lsof -i) still TBD.
+- [ ] per-role profile discovery; macOS network collector

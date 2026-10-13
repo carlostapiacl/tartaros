@@ -219,12 +219,33 @@ fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
 
 #[cfg(target_os = "macos")]
 fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
-    if log.is_some() {
-        eprintln!("seisin-sandbox: --log (effect collectors) is Linux-only for now");
-    }
-    match seisin_sandbox_macos::SeatbeltBackend.run(policy, cmd) {
-        Ok(o) => o.exit_code,
-        Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); 1 }
+    use seisin_sandbox_collect::{observe_until_exit, ProcessCollector, SecretCollector};
+    use seisin_sandbox_core::{Collector, FilterSink, JsonlSink, RecordMode};
+    let be = seisin_sandbox_macos::SeatbeltBackend;
+    match log {
+        Some(path) => {
+            // macOS collectors sample via lsof/ps (secret + process; network TBD).
+            let mut child = match be.spawn(policy, cmd) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); return 1; }
+            };
+            let pid = child.id();
+            let mut collectors: Vec<Box<dyn Collector>> = vec![
+                Box::new(SecretCollector::for_policy(pid, policy)),
+                Box::new(ProcessCollector::for_policy(pid, policy)),
+            ];
+            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Ok(f) => {
+                    let mut sink = FilterSink::new(JsonlSink::new(f), RecordMode::Boundary);
+                    observe_until_exit(&mut child, &mut collectors, &mut sink, Duration::from_millis(120))
+                }
+                Err(e) => { eprintln!("seisin-sandbox: cannot open log {path}: {e}"); let _ = child.wait(); 1 }
+            }
+        }
+        None => match be.run(policy, cmd) {
+            Ok(o) => o.exit_code,
+            Err(e) => { eprintln!("seisin-sandbox: {}", e.reason); 1 }
+        },
     }
 }
 
