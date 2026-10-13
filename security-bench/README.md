@@ -21,16 +21,36 @@ macOS), skips scenarios whose `os` list excludes it, prints a scorecard, and
 writes `reports/last.json`. It exits non-zero if any **critical** scenario is a
 violation — drop it into CI.
 
-## Scorecard (measured 2026-10-13)
+The runner exits non-zero on any violation, broken control or infra error — a
+green run means every scenario actually executed and passed.
 
-| | macOS | Linux (the Linux test host) |
-|---|---|---|
-| scenarios | 11 | 13 |
-| passed | 11/11 | 13/13 |
-| security violations (critical) | 0 | 0 |
-| legitimate ops broken | 0 | 0 |
+## Mutation testing — a conformance that cannot fool itself
 
-Targets: violations 0, legitimate ops ≥ 99%.
+```
+cargo run -p tartaros-bench -- corpus --mutate
+```
+
+Passing scenarios prove attacks are blocked — but not that the *suite* would
+notice if a protection were removed. `--mutate` deliberately weakens the policy
+one protection at a time (`drop-read-denies`, `grant-network`,
+`drop-isolate-net`, `drop-isolate-pids`, `raise-proc-limit`, `raise-mem-limit`)
+and re-runs every scenario that relies on it. Removing a protection **must** make
+at least one attack succeed (flip to VIOLATION); a mutation that flips nothing is
+a blind spot — the corpus never actually tested that enforcement — and the run
+exits non-zero. The mutations weaken the policy the runner passes, never the
+backend, so the real enforcement is exercised. Measured on the Linux test host: 0 blind spots.
+
+## Scorecard (measured 2026-10-13, the Linux test host Linux 6.8)
+
+| | Linux (the Linux test host) |
+|---|---|
+| scenarios | 18/18 pass |
+| security violations (critical) | 0 |
+| legitimate ops broken | 0 |
+| mutation blind spots | 0 |
+
+macOS runs the cross-platform subset. Targets: violations 0, blind spots 0,
+legitimate ops ≥ 99%.
 
 ## A contract
 
