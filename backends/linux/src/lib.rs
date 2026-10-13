@@ -19,6 +19,14 @@ use tartaros_core::{
     Backend, Collector, EffectSink, Policy, PolicyError, RunError, RunOutcome,
 };
 
+// Per-mechanism modules (linux-only), kept apart so each can be read and tested
+// on its own. The seccomp filters live here; cgroup/namespace/landlock helpers
+// remain inline in this file for now.
+#[cfg(target_os = "linux")]
+mod seccomp;
+#[cfg(target_os = "linux")]
+mod namespace;
+
 pub struct LandlockBackend;
 
 impl Backend for LandlockBackend {
@@ -316,7 +324,7 @@ fn confined_command(
             // lockdown (mounting /proc / bringing up loopback need CAP_SYS_ADMIN
             // and an unrestricted mount tree). Fails closed. See enter_namespaces.
             if isolate_pids || isolate_network {
-                enter_namespaces(isolate_pids, isolate_network)?;
+                namespace::enter_namespaces(isolate_pids, isolate_network)?;
             }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
             // SIGKILL of the supervisor that never runs destroy_cgroup.
@@ -329,19 +337,19 @@ fn confined_command(
             //     process; a grandchild the agent forked can be reparented to init
             //     and survive. The full guarantee needs the PID namespace (which
             //     the hostile-code / multi-tenant profiles enable by default).
-            set_pdeathsig_kill();
+            namespace::set_pdeathsig_kill();
             // Resource limits (P1-B) before dropping into the sandbox.
             set_rlimit(libc::RLIMIT_AS as libc::c_int, max_memory)?;
             set_rlimit(libc::RLIMIT_NPROC as libc::c_int, max_processes)?;
             set_rlimit(libc::RLIMIT_CPU as libc::c_int, max_cpu)?;
             // Deny AF_UNIX sockets (IPC-1) via seccomp, if the policy asked.
             if deny_unix {
-                apply_deny_af_unix()?;
+                seccomp::deny_af_unix()?;
             }
             // Reduce the kernel attack surface: deny dangerous, rarely-needed
             // syscalls. Applied before Landlock; both seccomp filters stack.
             if harden_syscalls {
-                apply_syscall_hardening()?;
+                seccomp::harden_syscalls()?;
             }
             // Landlock.
             created
@@ -352,269 +360,11 @@ fn confined_command(
             // Close inherited non-stdio fds just before exec (defense-in-depth):
             // an fd opened by the parent bypasses path-based confinement because
             // the open already happened. Done last so the ruleset fd was still live.
-            close_inherited_fds();
+            namespace::close_inherited_fds();
             Ok(())
         });
     }
     Ok(cmd)
-}
-
-/// Install a seccomp filter that denies a curated set of dangerous, rarely-needed
-/// syscalls, shrinking the kernel attack surface (the surface a multi-tenant
-/// escape would exploit). Default-allow; listed syscalls return EPERM. Ordinary
-/// agent tools (sh, cat, ls, git, python3, curl, compilers) do not use these.
-#[cfg(target_os = "linux")]
-fn apply_syscall_hardening() -> std::io::Result<()> {
-    use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter};
-    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
-    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    // Portable across x86_64 and aarch64. Each entry is matched unconditionally
-    // (empty rule list) and denied.
-    let mut deny: Vec<libc::c_long> = vec![
-        // load/unload kernel code
-        libc::SYS_init_module, libc::SYS_finit_module, libc::SYS_delete_module,
-        libc::SYS_kexec_load, libc::SYS_kexec_file_load,
-        // kernel keyring
-        libc::SYS_add_key, libc::SYS_keyctl, libc::SYS_request_key,
-        // powerful kernel interfaces
-        libc::SYS_bpf, libc::SYS_perf_event_open, libc::SYS_userfaultfd,
-        // cross-process inspection / injection
-        libc::SYS_ptrace, libc::SYS_process_vm_readv, libc::SYS_process_vm_writev,
-        // reshape the mount / namespace world after lockdown
-        libc::SYS_mount, libc::SYS_umount2, libc::SYS_pivot_root, libc::SYS_chroot,
-        libc::SYS_unshare, libc::SYS_setns,
-        // host-wide state
-        libc::SYS_reboot, libc::SYS_acct, libc::SYS_swapon, libc::SYS_swapoff,
-        libc::SYS_settimeofday, libc::SYS_clock_settime, libc::SYS_adjtimex,
-    ];
-    #[cfg(target_arch = "x86_64")]
-    {
-        // x86-only port I/O.
-        deny.push(libc::SYS_iopl);
-        deny.push(libc::SYS_ioperm);
-    }
-
-    let mut map = std::collections::BTreeMap::new();
-    for nr in deny {
-        map.insert(nr, Vec::new()); // empty rule list = match unconditionally
-    }
-    let filter = SeccompFilter::new(
-        map,
-        SeccompAction::Allow,                      // default: allow
-        SeccompAction::Errno(libc::EPERM as u32),  // denied syscalls
-        std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
-    )
-    .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
-    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
-    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
-    Ok(())
-}
-
-/// Put the agent in private namespaces so it cannot see host processes
-/// (`isolate_pids`) and/or cannot reach any external network (`isolate_net`).
-/// Called from `pre_exec` (child, before the Landlock lockdown) and after the
-/// cgroup join.
-///
-/// - `isolate_net` adds an empty network namespace with only loopback up: no
-///   external interface or route, so NO protocol leaves (TCP, UDP, ICMP, raw) —
-///   closing the gap that Landlock (TCP connect/bind only) leaves for UDP/ICMP.
-/// - `isolate_pids` adds a PID + mount namespace; the caller continues as PID 1
-///   of the new PID namespace with a fresh `/proc`, and the fork's parent becomes
-///   a thin init that reaps the agent and propagates its exit status (it never
-///   returns here).
-///
-/// Fails closed: if any step is denied (e.g. no CAP_SYS_ADMIN inside an
-/// undelegated container), it returns an error and the launch is aborted rather
-/// than running without the requested isolation.
-#[cfg(target_os = "linux")]
-unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> std::io::Result<()> {
-    // CLONE_NEWNET and CLONE_NEWNS apply to this process immediately; CLONE_NEWPID
-    // takes effect on the next fork (this process stays in the old PID ns and its
-    // first child is PID 1 of the new one).
-    let mut flags = 0;
-    if isolate_pids {
-        flags |= libc::CLONE_NEWNS | libc::CLONE_NEWPID;
-    }
-    if isolate_net {
-        flags |= libc::CLONE_NEWNET;
-    }
-    if libc::unshare(flags) != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if isolate_pids {
-        // Make the mount tree private so our fresh /proc does not propagate to (or
-        // from) the host mount namespace.
-        let root = c"/";
-        if libc::mount(
-            std::ptr::null(),
-            root.as_ptr(),
-            std::ptr::null(),
-            libc::MS_REC | libc::MS_PRIVATE,
-            std::ptr::null(),
-        ) != 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        let pid = libc::fork();
-        if pid < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if pid > 0 {
-            // Init shim (stays in the old PID ns): wait for the agent and exit with
-            // its status, so the supervisor sees the agent's real exit code.
-            //
-            // Close every inherited non-stdio fd first. std::process keeps a
-            // CLOEXEC exec-status pipe; the agent (G) closes its copy when it
-            // execs, but this shim would hold its copy open for the whole run,
-            // so Command::spawn() in the parent would BLOCK reading that pipe until
-            // the run ends — the supervisor (and its timeout) would never start.
-            // Closing here releases the pipe the moment the agent execs.
-            close_inherited_fds();
-            // Kill-switch: if the supervisor dies, this shim dies too — and its
-            // death trips the agent's own PR_SET_PDEATHSIG (its parent is this
-            // shim), tearing the whole PID namespace down. Set AFTER the fork
-            // (pdeathsig is cleared across fork) and relative to the supervisor.
-            set_pdeathsig_kill();
-            let mut status: libc::c_int = 0;
-            while libc::waitpid(pid, &mut status, 0) < 0 {
-                if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-                    libc::_exit(1);
-                }
-            }
-            let code = if (status & 0x7f) == 0 {
-                (status >> 8) & 0xff // WEXITSTATUS
-            } else {
-                128 + (status & 0x7f) // 128 + WTERMSIG
-            };
-            libc::_exit(code);
-        }
-        // Agent (PID 1 of the new namespace): mount a fresh procfs so /proc
-        // reflects this namespace (only our own processes), not the host's.
-        let proc_src = c"proc";
-        let proc_tgt = c"/proc";
-        if libc::mount(
-            proc_src.as_ptr(),
-            proc_tgt.as_ptr(),
-            proc_src.as_ptr(),
-            0,
-            std::ptr::null(),
-        ) != 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    // Bring up loopback inside the new netns so 127.0.0.1-to-self works; there is
-    // still no external interface or route, so nothing can leave the host.
-    if isolate_net {
-        bring_up_loopback()?;
-    }
-    Ok(())
-}
-
-/// Bring the loopback interface up inside the current (new) network namespace via
-/// SIOCGIFFLAGS/SIOCSIFFLAGS. A fresh netns has `lo` DOWN; without this even
-/// 127.0.0.1-to-self fails. No external interface exists, so egress stays closed.
-#[cfg(target_os = "linux")]
-unsafe fn bring_up_loopback() -> std::io::Result<()> {
-    // SIOCGIFFLAGS/SIOCSIFFLAGS. The ioctl request arg type differs across libc
-    // flavours (c_ulong on glibc, c_int on musl), so pass with `as _`. We build
-    // `struct ifreq` as a raw byte buffer (name[16] then the flags union) instead
-    // of `libc::ifreq`, whose field names differ between gnu and musl, and we read
-    // and write the flags as native-endian bytes to avoid an unaligned access.
-    const SIOCGIFFLAGS: u64 = 0x8913;
-    const SIOCSIFFLAGS: u64 = 0x8914;
-    let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut buf = [0u8; 64]; // >= sizeof(struct ifreq) on both arches
-    buf[0] = b'l';
-    buf[1] = b'o';
-    let p = buf.as_mut_ptr() as *mut libc::c_void;
-    let mut rc = libc::ioctl(fd, SIOCGIFFLAGS as _, p);
-    if rc == 0 {
-        let mut flags = i16::from_ne_bytes([buf[16], buf[17]]);
-        flags |= (libc::IFF_UP | libc::IFF_RUNNING) as i16;
-        buf[16..18].copy_from_slice(&flags.to_ne_bytes());
-        rc = libc::ioctl(fd, SIOCSIFFLAGS as _, p);
-    }
-    let err = std::io::Error::last_os_error();
-    libc::close(fd);
-    if rc != 0 {
-        return Err(err);
-    }
-    Ok(())
-}
-
-/// Ask the kernel to SIGKILL this task when its parent dies (`PR_SET_PDEATHSIG`).
-/// pdeathsig is cleared across `fork`, so this must be set after the fork and is
-/// preserved across the following `execve`. If the parent already died in the
-/// (tiny) window since the fork, the signal was missed, so we also exit if we
-/// have already been reparented to init in the same PID namespace.
-#[cfg(target_os = "linux")]
-unsafe fn set_pdeathsig_kill() {
-    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
-    // getppid() == 1 means our original parent is already gone (reparented to the
-    // ns init). getppid() == 0 means the parent lives in an ancestor PID namespace
-    // (the isolate-pids shim case) — still alive, nothing to do.
-    if libc::getppid() == 1 {
-        libc::_exit(1);
-    }
-}
-
-/// Close every inherited fd >= 3 (keep stdio) just before exec. `close_range`
-/// (Linux 5.9+) is a single async-signal-safe syscall; fall back to a bounded
-/// loop if it is unavailable.
-#[cfg(target_os = "linux")]
-unsafe fn close_inherited_fds() {
-    let rc = libc::syscall(libc::SYS_close_range, 3u64, u32::MAX as u64, 0u64);
-    if rc != 0 {
-        for fd in 3..1024 {
-            libc::close(fd);
-        }
-    }
-}
-
-/// Deny creating `AF_UNIX` sockets via seccomp (IPC-1). Everything else is
-/// allowed, so TCP (AF_INET), files, etc. keep working. Requires no-new-privs,
-/// which we set here (Landlock sets it too, but seccomp is applied first).
-#[cfg(target_os = "linux")]
-fn apply_deny_af_unix() -> std::io::Result<()> {
-    use seccompiler::{
-        apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
-        SeccompFilter, SeccompRule,
-    };
-    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
-
-    // no_new_privs is required to install a seccomp filter unprivileged.
-    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    // Match socket(domain == AF_UNIX, ..) and return EACCES; allow all else.
-    let cond = SeccompCondition::new(
-        0,
-        SeccompCmpArgLen::Dword,
-        SeccompCmpOp::Eq,
-        libc::AF_UNIX as u64,
-    )
-    .map_err(|e| to_io(format!("seccomp cond: {e}")))?;
-    let rule = SeccompRule::new(vec![cond]).map_err(|e| to_io(format!("seccomp rule: {e}")))?;
-    let mut map = std::collections::BTreeMap::new();
-    map.insert(libc::SYS_socket, vec![rule]);
-    let filter = SeccompFilter::new(
-        map,
-        SeccompAction::Allow,                            // default: allow
-        SeccompAction::Errno(libc::EACCES as u32),       // matched: deny
-        std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
-    )
-    .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
-    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
-    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
-    Ok(())
 }
 
 /// Create a cgroup v2 with the policy's pid/memory caps, if the cgroup fs is
