@@ -101,6 +101,9 @@ impl LandlockBackend {
             return Err(RunError { reason: "empty command".into() });
         }
         let cg = cgroup::create_cgroup(policy);
+        if policy.strict && cg.is_none() && (policy.max_processes.is_some() || policy.max_memory_bytes.is_some()) {
+            return Err(RunError { reason: "strict mode: requested resource caps cannot be guaranteed on this host (no usable cgroup v2); refusing to run".into() });
+        }
         let procs = cg.as_ref().map(|d| format!("{d}/cgroup.procs"));
         let mut cmd = confined_command(policy, command, procs)?;
         let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
@@ -134,6 +137,9 @@ fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunErro
 fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
     use tartaros_core::VecSink;
     let cg = cgroup::create_cgroup(policy);
+    if policy.strict && cg.is_none() && (policy.max_processes.is_some() || policy.max_memory_bytes.is_some()) {
+        return Err(RunError { reason: "strict mode: requested resource caps cannot be guaranteed on this host (no usable cgroup v2); refusing to run".into() });
+    }
     let procs = cg.as_ref().map(|d| format!("{d}/cgroup.procs"));
     let mut cmd = confined_command(policy, command, procs)?;
     let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;

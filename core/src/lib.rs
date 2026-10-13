@@ -144,6 +144,12 @@ pub struct Policy {
     /// Shrinks the kernel attack surface — the surface the multi-tenant caveat is
     /// about — without blocking ordinary tools. Returns EPERM on a denied call.
     pub harden_syscalls: bool,
+    /// Strict enforcement: every requested guarantee must actually be installed,
+    /// or the launch ABORTS. In non-strict mode a cap that the host can't
+    /// guarantee degrades (e.g. `--max-procs` to RLIMIT) with a warning; in
+    /// strict mode that degradation is a hard error instead — "guaranteed or
+    /// nothing". Set by the hostile-code / multi-tenant profiles and `--strict`.
+    pub strict: bool,
 }
 
 impl Policy {
@@ -307,12 +313,14 @@ impl Profile {
                 p.isolate_pids = true;
                 p.deny_unix_sockets = true;
                 p.harden_syscalls = true;
+                p.strict = true;
             }
             Profile::MultiTenant => {
                 p.isolate_pids = true;
                 p.deny_unix_sockets = true;
                 p.isolate_network = true;
                 p.harden_syscalls = true;
+                p.strict = true;
             }
         }
     }
@@ -594,7 +602,7 @@ mod tests {
         // the agent's own /proc readable (no blunt isolate_process_info).
         let mut h = Policy::default();
         Profile::HostileCode.apply(&mut h);
-        assert!(h.isolate_pids && h.deny_unix_sockets && h.harden_syscalls);
+        assert!(h.isolate_pids && h.deny_unix_sockets && h.harden_syscalls && h.strict);
         assert!(!h.isolate_process_info, "isolate_pids supersedes the /proc read-deny");
         assert!(!h.isolate_network, "hostile-code is not offline by default");
         assert!(Profile::HostileCode.caveat().unwrap().contains("kernel"));
