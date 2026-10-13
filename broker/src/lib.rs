@@ -12,7 +12,7 @@
 //! out of scope here. Every forwarded request is logged as an `EffectEvent`.
 
 use tartaros_core::{Axis, Direction, EffectEvent, EffectSink, Outcome};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -50,32 +50,11 @@ pub struct Capability {
     pub injections: Vec<Injection>,
 }
 
-/// Largest upstream response the broker relays back (P0-B: bound the response).
-const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
-
-/// Timeout for the upstream connect and each read/write in the HTTP forward
-/// proxy, so a slow or unresponsive upstream cannot pin a broker thread.
-const UPSTREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Caps on the agent-supplied request, so a giant line or a header flood can't
-/// exhaust the broker (which runs in the trusted supervisor).
-const MAX_LINE_BYTES: usize = 8 * 1024;
-const MAX_HEADERS: usize = 100;
-
-/// Read one line but never more than `max` bytes. Returns `None` on EOF or when
-/// the line exceeds `max` without a terminating newline (treated as a bad,
-/// oversized request), so the caller can reject it instead of buffering forever.
-fn read_line_capped(r: &mut impl BufRead, max: usize) -> std::io::Result<Option<String>> {
-    let mut s = String::new();
-    let n = r.by_ref().take(max as u64).read_line(&mut s)?;
-    if n == 0 {
-        return Ok(None); // EOF
-    }
-    if n >= max && !s.ends_with('\n') {
-        return Ok(None); // hit the cap with no newline: oversized line
-    }
-    Ok(Some(s))
-}
+// Untrusted-input/relay limits and egress destination policy live in their own
+// modules, kept apart from the credential and capability code below.
+mod egress;
+mod limits;
+use limits::{read_line_capped, MAX_HEADERS, MAX_LINE_BYTES, MAX_RESPONSE_BYTES, UPSTREAM_TIMEOUT};
 
 pub struct Broker {
     injections: Vec<Injection>,
@@ -134,17 +113,7 @@ impl Broker {
 
     /// Is `host` permitted by the egress allow-list? Empty list = allow all.
     fn host_allowed(&self, host: &str) -> bool {
-        if self.allowed_hosts.is_empty() {
-            return true;
-        }
-        self.allowed_hosts.iter().any(|h| {
-            if let Some(suffix) = h.strip_prefix('.') {
-                host.eq_ignore_ascii_case(suffix)
-                    || host.to_ascii_lowercase().ends_with(&format!(".{}", suffix.to_ascii_lowercase()))
-            } else {
-                host.eq_ignore_ascii_case(h)
-            }
-        })
+        egress::host_allowed(&self.allowed_hosts, host)
     }
 
     /// Expire the broker's grant after `ttl` from now: a short-lived capability.
@@ -364,7 +333,7 @@ impl Broker {
             (host.as_str(), port).to_socket_addrs().map(|i| i.collect()).unwrap_or_default();
         let target = addrs
             .iter()
-            .find(|a| self.allow_internal || !is_internal_ip(&a.ip()))
+            .find(|a| self.allow_internal || !egress::is_internal_ip(&a.ip()))
             .copied();
         let target = match target {
             Some(a) => a,
@@ -505,31 +474,6 @@ fn read_capped(resp: ureq::Response) -> String {
 }
 
 /// "http://host:port/path" -> (host, port, "/path"). Defaults port 80.
-/// Is `ip` an internal/private destination that an egress broker should refuse
-/// by default? Covers loopback, RFC1918, link-local (169.254.x — cloud metadata
-/// at 169.254.169.254), CGNAT, "this host" 0.0.0.0, IPv6 loopback/link-local and
-/// unique-local (fc00::/7).
-fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            let o = v4.octets();
-            v4.is_loopback()            // 127.0.0.0/8
-                || v4.is_private()      // 10/8, 172.16/12, 192.168/16
-                || v4.is_link_local()   // 169.254/16 (incl. cloud metadata)
-                || v4.is_broadcast()
-                || v4.is_unspecified()  // 0.0.0.0
-                || o[0] == 100 && (o[1] & 0xc0) == 64 // 100.64/10 CGNAT
-        }
-        std::net::IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
-                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 unique-local
-                || v6.to_ipv4_mapped().map(|m| is_internal_ip(&m.into())).unwrap_or(false)
-        }
-    }
-}
-
 fn parse_abs_uri(uri: &str) -> Option<(String, u16, String)> {
     let rest = uri.strip_prefix("http://")?;
     let (authority, path) = match rest.find('/') {
@@ -606,12 +550,12 @@ mod tests {
         ];
         for s in internal {
             let ip: std::net::IpAddr = s.parse().unwrap();
-            assert!(is_internal_ip(&ip), "{s} must be internal");
+            assert!(egress::is_internal_ip(&ip), "{s} must be internal");
         }
         let public = ["1.1.1.1", "8.8.8.8", "140.82.112.3", "2606:4700:4700::1111"];
         for s in public {
             let ip: std::net::IpAddr = s.parse().unwrap();
-            assert!(!is_internal_ip(&ip), "{s} must be public");
+            assert!(!egress::is_internal_ip(&ip), "{s} must be public");
         }
     }
 
