@@ -14,7 +14,9 @@ use tartaros_core::Policy;
 /// to RLIMIT_NPROC, which a process running as root (CAP_SYS_RESOURCE) can raise
 /// and thus bypass (RES-1). Fail-loud, not fail-silent.
 fn warn_cgroup_degraded(policy: &Policy) {
-    if policy.max_processes.is_some() {
+    if policy.max_processes.is_some() && !policy.strict {
+        // In strict mode the caller aborts with a clear message, so the
+        // "degraded" warning would be misleading — suppress it there.
         eprintln!(
             "tartaros: warning: cgroup v2 unavailable; --max-procs degraded to \
              RLIMIT_NPROC (best-effort, bypassable by root). Run on a cgroup-v2 host \
@@ -52,6 +54,12 @@ pub(crate) fn create_cgroup(policy: &Policy) -> Option<String> {
         // — the agent still has RLIMIT_AS as a fallback address-space cap, so
         // memory is not unbounded, but the stricter cgroup RSS cap did not apply.
         if std::fs::write(format!("{dir}/memory.max"), m.to_string()).is_err() {
+            if policy.strict {
+                // Strict: a requested cap that can't be installed aborts, rather
+                // than silently degrading to RLIMIT_AS only.
+                let _ = std::fs::remove_dir(&dir);
+                return None;
+            }
             eprintln!(
                 "tartaros: warning: could not set cgroup memory.max; --max-mem falls \
                  back to RLIMIT_AS only (address space capped, cgroup RSS cap not \
