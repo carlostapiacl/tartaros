@@ -123,6 +123,11 @@ pub fn compile_profile(policy: &Policy) -> String {
             p.push_str("(allow network*)\n");
         }
     }
+    // Specific loopback ports the role was granted — without opening all of
+    // localhost. (Field-detected: a role needs 8001/8081/3307 but not 8787.)
+    for port in &policy.local_ports {
+        p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));
+    }
 
     // Writable roots.
     for root in &policy.writable_roots {
@@ -190,6 +195,7 @@ mod tests {
             }],
             network: Some(Network::Denied),
             isolate_process_info: true,
+            ..Default::default()
         };
         let prof = compile_profile(&policy);
         assert!(!prof.contains("kern.proc"), "must never allow kern.proc.*");
@@ -200,5 +206,19 @@ mod tests {
         // ancestor move-blocking present
         assert!(prof.contains("(deny file-write-unlink (literal \"/work/nested/.git\"))"));
         assert!(prof.contains("(deny file-write-unlink (literal \"/work/nested\"))"));
+    }
+
+    #[test]
+    fn local_ports_open_only_the_granted_ports() {
+        let policy = Policy {
+            writable_roots: vec![PathBuf::from("/work")],
+            local_ports: vec![8001, 8081],
+            ..Default::default()
+        };
+        let prof = compile_profile(&policy);
+        assert!(prof.contains("(allow network-outbound (remote ip \"localhost:8001\"))"));
+        assert!(prof.contains("(allow network-outbound (remote ip \"localhost:8081\"))"));
+        assert!(!prof.contains("localhost:8787"));
+        assert!(!prof.contains("(allow network*)"));
     }
 }
