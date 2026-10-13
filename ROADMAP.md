@@ -130,3 +130,17 @@ Build only where measurement shows no existing backend can enforce the policy.
       `ptrace_scope=0`); measured that sh/cat/ls/curl/git/python3 still run and the
       full suite (smoke/net/readdeny/P0) stays green. PID namespace stays out
       (`unshare` not portable under Docker).
+
+## Security findings (external review #2, 2026-10-13)
+- [x] **P0-A broker auth now mandatory by default**: `serve` fails closed without
+      a token; `insecure_no_auth()` is an explicit test-only opt-in. Verified.
+- [x] **P0-B capability restricts actions**: each `Capability` declares allowed
+      `methods` (405 otherwise, no silent GET), redirects disabled, response
+      capped (10 MB), path traversal (`..`) rejected. Verified on the Linux test host (POST→405).
+- [x] **P1-A materialization hardened**: fails closed on any error, refuses a
+      symlinked ancestor, creates with O_EXCL, verifies result. Verified (symlink
+      rejected).
+- [x] **P1-B process supervision**: own process group (`setpgid`), wall-clock
+      `timeout` kills the group (exit 124), `setrlimit` for memory/processes/CPU,
+      descendants reaped on exit. Verified on the Linux test host (timeout 2s, grandchild not
+      alive, memory cap hit). cgroups v2 can extend this later.
