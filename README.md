@@ -38,6 +38,9 @@ Reproducible with [`security-bench/`](security-bench/). Measured on the Linux te
 - **The agent cannot see the host** (`--isolate-pids`) — a private PID + mount
   namespace: it sees only its own subtree (host 293 → 4 pids), cannot enumerate,
   inspect or signal host processes.
+- **No protocol leaves** (`--isolate-net`) — Landlock mediates only TCP, so a
+  Landlock-only deny still lets UDP (DNS exfil) and ICMP out; an empty network
+  namespace closes TCP, UDP, ICMP and raw at once, loopback-only.
 
 We do **not** claim "more secure than X in every scenario." The claims are the
 narrow, measured ones above, and the honest limits are listed below.
@@ -48,7 +51,8 @@ narrow, measured ones above, and the honest limits are listed below.
 |---|---|---|
 | FS writes + trust-handoff (nested `.git`, ancestor rename) | ✅ | ✅ |
 | FS reads of on-disk secrets (`~/.ssh`, `~/.aws`, `.env`) | ✅ carved read grant | ✅ `(deny file-read*)` |
-| Network: default-deny + per-port | ✅ Landlock (ABI v4+, port-based) | ✅ |
+| Network: default-deny + per-port (TCP) | ✅ Landlock (ABI v4+, port-based) | ✅ |
+| Network: complete off, all protocols (`--isolate-net`) | ✅ empty netns (TCP/UDP/ICMP/raw) | ❌ |
 | Secret broker (capability, not raw token) | ✅ HTTP + HTTPS capability endpoint, client auth | ✅ |
 | Resource: memory / processes / CPU | ✅ RLIMIT + cgroup (`memory.max`, `pids.max`), root-proof | 🟡 RLIMIT only |
 | Lifecycle: timeout + reliable teardown | ✅ `cgroup.kill` (reaps escaped daemons) | 🟡 `kill(-pgid)` best-effort |
