@@ -127,6 +127,11 @@ struct AssertSpec {
     unchanged: Option<String>,
     /// This path must not exist after the run.
     absent: Option<String>,
+    /// Seconds to wait after the run before checking the assertions. Lets a
+    /// lifecycle escape (e.g. a daemon that would act only after the sandbox
+    /// exits) reveal itself before we assert teardown killed it.
+    #[serde(default)]
+    settle_secs: Option<u64>,
 }
 
 struct Outcome {
@@ -345,6 +350,11 @@ fn run_scenario(c: Contract) -> Outcome {
     drop(servers);
     for p in &unix_paths {
         let _ = std::fs::remove_file(p);
+    }
+
+    // Let a lifecycle escape surface before asserting teardown killed it.
+    if let Some(s) = c.assert.settle_secs {
+        std::thread::sleep(std::time::Duration::from_secs(s));
     }
 
     // real-effect assertions

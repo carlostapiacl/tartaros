@@ -404,9 +404,13 @@ fn warn_cgroup_degraded(policy: &Policy) {
 
 #[cfg(target_os = "linux")]
 fn create_cgroup(policy: &Policy) -> Option<String> {
-    if policy.max_processes.is_none() && policy.max_memory_bytes.is_none() {
-        return None;
-    }
+    // Always build a per-run cgroup when the cgroup fs is usable — not only to
+    // enforce pid/memory caps but for reliable teardown. On exit/timeout the
+    // caller runs `cgroup.kill`, which reaps EVERY member, including a process
+    // that double-forked and `setsid`'d out of the process group (which
+    // kill(-pgid) misses). Without a cgroup such a daemon outlives the sandbox.
+    // If the cgroup fs isn't usable we return None and fall back to
+    // process-group teardown, warning only when a hard limit was actually asked.
     let base = "/sys/fs/cgroup";
     // enable controllers in the root subtree (best-effort).
     let _ = std::fs::write(format!("{base}/cgroup.subtree_control"), "+pids +memory");
@@ -454,8 +458,8 @@ fn cgroup_membership_works(dir: &str) -> bool {
         return false;
     }
     if pid == 0 {
-        // Child: park ~200ms so the parent can observe membership, then exit.
-        let ts = libc::timespec { tv_sec: 0, tv_nsec: 200_000_000 };
+        // Child: park briefly so the parent can observe membership, then exit.
+        let ts = libc::timespec { tv_sec: 0, tv_nsec: 30_000_000 };
         unsafe {
             libc::nanosleep(&ts, std::ptr::null_mut());
             libc::_exit(0);
