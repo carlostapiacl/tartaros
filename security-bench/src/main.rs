@@ -37,6 +37,8 @@ struct Contract {
     fixture: Vec<FixtureItem>,
     #[serde(default)]
     server: Vec<ServerSpec>,
+    #[serde(default)]
+    unix_server: Vec<UnixServerSpec>,
     attack: Op,
     control: Op,
     #[serde(default)]
@@ -67,6 +69,12 @@ struct PolicySpec {
 #[derive(Deserialize)]
 struct ServerSpec {
     port: u16,
+}
+
+/// A unix-domain socket server the runner starts for IPC scenarios.
+#[derive(Deserialize)]
+struct UnixServerSpec {
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -215,6 +223,25 @@ fn run_scenario(c: Contract) -> Outcome {
             servers.push(l2);
         }
     }
+    // unix-domain socket servers (IPC scenarios)
+    let mut unix_paths = Vec::new();
+    for u in &c.unix_server {
+        let path = sub(&u.path);
+        let _ = std::fs::remove_file(&path);
+        if let Some(parent) = Path::new(&path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(l) = std::os::unix::net::UnixListener::bind(&path) {
+            std::thread::spawn(move || {
+                for stream in l.incoming().flatten() {
+                    use std::io::Write;
+                    let mut st = stream;
+                    let _ = st.write_all(b"ok");
+                }
+            });
+            unix_paths.push(path);
+        }
+    }
     std::thread::sleep(std::time::Duration::from_millis(150));
 
     let policy = Policy {
@@ -253,6 +280,9 @@ fn run_scenario(c: Contract) -> Outcome {
     };
 
     drop(servers);
+    for p in &unix_paths {
+        let _ = std::fs::remove_file(p);
+    }
 
     // real-effect assertions
     let mut effect_ok = true;
