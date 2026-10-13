@@ -1,0 +1,22 @@
+id = "seccomp-attack-surface"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+
+# --seccomp-strict denies dangerous, rarely-needed syscalls to shrink the kernel
+# attack surface. The attack calls unshare(CLONE_NEWNS) directly; under the
+# hardening filter it returns EPERM, so the attack fails (guarantee met). The
+# control proves ordinary tooling still runs under the same filter.
+[policy]
+writable_roots = ["{root}/work"]
+harden_syscalls = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,sys\nlibc=ctypes.CDLL(None,use_errno=True)\nsys.exit(0 if libc.unshare(0x00020000)==0 else 1)'"
+
+[control]
+cmd = "python3 -c 'import os; os.listdir(\"/\")' && echo ok > {root}/work/src/f.txt"

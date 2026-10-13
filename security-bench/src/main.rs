@@ -79,6 +79,8 @@ struct PolicySpec {
     isolate_pids: bool,
     #[serde(default)]
     isolate_network: bool,
+    #[serde(default)]
+    harden_syscalls: bool,
 }
 
 /// A loopback TCP server the runner starts for network scenarios.
@@ -551,6 +553,7 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         deny_unix_sockets: c.policy.deny_unix_sockets,
         isolate_pids: c.policy.isolate_pids,
         isolate_network: c.policy.isolate_network,
+        harden_syscalls: c.policy.harden_syscalls,
         ..Default::default()
     };
     // --mutate: deliberately weaken the policy so a corpus blind spot shows up.

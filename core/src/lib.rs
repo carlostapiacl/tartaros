@@ -120,6 +120,12 @@ pub struct Policy {
     /// (ports / broker on host loopback), since those need the host network.
     /// Needs CAP_SYS_ADMIN; fails closed.
     pub isolate_network: bool,
+    /// Opt-in (Linux): install a seccomp filter that denies a curated set of
+    /// dangerous, rarely-needed syscalls (kernel-module load, kexec, keyring,
+    /// bpf, perf, ptrace, process_vm_*, mount/unshare/setns, reboot/time/swap).
+    /// Shrinks the kernel attack surface — the surface the multi-tenant caveat is
+    /// about — without blocking ordinary tools. Returns EPERM on a denied call.
+    pub harden_syscalls: bool,
 }
 
 impl Policy {
@@ -282,11 +288,13 @@ impl Profile {
             Profile::HostileCode => {
                 p.isolate_pids = true;
                 p.deny_unix_sockets = true;
+                p.harden_syscalls = true;
             }
             Profile::MultiTenant => {
                 p.isolate_pids = true;
                 p.deny_unix_sockets = true;
                 p.isolate_network = true;
+                p.harden_syscalls = true;
             }
         }
     }
@@ -563,7 +571,7 @@ mod tests {
         // the agent's own /proc readable (no blunt isolate_process_info).
         let mut h = Policy::default();
         Profile::HostileCode.apply(&mut h);
-        assert!(h.isolate_pids && h.deny_unix_sockets);
+        assert!(h.isolate_pids && h.deny_unix_sockets && h.harden_syscalls);
         assert!(!h.isolate_process_info, "isolate_pids supersedes the /proc read-deny");
         assert!(!h.isolate_network, "hostile-code is not offline by default");
         assert!(Profile::HostileCode.caveat().unwrap().contains("kernel"));

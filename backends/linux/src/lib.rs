@@ -287,6 +287,7 @@ fn confined_command(
     let max_processes = policy.max_processes;
     let max_cpu = policy.max_cpu_secs;
     let deny_unix = policy.deny_unix_sockets;
+    let harden_syscalls = policy.harden_syscalls;
     let isolate_pids = policy.isolate_pids;
     let isolate_network = policy.isolate_network;
     let mut cmd = Command::new(&command[0]);
@@ -337,6 +338,11 @@ fn confined_command(
             if deny_unix {
                 apply_deny_af_unix()?;
             }
+            // Reduce the kernel attack surface: deny dangerous, rarely-needed
+            // syscalls. Applied before Landlock; both seccomp filters stack.
+            if harden_syscalls {
+                apply_syscall_hardening()?;
+            }
             // Landlock.
             created
                 .take()
@@ -351,6 +357,60 @@ fn confined_command(
         });
     }
     Ok(cmd)
+}
+
+/// Install a seccomp filter that denies a curated set of dangerous, rarely-needed
+/// syscalls, shrinking the kernel attack surface (the surface a multi-tenant
+/// escape would exploit). Default-allow; listed syscalls return EPERM. Ordinary
+/// agent tools (sh, cat, ls, git, python3, curl, compilers) do not use these.
+#[cfg(target_os = "linux")]
+fn apply_syscall_hardening() -> std::io::Result<()> {
+    use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter};
+    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
+    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    // Portable across x86_64 and aarch64. Each entry is matched unconditionally
+    // (empty rule list) and denied.
+    let mut deny: Vec<libc::c_long> = vec![
+        // load/unload kernel code
+        libc::SYS_init_module, libc::SYS_finit_module, libc::SYS_delete_module,
+        libc::SYS_kexec_load, libc::SYS_kexec_file_load,
+        // kernel keyring
+        libc::SYS_add_key, libc::SYS_keyctl, libc::SYS_request_key,
+        // powerful kernel interfaces
+        libc::SYS_bpf, libc::SYS_perf_event_open, libc::SYS_userfaultfd,
+        // cross-process inspection / injection
+        libc::SYS_ptrace, libc::SYS_process_vm_readv, libc::SYS_process_vm_writev,
+        // reshape the mount / namespace world after lockdown
+        libc::SYS_mount, libc::SYS_umount2, libc::SYS_pivot_root, libc::SYS_chroot,
+        libc::SYS_unshare, libc::SYS_setns,
+        // host-wide state
+        libc::SYS_reboot, libc::SYS_acct, libc::SYS_swapon, libc::SYS_swapoff,
+        libc::SYS_settimeofday, libc::SYS_clock_settime, libc::SYS_adjtimex,
+    ];
+    #[cfg(target_arch = "x86_64")]
+    {
+        // x86-only port I/O.
+        deny.push(libc::SYS_iopl);
+        deny.push(libc::SYS_ioperm);
+    }
+
+    let mut map = std::collections::BTreeMap::new();
+    for nr in deny {
+        map.insert(nr, Vec::new()); // empty rule list = match unconditionally
+    }
+    let filter = SeccompFilter::new(
+        map,
+        SeccompAction::Allow,                      // default: allow
+        SeccompAction::Errno(libc::EPERM as u32),  // denied syscalls
+        std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
+    )
+    .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
+    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
+    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
+    Ok(())
 }
 
 /// Put the agent in private namespaces so it cannot see host processes
