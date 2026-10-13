@@ -2,6 +2,7 @@ id = "isolate-net-egress"
 category = "isolation"
 severity = "critical"
 os = ["linux"]
+requires = ["userns"]
 
 # NET-1: Landlock network rules mediate only TCP connect/bind, so a Landlock-only
 # "deny network" still lets UDP (DNS exfil) and ICMP leave. --isolate-net puts the

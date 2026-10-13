@@ -2,6 +2,7 @@ id = "lifecycle-daemon-escape"
 category = "lifecycle"
 severity = "high"
 os = ["linux"]
+requires = ["cgroup"]
 
 # A command that double-forks and setsid's a daemon leaves the process group, so
 # the timeout's kill(-pgid) misses it and it would outlive the sandbox. TartarOS

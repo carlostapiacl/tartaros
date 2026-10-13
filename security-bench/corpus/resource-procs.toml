@@ -2,6 +2,7 @@ id = "resource-process-limit"
 category = "resources"
 severity = "high"
 os = ["linux"]
+requires = ["cgroup"]
 
 # RES-1: a fork bomb is contained by the process cap even when the agent runs as
 # root. RLIMIT_NPROC alone is bypassable by root (CAP_SYS_RESOURCE), so the cap is
