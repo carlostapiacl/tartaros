@@ -76,19 +76,29 @@ fn nested_git_hook_direct_write_is_denied() {
 }
 
 #[test]
-fn ancestor_rename_cannot_relocate_protected_hook() {
+fn ancestor_rename_cannot_make_a_handoff_path_writable() {
     let work = mk_work();
     let be = SeatbeltBackend;
     let p = policy_for(&work);
-    // try to rename the parent of the protected .git out of the way
+    // Rename a benign ancestor of the protected .git out of the way, then try to
+    // plant a hook at the relocated path. The protection is any-depth, so the
+    // rename of an ordinary directory may succeed but the hook stays unwritable
+    // wherever it lands under the root. The guarantee is "no writable handoff
+    // path", not "no directory renames" — the move cannot escape the deny
+    // because outside the root is not writable either.
     let rc = sh(
         &be,
         &p,
-        &format!("cd {} && mv a/nested a/n2", work.display()),
+        &format!(
+            "cd {} && mv a/nested a/n2 2>/dev/null; echo x > a/n2/.git/hooks/pre-commit",
+            work.display()
+        ),
     );
-    assert_ne!(rc, 0, "renaming an ancestor of a protected path must be denied");
-    assert!(work.join("a/nested").exists());
-    assert!(!work.join("a/n2").exists());
+    assert_ne!(rc, 0, "a relocated .git/hooks must remain unwritable");
+    assert!(
+        !work.join("a/n2/.git/hooks/pre-commit").exists(),
+        "no hook may be planted at the relocated path"
+    );
     fs::remove_dir_all(&work).ok();
 }
 

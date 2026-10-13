@@ -11,7 +11,7 @@
 
 use tartaros_core::{
     Access, Backend, Collector, EffectSink, FsRule, Network, Policy, PolicyError, RunError,
-    RunOutcome,
+    RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -286,12 +286,17 @@ pub fn compile_profile(policy: &Policy) -> String {
     } else {
         p.push_str("(allow process-info*)\n");
     }
-    // A minimal, procargs-free sysctl allow so tools can read hardware info.
-    p.push_str("(allow sysctl-read\n");
-    for name in ["hw.ncpu", "hw.activecpu", "hw.memsize", "hw.pagesize", "kern.ostype", "kern.osrelease", "kern.version", "kern.hostname"] {
-        p.push_str(&format!("  (sysctl-name \"{name}\")\n"));
-    }
-    p.push_str(")\n");
+    // sysctl-read: allow broadly, then deny the process-enumeration namespace.
+    // A narrow name whitelist is tempting but fragile — runtimes like V8/Node read
+    // a wide, version-dependent set of hw.*/machdep.* keys (cache line size, CPU
+    // feature bits, frequencies), and a single DENIED read returns an error the
+    // runtime mishandles into a bogus size, aborting with a LowLevelAlloc overflow.
+    // So we allow the harmless hardware/OS keys wholesale and carve out only what
+    // leaks other processes: kern.proc* / kern.procargs* (args, env, process list).
+    // Deny comes last (last match wins) and holds regardless of isolate_process_info.
+    p.push_str("(allow sysctl-read)\n");
+    p.push_str("(deny sysctl-read (sysctl-name-prefix \"kern.proc\"))\n");
+    p.push_str("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))\n");
 
     // Network.
     match policy.network.unwrap_or(Network::Denied) {
@@ -316,17 +321,26 @@ pub fn compile_profile(policy: &Policy) -> String {
         p.push_str(&format!("(allow file-write* (subpath {}))\n", quote(root)));
     }
 
-    // Denies LAST so they win. Explicit deny rules + the trust-handoff set.
-    let mut denies: Vec<FsRule> = policy
+    // Denies LAST so they win. Explicit (concrete-path) deny rules first.
+    let denies: Vec<FsRule> = policy
         .fs_rules
         .iter()
         .filter(|r| r.access == Access::Deny)
         .cloned()
         .collect();
-    denies.extend(policy.trust_handoff_rules());
-
     for rule in &denies {
         emit_deny(&mut p, &rule.path, &policy.writable_roots);
+    }
+
+    // Trust-handoff set, at ANY depth under each writable root. On macOS Seatbelt
+    // we express this as regex path rules instead of walking the filesystem: it is
+    // both cheap (no O(tree) stat storm at compile time — a `--write /tmp` tree can
+    // be huge) and strictly more correct than enumerating existing paths. Matching
+    // by pattern also covers handoff paths created AFTER the box starts, and — being
+    // any-depth — defeats the ancestor-rename move (wherever the path lands under
+    // the root it still matches; outside the root is not writable anyway).
+    for root in &policy.writable_roots {
+        emit_handoff_regex(&mut p, root);
     }
 
     // Secret read-denies (last, so they win over the broad file-read* allow).
@@ -370,6 +384,55 @@ fn emit_deny(p: &mut String, path: &Path, roots: &[PathBuf]) {
     }
 }
 
+/// Emit deny rules for the trust-handoff set at ANY depth under `root`, as
+/// Seatbelt regexes rather than a filesystem walk. For each handoff name we deny
+/// `file-write*` on the path itself and everything under it, whether it sits
+/// directly in the root or nested arbitrarily deep. `file-write*` subsumes
+/// `file-write-unlink`, so rename/delete of a protected path is covered; and
+/// because the match is any-depth, renaming an ancestor to relocate the path
+/// cannot escape it (it would still match under the root, and outside the root
+/// is not writable). Absent paths are covered too — the pattern does not require
+/// the path to exist, which is the point of a pre-planting defense.
+fn emit_handoff_regex(p: &mut String, root: &Path) {
+    let root_re = regex_escape(&root.to_string_lossy());
+    let mut emit = |name: &str| {
+        let name_re = regex_escape(name);
+        // ^<root>(/.*)?/<name>(/.*)?$  — <name> directly in root OR nested at any
+        // depth; trailing (/.*)? so a protected directory's whole subtree matches.
+        p.push_str(&format!(
+            "(deny file-write* (regex #\"^{root_re}(/.*)?/{name_re}(/.*)?$\"))\n"
+        ));
+    };
+    for name in HANDOFF_CONFIG_NAMES {
+        emit(name);
+    }
+    for name in HANDOFF_GIT_NAMES {
+        emit(name);
+    }
+}
+
+/// Escape a literal string for use inside a Seatbelt `(regex #"...")`. Escapes
+/// both regex metacharacters and the `"` / `\` that would break the SBPL string.
+fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            // Regex metacharacters.
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            // Would terminate the SBPL #"..." string literal.
+            '"' => {
+                out.push('\\');
+                out.push('"');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Quote a path as an SBPL string literal.
 fn quote(path: &Path) -> String {
     let s = path.to_string_lossy();
@@ -395,7 +458,16 @@ mod tests {
             ..Default::default()
         };
         let prof = compile_profile(&policy);
-        assert!(!prof.contains("kern.proc"), "must never allow kern.proc.*");
+        // kern.proc* must never be ALLOWED (it leaks other processes' args/env/list).
+        // It may appear in a deny rule — that is the protection, not a violation.
+        assert!(
+            !prof.contains("(allow sysctl-read (sysctl-name-prefix \"kern.proc"),
+            "must never allow kern.proc.*"
+        );
+        assert!(
+            prof.contains("(deny sysctl-read (sysctl-name-prefix \"kern.proc\"))"),
+            "kern.proc must be explicitly denied"
+        );
         // the deny for the hooks dir appears after the writable-root allow
         let allow_at = prof.find("(allow file-write* (subpath \"/work\"))").unwrap();
         let deny_at = prof.find("(deny file-write* (subpath \"/work/nested/.git/hooks\"))").unwrap();
