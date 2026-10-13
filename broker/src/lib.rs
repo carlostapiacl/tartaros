@@ -14,6 +14,8 @@
 use tartaros_core::{Axis, Direction, EffectEvent, EffectSink, Outcome};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 /// Inject `header: value` on requests to `host` (or to any host when `host` is
 /// None). The value is the secret; it lives here, never in the agent.
@@ -57,6 +59,13 @@ pub struct Broker {
     auth_token: Option<String>,
     insecure: bool,
     role: String,
+    /// Grant deadline: after this instant every request is refused (403). Models
+    /// a short-lived, session-scoped capability — a leaked token stops working.
+    deadline: Option<Instant>,
+    /// Max authorized requests over the broker's life (quota). Beyond it, 429.
+    quota: Option<u32>,
+    /// Authorized requests served so far (quota counter).
+    used: AtomicU32,
 }
 
 impl Broker {
@@ -67,7 +76,42 @@ impl Broker {
             auth_token: None,
             insecure: false,
             role: role.into(),
+            deadline: None,
+            quota: None,
+            used: AtomicU32::new(0),
         }
+    }
+
+    /// Expire the broker's grant after `ttl` from now: a short-lived capability.
+    /// Once elapsed, every request is refused with 403 even with a valid token.
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.deadline = Some(Instant::now() + ttl);
+        self
+    }
+
+    /// Cap the number of authorized requests this broker will serve; further
+    /// requests get 429. Bounds the blast radius of a capability.
+    pub fn with_quota(mut self, max_requests: u32) -> Self {
+        self.quota = Some(max_requests);
+        self
+    }
+
+    /// Gate an authenticated request on expiry and quota. Returns an HTTP status
+    /// line + reason to refuse with, or `None` to allow (consuming one quota
+    /// unit). Checked AFTER auth so unauthorized callers never consume quota.
+    fn gate(&self) -> Option<(&'static str, &'static str)> {
+        if let Some(d) = self.deadline {
+            if Instant::now() >= d {
+                return Some(("403 Forbidden", "capability expired"));
+            }
+        }
+        if let Some(max) = self.quota {
+            // fetch_add returns the prior value; the (max+1)-th request is over.
+            if self.used.fetch_add(1, Ordering::SeqCst) >= max {
+                return Some(("429 Too Many Requests", "capability quota exceeded"));
+            }
+        }
+        None
     }
 
     /// Require every request to carry `X-Tartaros-Auth: <token>`. Give the token
@@ -155,6 +199,21 @@ impl Broker {
             }
         }
         headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-tartaros-auth"));
+
+        // Session gate (expiry + quota): a valid token is necessary but not
+        // sufficient — a capability can still be past its TTL or over its quota.
+        if let Some((status, reason)) = self.gate() {
+            let body = reason.as_bytes();
+            let _ = client.write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+            let _ = client.write_all(body);
+            return Ok(());
+        }
 
         // Capability mode: origin-form request (/prefix/…) to an HTTPS upstream.
         if abs_uri.starts_with('/') {
@@ -334,6 +393,25 @@ mod tests {
         assert!(b.insecure);
         let b2 = Broker::new("qa", vec![]).with_auth("t");
         assert!(b2.auth_token.is_some());
+    }
+
+    #[test]
+    fn quota_gate_refuses_after_limit() {
+        let b = Broker::new("qa", vec![]).with_quota(2);
+        assert!(b.gate().is_none(), "1st allowed");
+        assert!(b.gate().is_none(), "2nd allowed");
+        let r = b.gate().expect("3rd refused");
+        assert!(r.0.starts_with("429"), "quota exceeded => 429");
+    }
+
+    #[test]
+    fn ttl_gate_refuses_after_expiry() {
+        let mut b = Broker::new("qa", vec![]).with_ttl(Duration::from_secs(3600));
+        assert!(b.gate().is_none(), "within TTL");
+        // force the deadline into the past
+        b.deadline = Some(Instant::now() - Duration::from_secs(1));
+        let r = b.gate().expect("expired");
+        assert!(r.0.starts_with("403") && r.1.contains("expired"));
     }
 
     #[test]
