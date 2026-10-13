@@ -135,6 +135,7 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --isolate-pids         private PID+mount namespace (hide host processes)
   --isolate-net          empty network namespace (no egress, any protocol)
   --seccomp-strict       deny dangerous syscalls (shrink kernel attack surface)
+  --strict               a requested guarantee that cannot be installed aborts the run
   --deny-unix            deny AF_UNIX sockets
   --isolate-proc         deny reads of other processes' /proc
   --materialize          pre-create absent trust-handoff placeholders
