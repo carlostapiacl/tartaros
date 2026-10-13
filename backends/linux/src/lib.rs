@@ -660,14 +660,18 @@ fn create_cgroup(policy: &Policy) -> Option<String> {
     if let Some(m) = policy.max_memory_bytes {
         let _ = std::fs::write(format!("{dir}/memory.max"), m.to_string());
     }
-    // Capability probe (fail-closed): creating the directory and writing pids.max
-    // can both "succeed" in a container whose cgroup namespace won't actually let
-    // a process join a child cgroup (the write to cgroup.procs is accepted but the
-    // move never takes effect — observed under Docker without cgroup delegation).
-    // There, --max-procs would silently enforce nothing. Prove membership works by
-    // moving a throwaway child in and confirming pids.current rose; if not, discard
-    // the cgroup and warn that the limit degraded to RLIMIT.
-    if !cgroup_membership_works(&dir) {
+    // Capability probe (fail-closed) — ONLY when a hard cap is requested. Creating
+    // the directory and writing pids.max can both "succeed" in a container whose
+    // cgroup namespace won't actually let a process join a child cgroup (the write
+    // to cgroup.procs is accepted but the move never takes effect — observed under
+    // Docker without cgroup delegation). There, --max-procs would silently enforce
+    // nothing, so we prove membership and warn+degrade if it fails. For a
+    // tracking-only cgroup (no caps, used just for cgroup.kill teardown) we skip
+    // this probe: a silent membership failure merely falls back to kill(-pgid),
+    // and the ~tens-of-ms probe is pure per-launch latency we avoid in the common
+    // case (an agent spawns many short commands).
+    let has_cap = policy.max_processes.is_some() || policy.max_memory_bytes.is_some();
+    if has_cap && !cgroup_membership_works(&dir) {
         let _ = std::fs::remove_dir(&dir);
         warn_cgroup_degraded(policy);
         return None;
@@ -690,7 +694,7 @@ fn cgroup_membership_works(dir: &str) -> bool {
     }
     if pid == 0 {
         // Child: park briefly so the parent can observe membership, then exit.
-        let ts = libc::timespec { tv_sec: 0, tv_nsec: 30_000_000 };
+        let ts = libc::timespec { tv_sec: 0, tv_nsec: 10_000_000 };
         unsafe {
             libc::nanosleep(&ts, std::ptr::null_mut());
             libc::_exit(0);
@@ -777,6 +781,11 @@ fn supervise(
         }
         kill_group(sig);
     };
+    // Adaptive poll: short commands (the common agent case) finish in ~1ms, so
+    // start tight and back off to 50ms for long runs — this removes a fixed ~50ms
+    // per-launch latency without busy-spinning a long process (or over-polling
+    // the collectors). Correctness (timeout, teardown) is independent of cadence.
+    let mut poll_ms = 1u64;
     loop {
         // Poll collectors in the same loop (no-op when there are none), so
         // observation never alters the supervision/timeout behaviour.
@@ -802,7 +811,8 @@ fn supervise(
                         return 124; // timed out
                     }
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(Duration::from_millis(poll_ms));
+                poll_ms = (poll_ms * 2).min(50);
             }
             Err(_) => return -1,
         }

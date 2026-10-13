@@ -160,10 +160,19 @@ struct Outcome {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // --perf needs no corpus; handle it before reading any directory.
+    if args.iter().any(|a| a == "--perf") {
+        let n = args.iter().filter_map(|a| a.parse::<usize>().ok()).next().unwrap_or(50);
+        run_perf(n);
+        return;
+    }
+
     let mutate = args.iter().any(|a| a == "--mutate");
+    // The corpus dir is the first non-flag, non-numeric positional argument.
     let dir = args
         .iter()
-        .find(|a| !a.starts_with("--"))
+        .find(|a| !a.starts_with("--") && a.parse::<usize>().is_err())
         .cloned()
         .unwrap_or_else(|| "corpus".into());
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -385,6 +394,70 @@ fn environment() -> Env {
         cgroup_v2,
         userns,
     }
+}
+
+/// Startup-overhead benchmark: how much latency the sandbox adds per launch.
+/// Agents spawn many short confined commands, so this is a real product metric.
+/// Times `/bin/true` unsandboxed vs under a minimal policy vs under the hardened
+/// (hostile-code) tier, and reports p50/p95. Read-only, no corpus.
+fn run_perf(n: usize) {
+    use std::time::Instant;
+    let env = environment();
+    let root = std::env::temp_dir().join(format!("tartaros-perf-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(root.join("work"));
+    let base = Policy {
+        role: "perf".into(),
+        writable_roots: vec![root.join("work")],
+        network: Some(Network::Denied),
+        ..Default::default()
+    };
+    let mut hardened = base.clone();
+    tartaros_core::Profile::HostileCode.apply(&mut hardened);
+
+    let pct = |mut v: Vec<f64>, p: f64| -> f64 {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        if v.is_empty() { return 0.0; }
+        v[(((v.len() - 1) as f64) * p).round() as usize]
+    };
+    let time_it = |run: &mut dyn FnMut()| -> Vec<f64> {
+        // one warmup, then n timed runs (ms)
+        run();
+        (0..n)
+            .map(|_| { let t = Instant::now(); run(); t.elapsed().as_secs_f64() * 1000.0 })
+            .collect()
+    };
+
+    let cmd = vec!["/bin/true".to_string()];
+    let mut raw = || { let _ = std::process::Command::new("/bin/true").status(); };
+    let mut sb = || { let _ = BACKEND.run(&base, &cmd); };
+    let mut hd = || { let _ = BACKEND.run(&hardened, &cmd); };
+
+    let r = time_it(&mut raw);
+    let s = time_it(&mut sb);
+    let h = time_it(&mut hd);
+    let _ = std::fs::remove_dir_all(&root);
+
+    println!("tartaros-bench · PERF · backend={OS} · n={n}");
+    println!("environment: {} · kernel {} · tartaros-bench {}\n", env.os, env.kernel, env.version);
+    println!("{:<22} {:>10} {:>10} {:>10}", "launch", "p50 (ms)", "p95 (ms)", "min (ms)");
+    println!("{}", "-".repeat(56));
+    let row = |label: &str, v: &[f64]| {
+        println!("{:<22} {:>10.2} {:>10.2} {:>10.2}", label, pct(v.to_vec(), 0.50), pct(v.to_vec(), 0.95), v.iter().cloned().fold(f64::MAX, f64::min));
+    };
+    row("unsandboxed", &r);
+    row("minimal policy", &s);
+    row("hardened (hostile)", &h);
+    let base_p50 = pct(r.clone(), 0.50);
+    println!("\noverhead vs unsandboxed (p50): minimal +{:.2} ms, hardened +{:.2} ms",
+        pct(s.clone(), 0.50) - base_p50, pct(h.clone(), 0.50) - base_p50);
+
+    let _ = std::fs::create_dir_all("reports");
+    let j = format!(
+        "{{\"os\":\"{}\",\"kernel\":\"{}\",\"n\":{n},\"ms\":{{\"unsandboxed_p50\":{:.3},\"minimal_p50\":{:.3},\"minimal_p95\":{:.3},\"hardened_p50\":{:.3},\"hardened_p95\":{:.3}}}}}\n",
+        env.os, env.kernel, pct(r.clone(),0.5), pct(s.clone(),0.5), pct(s.clone(),0.95), pct(h.clone(),0.5), pct(h,0.95)
+    );
+    let _ = std::fs::write("reports/perf.json", j);
+    println!("\nreport: reports/perf.json");
 }
 
 fn run_scenario(c: Contract) -> Outcome {
