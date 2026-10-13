@@ -8,6 +8,7 @@
 //!   --role NAME            label for effect-log attribution
 //!   --write DIR            a writable root (repeatable)
 //!   --read-deny DIR        deny reads of this path (repeatable; secrets)
+//!   --write-deny DIR       deny writes to this path inside a writable root (repeatable)
 //!   --port N               allow loopback TCP to this port (repeatable)
 //!   --net                  allow all network (default: denied)
 //!   --deny-unix            deny AF_UNIX sockets (Linux, seccomp)
@@ -24,7 +25,7 @@
 //!
 //! Exit code is the command's (128+signal on signal death, 124 on timeout).
 
-use tartaros_core::{Network, Policy, Profile};
+use tartaros_core::{Access, FsRule, Network, Policy, Profile};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::exit;
@@ -42,6 +43,8 @@ struct PolicyFile {
     writable_roots: Vec<String>,
     #[serde(default)]
     read_denies: Vec<String>,
+    #[serde(default)]
+    write_denies: Vec<String>,
     #[serde(default)]
     local_ports: Vec<u16>,
     #[serde(default)]
@@ -128,6 +131,7 @@ POLICY:
   --role NAME            label for the effect log
   --write DIR            a writable root (repeatable)
   --read-deny DIR        deny reads of this path, e.g. a secret dir (repeatable)
+  --write-deny DIR       deny writes to this path inside a writable root (repeatable)
   --port N               allow loopback TCP to this port (repeatable)
   --net                  allow all network (default: denied)
 
@@ -206,6 +210,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
         p.role = pf.role;
         p.writable_roots = pf.writable_roots.iter().map(|s| PathBuf::from(expand(s))).collect();
         p.read_denies = pf.read_denies.iter().map(|s| PathBuf::from(expand(s))).collect();
+        p.fs_rules.extend(pf.write_denies.iter().map(|s| FsRule { path: PathBuf::from(expand(s)), access: Access::Deny, even_if_absent: true }));
         p.local_ports = pf.local_ports;
         p.network = Some(if pf.net { Network::Allowed } else { Network::Denied });
         p.deny_unix_sockets = pf.deny_unix_sockets;
@@ -251,6 +256,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
             "--role" => p.role = val(),
             "--write" => p.writable_roots.push(PathBuf::from(expand(&val()))),
             "--read-deny" => p.read_denies.push(PathBuf::from(expand(&val()))),
+            "--write-deny" => p.fs_rules.push(FsRule { path: PathBuf::from(expand(&val())), access: Access::Deny, even_if_absent: true }),
             "--port" => p.local_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --port"); exit(2); })),
             "--net" => p.network = Some(Network::Allowed),
             "--deny-unix" => p.deny_unix_sockets = true,
@@ -291,6 +297,10 @@ fn explain(p: &Policy) {
     if let Some(c) = p.max_cpu_secs { println!("max cpu: {c}s (RLIMIT_CPU)"); }
     println!("\nwritable roots:");
     for r in &p.writable_roots { println!("  + {}", r.display()); }
+    println!("\nwrite-denied (inside writable roots):");
+    for r in p.fs_rules.iter().filter(|r| r.access == Access::Deny) {
+        println!("  x {}", r.path.display());
+    }
     println!("\nread-denied (secrets):");
     for r in &p.read_denies { println!("  - {}", r.display()); }
     println!("\ntrust-handoff protected (deny write, any depth):");
