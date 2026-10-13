@@ -1,0 +1,19 @@
+id = "resource-memory-limit"
+category = "resources"
+severity = "high"
+os = ["linux"]
+
+# allocating past the memory cap fails, it does not take down the host
+[policy]
+writable_roots = ["{root}/work"]
+max_memory_bytes = 268435456
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'b=bytearray(600*1024*1024)' 2>/dev/null"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

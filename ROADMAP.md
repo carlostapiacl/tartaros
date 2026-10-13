@@ -149,8 +149,10 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] runner: loads TOML contracts, runs attack + legitimate control under the
       OS backend, checks real-effect assertions, prints scorecard + reports/last.json,
       exits non-zero on a critical violation (CI-ready)
-- [x] corpus v1 (6 scenarios): fs write-outside, nested .git hook, ancestor rename,
-      secret read-deny, secret inside writable (P0-1), materialize absent handoff.
-      **macOS 5/5, Linux 6/6, 0 violations, 0 legitimate ops broken**
-- [ ] add: network per-port, broker, IPC, resource/lifecycle, symlink/hardlink
+- [x] corpus v1 (10 scenarios): fs write-outside, symlink escape, nested .git hook,
+      ancestor rename, secret read-deny, secret inside writable (P0-1), materialize
+      absent handoff, network per-port, lifecycle timeout, memory limit. Runner
+      extended with servers, timeout/rlimit policy, expect_exit, symlink fixtures.
+      **macOS 7/7, Linux 10/10, 0 violations, 0 legitimate ops broken**
+- [ ] add: broker (HTTP/HTTPS), IPC (unix sockets/inherited fds), hardlink
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)

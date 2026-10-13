@@ -1,0 +1,20 @@
+id = "lifecycle-timeout-kills-group"
+category = "lifecycle"
+severity = "high"
+os = ["linux"]
+
+# a runaway command is killed at the timeout (exit 124), not left running
+[policy]
+writable_roots = ["{root}/work"]
+timeout_secs = 2
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sleep 30"
+expect_exit = 124
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
