@@ -115,9 +115,13 @@ Build only where measurement shows no existing backend can enforce the policy.
       `X-Seisin-Auth: <token>` per run; a process without it gets 403. Verified
       on the Linux test host (with token 200, without 403). Destination/method scoping per
       capability remains to extend.
-- [~] **P1 absent trust-handoff paths on Linux** (inode limit): deferred. Real
-      fix needs dynamic monitoring (fanotify/FUSE); no portable static fix.
-      macOS/Seatbelt already covers absent paths. Documented limitation.
+- [x] **P1 absent trust-handoff paths on Linux — MITIGATED (opt-in).**
+      `Policy::materialize_absent_handoff` pre-creates empty read-only
+      placeholders for absent top-level trust-handoff configs so Landlock (inode-
+      based) carves them; the agent can no longer create e.g. `.claude/settings.
+      json`. VERIFIED on the Linux test host (without: EVIL config created; with: blocked; normal
+      writes in existing subdirs still work). Cost: new TOP-LEVEL entries in a
+      root containing a protected path aren't creatable (inherent carve tradeoff).
 - [x] **P1 /proc isolation / cross-process env read on Linux — MITIGATED.**
       Primary: the kernel already blocks it — with Yama `ptrace_scope=1` (Ubuntu
       default, confirmed on the Linux test host) an unrelated process's `/proc/<pid>/environ` is

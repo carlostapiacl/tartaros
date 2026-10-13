@@ -98,6 +98,32 @@ fn confined_command(
 
     let err = |m: String| RunError { reason: m };
 
+    // P1-2 mitigation (opt-in): materialize absent trust-handoff placeholders so
+    // Landlock (inode-based) can carve them. Create read-only so even before the
+    // carve applies they are not writable; the carve then excludes them from the
+    // write allow-list because they now exist.
+    if policy.materialize_absent_handoff {
+        for p in policy.handoff_placeholders() {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            // `.github/workflows` is a directory; the rest are files.
+            let is_dir = p.file_name().map(|n| n == "workflows").unwrap_or(false);
+            if is_dir {
+                let _ = std::fs::create_dir_all(&p);
+            } else {
+                let _ = std::fs::write(&p, b"");
+            }
+            // make the placeholder read-only (0444)
+            if let Ok(meta) = std::fs::metadata(&p) {
+                let mut perm = meta.permissions();
+                use std::os::unix::fs::PermissionsExt;
+                perm.set_mode(0o444);
+                let _ = std::fs::set_permissions(&p, perm);
+            }
+        }
+    }
+
     // Request up to ABI v5 (TCP port rules arrived in v4, kernel 6.7); BestEffort
     // degrades on older kernels. NOTE: on a kernel without Landlock network
     // support, network rules are silently dropped — net confinement needs
