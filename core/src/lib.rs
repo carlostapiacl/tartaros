@@ -71,6 +71,39 @@ pub struct Policy {
 }
 
 impl Policy {
+    /// Compile this policy's writable roots + denies into a Landlock-style
+    /// **write allow-list**: a set of subtree roots the agent may write under,
+    /// with every protected path carved out.
+    ///
+    /// Landlock cannot express "allow X but deny X/y" (nono refuses such a
+    /// policy outright). seisin restructures instead: it grants the safe
+    /// subtrees and excludes the branch that leads to each protected path. This
+    /// is the seisin advantage on Linux.
+    ///
+    /// Tradeoff (honest): Landlock grants are hierarchical, so a directory that
+    /// *contains* a protected path cannot itself be granted — the agent cannot
+    /// create files **directly in** such a directory (its safe children are
+    /// still fully writable). For paths where that matters, the Linux backend
+    /// falls back to bwrap. `linux_write_allowlist` reports the allow set; the
+    /// caller decides.
+    pub fn linux_write_allowlist(&self) -> Vec<PathBuf> {
+        let mut denied: Vec<PathBuf> = self
+            .fs_rules
+            .iter()
+            .filter(|r| r.access == Access::Deny)
+            .map(|r| r.path.clone())
+            .collect();
+        denied.extend(self.trust_handoff_rules().into_iter().map(|r| r.path));
+        denied.sort();
+        denied.dedup();
+
+        let mut out = Vec::new();
+        for root in &self.writable_roots {
+            carve(root, &denied, &mut out);
+        }
+        out
+    }
+
     /// Expand the trust-handoff set into concrete deny rules under every
     /// writable root, **at any depth** — this is what the measured competitors
     /// miss (they protect only the first level).
@@ -92,6 +125,44 @@ impl Policy {
 
 fn deny(path: PathBuf, even_if_absent: bool) -> FsRule {
     FsRule { path, access: Access::Deny, even_if_absent }
+}
+
+/// Carve the Landlock write allow-list for one root (see
+/// [`Policy::linux_write_allowlist`]).
+fn carve(dir: &Path, denied: &[PathBuf], out: &mut Vec<PathBuf>) {
+    // This dir is itself a protected path: grant nothing here.
+    if denied.iter().any(|d| d == dir) {
+        return;
+    }
+    // Does any protected path lie strictly under this dir?
+    let has_denied_below = denied.iter().any(|d| d.starts_with(dir) && d != dir);
+    if !has_denied_below {
+        // Safe subtree: grant the whole thing.
+        out.push(dir.to_path_buf());
+        return;
+    }
+    // A protected path is below: cannot grant this dir wholesale. Recurse into
+    // children, granting the safe ones and carving the unsafe branch. Files
+    // directly in this dir are not granted (the documented tradeoff).
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            // A regular file here that is not itself denied stays writable.
+            if !denied.iter().any(|d| d == &path) {
+                out.push(path);
+            }
+            continue;
+        }
+        carve(&path, denied, out);
+    }
 }
 
 fn expand_root(root: &Path, out: &mut Vec<FsRule>) {
@@ -228,6 +299,32 @@ mod tests {
         let r = rules.iter().find(|r| r.path == settings).expect("settings.json must be denied");
         assert_eq!(r.access, Access::Deny);
         assert!(r.even_if_absent);
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn linux_allowlist_carves_out_nested_git() {
+        let tmp = std::env::temp_dir().join(format!("sbx-carve-{}", std::process::id()));
+        let root = tmp.join("work");
+        // work/src (safe), work/a/nested/.git (protected), work/a/other (safe)
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("a/nested/.git/hooks")).unwrap();
+        fs::create_dir_all(root.join("a/nested/.git/objects")).unwrap();
+        fs::create_dir_all(root.join("a/other")).unwrap();
+
+        let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
+        let allow = policy.linux_write_allowlist();
+
+        let granted = |p: &Path| allow.iter().any(|a| p.starts_with(a));
+        // safe subtrees are writable
+        assert!(granted(&root.join("src/x")));
+        assert!(granted(&root.join("a/other/y")));
+        // git internals that are NOT handoff files stay writable (git needs them)
+        assert!(granted(&root.join("a/nested/.git/objects/ab")));
+        // the protected handoff dirs are NOT writable
+        assert!(!granted(&root.join("a/nested/.git/hooks/pre-commit")));
+        assert!(!granted(&root.join("a/nested/.git/config")));
 
         fs::remove_dir_all(&tmp).ok();
     }
