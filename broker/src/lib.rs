@@ -53,6 +53,26 @@ pub struct Capability {
 /// Largest upstream response the broker relays back (P0-B: bound the response).
 const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Caps on the agent-supplied request, so a giant line or a header flood can't
+/// exhaust the broker (which runs in the trusted supervisor).
+const MAX_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADERS: usize = 100;
+
+/// Read one line but never more than `max` bytes. Returns `None` on EOF or when
+/// the line exceeds `max` without a terminating newline (treated as a bad,
+/// oversized request), so the caller can reject it instead of buffering forever.
+fn read_line_capped(r: &mut impl BufRead, max: usize) -> std::io::Result<Option<String>> {
+    let mut s = String::new();
+    let n = r.by_ref().take(max as u64).read_line(&mut s)?;
+    if n == 0 {
+        return Ok(None); // EOF
+    }
+    if n >= max && !s.ends_with('\n') {
+        return Ok(None); // hit the cap with no newline: oversized line
+    }
+    Ok(Some(s))
+}
+
 pub struct Broker {
     injections: Vec<Injection>,
     capabilities: Vec<Capability>,
@@ -205,21 +225,38 @@ impl Broker {
         let mut reader = BufReader::new(client.try_clone()?);
         let mut client = client;
 
+        // The request comes from the (confined) agent, so it is adversarial input
+        // against the broker — which runs in the TRUSTED supervisor. Bound every
+        // read so a giant line or a flood of headers cannot exhaust the broker's
+        // memory (a DoS on the supervisor). Oversized => 400, no allocation blowup.
+        let bad_request = |c: &mut TcpStream| -> std::io::Result<()> {
+            let _ = c.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            Ok(())
+        };
+
         // Request line: METHOD ABS_URI HTTP/1.1
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
+        let line = match read_line_capped(&mut reader, MAX_LINE_BYTES)? {
+            Some(l) => l,
+            None => return bad_request(&mut client), // EOF or oversized
+        };
         let parts: Vec<&str> = line.trim_end().split_whitespace().collect();
         if parts.len() < 3 {
-            return Ok(());
+            return bad_request(&mut client);
         }
         let (method, abs_uri, version) = (parts[0], parts[1], parts[2]);
 
-        // Read all request headers once.
+        // Read all request headers once, with a count and per-line cap.
         let mut headers: Vec<(String, String)> = Vec::new();
         loop {
-            let mut h = String::new();
-            if reader.read_line(&mut h)? == 0 || h == "\r\n" || h == "\n" {
-                break;
+            let h = match read_line_capped(&mut reader, MAX_LINE_BYTES)? {
+                Some(h) => h,
+                None => return bad_request(&mut client), // oversized header line
+            };
+            if h.is_empty() || h == "\r\n" || h == "\n" {
+                break; // end of headers (or EOF)
+            }
+            if headers.len() >= MAX_HEADERS {
+                return bad_request(&mut client);
             }
             if let Some((k, v)) = h.trim_end().split_once(':') {
                 headers.push((k.trim().to_string(), v.trim().to_string()));
@@ -577,6 +614,27 @@ mod tests {
         let _ = c.read_to_string(&mut resp);
         assert!(resp.contains("403"), "SSRF to loopback must be 403, got: {resp:?}");
         assert!(resp.contains("internal destination"), "got: {resp:?}");
+    }
+
+    #[test]
+    fn live_rejects_oversized_request_line() {
+        let b = Broker::new("qa", vec![]).insecure_no_auth();
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        // a request line far larger than MAX_LINE_BYTES, no newline yet
+        let giant = format!("GET http://x/{} HTTP/1.1", "a".repeat(MAX_LINE_BYTES * 2));
+        c.write_all(giant.as_bytes()).unwrap();
+        c.write_all(b"\r\n\r\n").unwrap();
+        let mut resp = String::new();
+        let _ = c.read_to_string(&mut resp);
+        // bounded read -> 400, not an OOM / hang
+        assert!(resp.contains("400"), "oversized line must be 400, got: {resp:?}");
     }
 
     #[test]
