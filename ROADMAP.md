@@ -144,3 +144,13 @@ Build only where measurement shows no existing backend can enforce the policy.
       `timeout` kills the group (exit 124), `setrlimit` for memory/processes/CPU,
       descendants reaped on exit. Verified on the Linux test host (timeout 2s, grandchild not
       alive, memory cap hit). cgroups v2 can extend this later.
+
+## M6 — security-bench (conformance suite) — STARTED
+- [x] runner: loads TOML contracts, runs attack + legitimate control under the
+      OS backend, checks real-effect assertions, prints scorecard + reports/last.json,
+      exits non-zero on a critical violation (CI-ready)
+- [x] corpus v1 (6 scenarios): fs write-outside, nested .git hook, ancestor rename,
+      secret read-deny, secret inside writable (P0-1), materialize absent handoff.
+      **macOS 5/5, Linux 6/6, 0 violations, 0 legitimate ops broken**
+- [ ] add: network per-port, broker, IPC, resource/lifecycle, symlink/hardlink
+- [ ] adapters for anthropic-srt / nono / openshell (honest comparison)

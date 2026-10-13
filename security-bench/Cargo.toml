@@ -1,0 +1,19 @@
+[package]
+name = "seisin-security-bench"
+description = "Conformance suite: reproducible security scenarios (attack + legitimate control + real-effect assertion) run against a sandbox backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+seisin-sandbox-core = { path = "../core" }
+toml = "0.8.19"
+serde = { version = "1.0.210", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+seisin-sandbox-linux = { path = "../backends/linux" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+seisin-sandbox-macos = { path = "../backends/macos" }

@@ -1,0 +1,23 @@
+id = "trust-handoff-materialize-absent"
+category = "trust-handoff"
+severity = "high"
+os = ["linux"]
+
+# with materialization, the agent cannot create an absent trust-handoff config
+[policy]
+writable_roots = ["{root}/work"]
+materialize_absent_handoff = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mkdir -p {root}/work/.claude && echo EVIL > {root}/work/.claude/settings.json"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+# the placeholder exists but must not contain the agent's EVIL
+unchanged = "{root}/work/.claude/settings.json"
