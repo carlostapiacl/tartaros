@@ -77,9 +77,12 @@ benchmarks (AgentEscapeBench) run only on disposable VMs, never here.
 inherited-fd leak (`backends/linux/examples/p1c_fd_leak`), broker HTTP/HTTPS
 (`broker/examples/*`), lifecycle/resources (`backends/linux/examples/p1b_lifecycle`).
 
-## Other backends
+## Cross-backend comparison
 
-The runner targets seisin today. Adapters for `anthropic-srt`, `nono` and
-`openshell` would run the same contracts against them for an honest comparison —
-recording which scenarios each backend cannot even express, without calling an
-unsupported feature a vulnerability.
+A first honest comparison vs **nono 0.79** (fairly configured, measured on the Linux test host)
+is in [`comparison/RESULTS.md`](comparison/RESULTS.md): parity on write-outside,
+seisin's trust-handoff advantage on nested `.git/hooks`, and nono cannot express a
+deny inside an allow on Linux. Includes a mid-measurement correction (a /tmp-default
+false positive) — a difference in defaults is never sold as a vulnerability.
+Reproduce with `comparison/nono-scenarios.sh` on a Landlock host (not the dev Mac).
+srt and OpenShell comparisons pending.
