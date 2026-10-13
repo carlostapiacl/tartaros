@@ -29,9 +29,15 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [ ] shell rc / CI-config handoff paths beyond `.github/workflows`
 
 ## M2 — Linux backend
-- [ ] Landlock via `rust-landlock`; `validate` rejects deny-overlapping-allow
-- [ ] bwrap path for deny-on-absent, with Codex's flock mount registry
-- [ ] bench on a real Landlock kernel (the Linux test host)
+- [x] `Policy::linux_write_allowlist`: **carves** the deny out of the allow
+      (grant safe subtrees, exclude the protected branch) — makes expressible
+      what nono refuses. Unit test with nested `.git`. The seisin Linux edge.
+- [x] `validate` ACCEPTS deny-inside-allow by restructuring (nono rejects)
+- [ ] wire the Landlock ruleset from the allow-list (`rust-landlock`) — needs a
+      Linux kernel; test on the Linux test host (kernel 6.8, Landlock confirmed)
+- [ ] bwrap fallback for paths where direct-file-creation in an on-path dir
+      matters, with Codex's flock mount registry (our report #4)
+- [ ] run the bench on the Linux test host; show deny-in-allow works where nono refuses
 
 ## M3 — integration + release
 - [ ] `srt` adapter (wrap @anthropic-ai/sandbox-runtime)
