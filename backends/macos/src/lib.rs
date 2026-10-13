@@ -215,6 +215,36 @@ fn supervise(
 }
 
 /// Build the Seatbelt SBPL profile. In SBPL the LAST matching rule wins, so
+/// Resolve what this policy actually enforces on macOS (Seatbelt + RLIMIT), so a
+/// user can verify guarantees before running. The Linux-only hardening knobs are
+/// reported UNSUPPORTED here (validate() also refuses them — never silent).
+pub fn enforcement_report(policy: &Policy) -> Vec<String> {
+    let mut out = vec![
+        "filesystem / trust-handoff: GUARANTEED (Seatbelt)".to_string(),
+        "network (default-deny + per-port): GUARANTEED (Seatbelt)".to_string(),
+    ];
+    if policy.max_memory_bytes.is_some() {
+        out.push("memory cap (--max-mem): BEST-EFFORT (RLIMIT_AS)".into());
+    }
+    if policy.max_processes.is_some() {
+        out.push("process cap (--max-procs): BEST-EFFORT (RLIMIT_NPROC — no cgroup on macOS)".into());
+    }
+    if policy.max_cpu_secs.is_some() {
+        out.push("cpu cap (--max-cpu): GUARANTEED (RLIMIT_CPU)".into());
+    }
+    for (flag, on) in [
+        ("--isolate-pids", policy.isolate_pids),
+        ("--isolate-net", policy.isolate_network),
+        ("--seccomp-strict", policy.harden_syscalls),
+        ("--deny-unix", policy.deny_unix_sockets),
+    ] {
+        if on {
+            out.push(format!("{flag}: UNSUPPORTED on macOS (Seatbelt) — run is refused"));
+        }
+    }
+    out
+}
+
 /// every deny is emitted AFTER the broad allows, and the trust-handoff denies
 /// cannot be re-allowed.
 pub fn compile_profile(policy: &Policy) -> String {
