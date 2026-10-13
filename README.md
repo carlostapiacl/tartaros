@@ -43,7 +43,7 @@ needs are not built yet:
 |---|---|
 | FS writes + trust-handoff (nested `.git`, ancestor rename) | **done, measured** (both OS) |
 | FS reads of on-disk secrets (`~/.ssh`, `~/.aws`, `.env`) | **not done** — reads are allowed everywhere so tools run |
-| Network confinement | macOS: default-denied by the profile (untested). **Linux: not restricted yet** |
+| Network confinement | macOS: default-denied + per-port `local_ports` (live-verified). **Linux: per-port via Landlock (ABI v4+, live-verified on the Linux test host; port-based not host-based)** |
 | Secret broker (capability instead of raw token) | **not started** |
 | Cross-process env read (another process's secrets) | macOS: platform limit (see below). **Linux: not closed yet** — we grant broad read, so `/proc/<pid>/environ` is readable; closing it means restricting reads or a PID namespace |
 | Process lifecycle beyond exit code (timeouts, reaping) | **minimal** |
