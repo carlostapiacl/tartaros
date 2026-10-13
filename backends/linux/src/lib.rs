@@ -236,6 +236,7 @@ fn confined_command(
     let max_memory = policy.max_memory_bytes;
     let max_processes = policy.max_processes;
     let max_cpu = policy.max_cpu_secs;
+    let deny_unix = policy.deny_unix_sockets;
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
     unsafe {
@@ -248,6 +249,10 @@ fn confined_command(
             set_rlimit(libc::RLIMIT_AS, max_memory)?;
             set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
             set_rlimit(libc::RLIMIT_CPU, max_cpu)?;
+            // Deny AF_UNIX sockets (IPC-1) via seccomp, if the policy asked.
+            if deny_unix {
+                apply_deny_af_unix()?;
+            }
             // Landlock last: least privilege right before exec.
             created
                 .take()
@@ -258,6 +263,45 @@ fn confined_command(
         });
     }
     Ok(cmd)
+}
+
+/// Deny creating `AF_UNIX` sockets via seccomp (IPC-1). Everything else is
+/// allowed, so TCP (AF_INET), files, etc. keep working. Requires no-new-privs,
+/// which we set here (Landlock sets it too, but seccomp is applied first).
+#[cfg(target_os = "linux")]
+fn apply_deny_af_unix() -> std::io::Result<()> {
+    use seccompiler::{
+        apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
+        SeccompFilter, SeccompRule,
+    };
+    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
+
+    // no_new_privs is required to install a seccomp filter unprivileged.
+    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    // Match socket(domain == AF_UNIX, ..) and return EACCES; allow all else.
+    let cond = SeccompCondition::new(
+        0,
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::Eq,
+        libc::AF_UNIX as u64,
+    )
+    .map_err(|e| to_io(format!("seccomp cond: {e}")))?;
+    let rule = SeccompRule::new(vec![cond]).map_err(|e| to_io(format!("seccomp rule: {e}")))?;
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(libc::SYS_socket, vec![rule]);
+    let filter = SeccompFilter::new(
+        map,
+        SeccompAction::Allow,                            // default: allow
+        SeccompAction::Errno(libc::EACCES as u32),       // matched: deny
+        std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
+    )
+    .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
+    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
+    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
+    Ok(())
 }
 
 /// Apply one `setrlimit` (cur=max=limit) when a limit is set. Returns an io error

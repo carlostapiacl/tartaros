@@ -63,6 +63,8 @@ struct PolicySpec {
     max_memory_bytes: Option<u64>,
     #[serde(default)]
     max_processes: Option<u64>,
+    #[serde(default)]
+    deny_unix_sockets: bool,
 }
 
 /// A loopback TCP server the runner starts for network scenarios.
@@ -255,6 +257,7 @@ fn run_scenario(c: Contract) -> Outcome {
         timeout: c.policy.timeout_secs.map(std::time::Duration::from_secs),
         max_memory_bytes: c.policy.max_memory_bytes,
         max_processes: c.policy.max_processes,
+        deny_unix_sockets: c.policy.deny_unix_sockets,
         ..Default::default()
     };
 

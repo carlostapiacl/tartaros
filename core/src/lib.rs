@@ -100,6 +100,11 @@ pub struct Policy {
     pub max_processes: Option<u64>,
     /// CPU-time limit in seconds (`RLIMIT_CPU`).
     pub max_cpu_secs: Option<u64>,
+    /// Opt-in (IPC-1): deny creating `AF_UNIX` sockets via seccomp, so the agent
+    /// cannot reach a unix socket outside its territory (Landlock does not mediate
+    /// pathname unix sockets). Default off — real agents use unix sockets, so this
+    /// is a strict mode the policy turns on when that is acceptable.
+    pub deny_unix_sockets: bool,
 }
 
 impl Policy {

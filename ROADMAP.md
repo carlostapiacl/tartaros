@@ -154,5 +154,7 @@ Build only where measurement shows no existing backend can enforce the policy.
       absent handoff, network per-port, lifecycle timeout, memory limit. Runner
       extended with servers, timeout/rlimit policy, expect_exit, symlink fixtures.
       **macOS 7/7, Linux 10/10, 0 violations, 0 legitimate ops broken**
-- [ ] add: broker (HTTP/HTTPS), IPC (unix sockets/inherited fds), hardlink
+- [x] added: hardlink bypass, IPC unix-socket (opt-in seccomp `deny_unix_sockets`
+      on Linux — found + fixed + verified; macOS blocks it natively)
+- [ ] add: broker (HTTP/HTTPS) contract, inherited-fd IPC, cross-backend adapters
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)

@@ -15,6 +15,7 @@ seisin-sandbox-core = { path = "../../core" }
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.5"
 libc = "0.2.177"
+seccompiler = "0.4.0"
 
 [dev-dependencies]
 libc = "0.2.177"
