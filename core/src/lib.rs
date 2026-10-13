@@ -225,6 +225,101 @@ impl Policy {
     }
 }
 
+/// A named threat model: a baseline of confinement for a stated assumption about
+/// the code being run. Explicit policy fields still override the baseline. The
+/// point is honesty about what each tier does and does NOT guarantee — above all,
+/// that TartarOS runs on a SHARED kernel, so no profile short of a microVM backend
+/// provides true multi-tenant isolation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    /// The agent is trusted but fallible: confine mistakes and the trust-handoff
+    /// set. Network default-deny, no namespace isolation. The everyday dev case.
+    LocalAgent,
+    /// The code may be actively malicious (single tenant): add PID isolation, an
+    /// AF_UNIX lockdown and /proc isolation on top of local-agent. Still a shared
+    /// kernel — a kernel exploit is out of scope for this tier.
+    HostileCode,
+    /// Untrusted multi-tenant workloads. TartarOS applies maximum single-kernel
+    /// hardening (hostile-code + a fully isolated, egress-free network namespace)
+    /// but does NOT provide kernel-level tenant isolation: a kernel LPE crosses
+    /// the boundary. Real tenant separation needs a microVM backend
+    /// (Firecracker/Kata), which is not implemented. Fail honest, not silent.
+    MultiTenant,
+}
+
+impl Profile {
+    pub fn parse(s: &str) -> Option<Profile> {
+        match s {
+            "local-agent" => Some(Profile::LocalAgent),
+            "hostile-code" => Some(Profile::HostileCode),
+            "multi-tenant" => Some(Profile::MultiTenant),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Profile::LocalAgent => "local-agent",
+            Profile::HostileCode => "hostile-code",
+            Profile::MultiTenant => "multi-tenant",
+        }
+    }
+
+    /// Apply the profile's baseline to a policy. Only tightens; never grants.
+    /// Call this BEFORE applying explicit flags so the operator can still relax
+    /// or extend it. Network stays default-denied in every profile.
+    pub fn apply(self, p: &mut Policy) {
+        if p.network.is_none() {
+            p.network = Some(Network::Denied);
+        }
+        match self {
+            Profile::LocalAgent => {}
+            // isolate_pids already gives the agent a /proc that shows only its own
+            // namespace, so host processes/env are invisible — stronger than the
+            // Landlock /proc read-deny (isolate_process_info), and it keeps the
+            // agent's own /proc/self readable. It fails closed if namespaces are
+            // unavailable, so there is no silent fallback to drop to.
+            Profile::HostileCode => {
+                p.isolate_pids = true;
+                p.deny_unix_sockets = true;
+            }
+            Profile::MultiTenant => {
+                p.isolate_pids = true;
+                p.deny_unix_sockets = true;
+                p.isolate_network = true;
+            }
+        }
+    }
+
+    /// One-line statement of what this tier confines.
+    pub fn tier(self) -> &'static str {
+        match self {
+            Profile::LocalAgent => "confines a trusted-but-fallible agent (mistakes + trust-handoff)",
+            Profile::HostileCode => "confines actively-malicious code on a single, shared kernel",
+            Profile::MultiTenant => "maximum single-kernel hardening — NOT kernel-isolated",
+        }
+    }
+
+    /// An honest caveat printed on run and in `explain`, or `None` when the tier's
+    /// guarantee needs no asterisk. Never lets a tier overclaim.
+    pub fn caveat(self) -> Option<&'static str> {
+        match self {
+            Profile::LocalAgent => None,
+            Profile::HostileCode => Some(
+                "shared kernel: a kernel-level exploit (LPE) can still cross this boundary. \
+                 For untrusted multi-tenant workloads a microVM backend is required.",
+            ),
+            Profile::MultiTenant => Some(
+                "multi-tenant KERNEL ISOLATION IS NOT PROVIDED. TartarOS confines via \
+                 Landlock/seccomp/namespaces on a SHARED kernel; a kernel exploit crosses \
+                 tenants. Real tenant separation requires a microVM backend \
+                 (Firecracker/Kata), not yet implemented. This profile applies maximum \
+                 single-kernel hardening ONLY.",
+            ),
+        }
+    }
+}
+
 fn deny(path: PathBuf, even_if_absent: bool) -> FsRule {
     FsRule { path, access: Access::Deny, even_if_absent }
 }
@@ -454,6 +549,39 @@ mod tests {
     /// a path is allowed iff it is under or equal to a granted entry)?
     fn granted(allow: &[PathBuf], x: &Path) -> bool {
         allow.iter().any(|a| x.starts_with(a))
+    }
+
+    #[test]
+    fn profiles_escalate_and_stay_honest() {
+        // local-agent adds no namespace/IPC hardening and makes no claim to fix.
+        let mut p = Policy::default();
+        Profile::LocalAgent.apply(&mut p);
+        assert!(!p.isolate_pids && !p.isolate_network && !p.deny_unix_sockets);
+        assert!(Profile::LocalAgent.caveat().is_none());
+
+        // hostile-code hides the host (PID ns) and locks down AF_UNIX, but keeps
+        // the agent's own /proc readable (no blunt isolate_process_info).
+        let mut h = Policy::default();
+        Profile::HostileCode.apply(&mut h);
+        assert!(h.isolate_pids && h.deny_unix_sockets);
+        assert!(!h.isolate_process_info, "isolate_pids supersedes the /proc read-deny");
+        assert!(!h.isolate_network, "hostile-code is not offline by default");
+        assert!(Profile::HostileCode.caveat().unwrap().contains("kernel"));
+
+        // multi-tenant adds full egress-off AND must never claim kernel isolation.
+        let mut m = Policy::default();
+        Profile::MultiTenant.apply(&mut m);
+        assert!(m.isolate_pids && m.deny_unix_sockets && m.isolate_network);
+        let c = Profile::MultiTenant.caveat().unwrap();
+        assert!(c.contains("NOT PROVIDED") && c.contains("microVM"));
+
+        // profiles only tighten: an explicit network grant survives apply().
+        let mut net = Policy { network: Some(Network::Allowed), ..Default::default() };
+        Profile::HostileCode.apply(&mut net);
+        assert_eq!(net.network, Some(Network::Allowed));
+
+        assert_eq!(Profile::parse("hostile-code"), Some(Profile::HostileCode));
+        assert_eq!(Profile::parse("nope"), None);
     }
 
     /// Monotonicity of the policy compiler: a MORE restrictive policy must never
