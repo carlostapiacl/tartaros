@@ -158,5 +158,9 @@ Build only where measurement shows no existing backend can enforce the policy.
       on Linux — found + fixed + verified; macOS blocks it natively)
 - [x] added: broker credential-egress contract (secret only in the broker; direct
       egress blocked, via-broker works) — the Linux test host 13/13
-- [ ] add: inherited-fd IPC; cross-backend adapters (srt / nono / openshell)
+- [x] **inherited-fd leak closed**: the Linux backend closes all non-stdio fds
+      (`close_range`) just before exec — an fd the orchestrator left open no longer
+      bypasses path-based confinement. Verified on the Linux test host (`p1c_fd_leak`: child can't
+      read the inherited fd; smoke/net unaffected). macOS equivalent pending.
+- [ ] add: cross-backend adapters (srt / nono / openshell); macOS fd-close
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
