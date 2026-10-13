@@ -663,7 +663,17 @@ fn create_cgroup(policy: &Policy) -> Option<String> {
         }
     }
     if let Some(m) = policy.max_memory_bytes {
-        let _ = std::fs::write(format!("{dir}/memory.max"), m.to_string());
+        // Fail loud, not silent (adversarial-audit P1): if the cgroup memory cap
+        // can't be installed (e.g. the memory controller isn't delegated), say so
+        // — the agent still has RLIMIT_AS as a fallback address-space cap, so
+        // memory is not unbounded, but the stricter cgroup RSS cap did not apply.
+        if std::fs::write(format!("{dir}/memory.max"), m.to_string()).is_err() {
+            eprintln!(
+                "tartaros: warning: could not set cgroup memory.max; --max-mem falls \
+                 back to RLIMIT_AS only (address space capped, cgroup RSS cap not \
+                 applied). Delegate the memory controller for the stricter cap."
+            );
+        }
     }
     // Capability probe (fail-closed) — ONLY when a hard cap is requested. Creating
     // the directory and writing pids.max can both "succeed" in a container whose
