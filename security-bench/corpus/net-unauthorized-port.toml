@@ -1,0 +1,24 @@
+id = "net-unauthorized-port"
+category = "network"
+severity = "critical"
+os = ["linux", "macos"]
+
+# granted loopback port 18001 only; 18787 must be unreachable
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [18001]
+
+[[server]]
+port = 18001
+[[server]]
+port = 18787
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "curl -s -o /dev/null --max-time 4 http://127.0.0.1:18787/"
+
+[control]
+cmd = "curl -s -o {root}/work/src/out --max-time 4 http://127.0.0.1:18001/"

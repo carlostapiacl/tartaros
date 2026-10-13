@@ -25,8 +25,8 @@ violation — drop it into CI.
 
 | | macOS | Linux (the Linux test host) |
 |---|---|---|
-| scenarios | 5 | 6 |
-| passed | 5/5 | 6/6 |
+| scenarios | 7 | 10 |
+| passed | 7/7 | 10/10 |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 
@@ -61,17 +61,17 @@ unchanged = "{root}/work/.secrets/token" # the secret is intact
 `{root}` is substituted with a fresh per-scenario temp dir (and canonicalized,
 so Seatbelt/Landlock see the real path).
 
-## Covered families (see `../CATALOG.md` for the full matrix)
+## Covered families (7)
 
-filesystem write-outside · trust-handoff nested `.git` · ancestor rename · secret
-read-deny · secret inside a writable root (P0-1) · absent-handoff materialization.
+filesystem write-outside · symlink escape · trust-handoff nested `.git` · ancestor
+rename · secret read-deny · secret inside a writable root (P0-1) · absent-handoff
+materialization · network per-port · lifecycle timeout (kills the group) · memory limit.
 
-## Not yet in the corpus (need live servers or separate harness)
+## Not yet in the corpus
 
-network per-port + broker (have examples under `broker/` and `backends/*/examples/`),
-IPC, resource limits/lifecycle (`backends/linux/examples/p1b_lifecycle`), and
-symlink/hardlink equivalence. Kernel-escape benchmarks (AgentEscapeBench) run only
-on disposable VMs, never here.
+broker (HTTP/HTTPS capability — have examples under `broker/`), IPC (unix sockets /
+inherited fds), hardlink equivalence, and cross-backend adapters. Kernel-escape
+benchmarks (AgentEscapeBench) run only on disposable VMs, never here.
 
 ## Other backends
 

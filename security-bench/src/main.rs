@@ -35,6 +35,8 @@ struct Contract {
     policy: PolicySpec,
     #[serde(default)]
     fixture: Vec<FixtureItem>,
+    #[serde(default)]
+    server: Vec<ServerSpec>,
     attack: Op,
     control: Op,
     #[serde(default)]
@@ -53,6 +55,18 @@ struct PolicySpec {
     materialize_absent_handoff: bool,
     #[serde(default)]
     isolate_process_info: bool,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    max_memory_bytes: Option<u64>,
+    #[serde(default)]
+    max_processes: Option<u64>,
+}
+
+/// A loopback TCP server the runner starts for network scenarios.
+#[derive(Deserialize)]
+struct ServerSpec {
+    port: u16,
 }
 
 #[derive(Deserialize)]
@@ -62,11 +76,19 @@ struct FixtureItem {
     content: String,
     #[serde(default)]
     dir: bool,
+    /// If set, create `path` as a symlink pointing here.
+    #[serde(default)]
+    symlink_to: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct Op {
     cmd: String,
+    /// If set, the op must exit with exactly this code (used for lifecycle
+    /// guarantees like a timeout → 124). Otherwise the default applies: an
+    /// attack must fail (exit != 0), a control must succeed (exit == 0).
+    #[serde(default)]
+    expect_exit: Option<i32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -164,16 +186,36 @@ fn run_scenario(c: Contract) -> Outcome {
     let mut fixture_content: BTreeMap<String, String> = BTreeMap::new();
     for fi in &c.fixture {
         let p = sub(&fi.path);
-        if fi.dir {
+        if let Some(parent) = Path::new(&p).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Some(target) = &fi.symlink_to {
+            #[cfg(unix)]
+            let _ = std::os::unix::fs::symlink(sub(target), &p);
+        } else if fi.dir {
             let _ = std::fs::create_dir_all(&p);
         } else {
-            if let Some(parent) = Path::new(&p).parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
             let _ = std::fs::write(&p, &fi.content);
             fixture_content.insert(p, fi.content.clone());
         }
     }
+
+    // start any loopback servers the scenario needs (network cases)
+    let mut servers = Vec::new();
+    for s in &c.server {
+        if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", s.port)) {
+            let l2 = l.try_clone().ok();
+            std::thread::spawn(move || {
+                for stream in l.incoming().flatten() {
+                    let mut st = stream;
+                    use std::io::Write;
+                    let _ = st.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+                }
+            });
+            servers.push(l2);
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
 
     let policy = Policy {
         role: "bench".into(),
@@ -183,6 +225,9 @@ fn run_scenario(c: Contract) -> Outcome {
         network: Some(Network::Denied),
         materialize_absent_handoff: c.policy.materialize_absent_handoff,
         isolate_process_info: c.policy.isolate_process_info,
+        timeout: c.policy.timeout_secs.map(std::time::Duration::from_secs),
+        max_memory_bytes: c.policy.max_memory_bytes,
+        max_processes: c.policy.max_processes,
         ..Default::default()
     };
 
@@ -193,13 +238,21 @@ fn run_scenario(c: Contract) -> Outcome {
             .unwrap_or(-1)
     };
 
-    // attack: the forbidden op must NOT succeed
+    // attack: forbidden op must NOT succeed (or must exit with expect_exit)
     let attack_rc = run(&c.attack.cmd);
-    let attack_succeeded = attack_rc == 0;
+    let attack_succeeded = match c.attack.expect_exit {
+        Some(code) => attack_rc != code, // "succeeded" = guarantee NOT met
+        None => attack_rc == 0,
+    };
 
-    // control: the legitimate op must succeed
+    // control: legitimate op must succeed (or match expect_exit)
     let control_rc = run(&c.control.cmd);
-    let control_ok = control_rc == 0;
+    let control_ok = match c.control.expect_exit {
+        Some(code) => control_rc == code,
+        None => control_rc == 0,
+    };
+
+    drop(servers);
 
     // real-effect assertions
     let mut effect_ok = true;

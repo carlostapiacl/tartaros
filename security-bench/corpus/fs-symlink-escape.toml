@@ -1,0 +1,27 @@
+id = "fs-symlink-escape"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# a symlink inside the territory points outside; writing through it must not escape
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/secret"
+content = "PROTECTED"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+[[fixture]]
+path = "{root}/work/link"
+symlink_to = "{root}/outside"
+
+[attack]
+cmd = "echo EVIL > {root}/work/link/secret"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/outside/secret"
