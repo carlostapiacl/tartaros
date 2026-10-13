@@ -13,6 +13,7 @@
 //!   --deny-unix            deny AF_UNIX sockets (Linux, seccomp)
 //!   --isolate-pids         run in a private PID+mount namespace (Linux; hides host processes)
 //!   --isolate-net          run in an empty network namespace (Linux; no egress at all, loopback only)
+//!   --seccomp-strict       deny dangerous syscalls to shrink kernel attack surface (Linux)
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
 //!   --timeout SECS         kill the process group after SECS (exit 124)
 //!   --max-mem BYTES        address-space limit
@@ -50,6 +51,8 @@ struct PolicyFile {
     isolate_pids: bool,
     #[serde(default)]
     isolate_network: bool,
+    #[serde(default)]
+    harden_syscalls: bool,
     #[serde(default)]
     materialize_absent_handoff: bool,
     #[serde(default)]
@@ -145,6 +148,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
         p.deny_unix_sockets = pf.deny_unix_sockets;
         p.isolate_pids = pf.isolate_pids;
         p.isolate_network = pf.isolate_network;
+        p.harden_syscalls = pf.harden_syscalls;
         p.materialize_absent_handoff = pf.materialize_absent_handoff;
         p.isolate_process_info = pf.isolate_process_info;
         p.timeout = pf.timeout_secs.map(Duration::from_secs);
@@ -188,6 +192,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
             "--deny-unix" => p.deny_unix_sockets = true,
             "--isolate-pids" => p.isolate_pids = true,
             "--isolate-net" => p.isolate_network = true,
+            "--seccomp-strict" => p.harden_syscalls = true,
             "--materialize" => p.materialize_absent_handoff = true,
             "--timeout" => p.timeout = Some(Duration::from_secs(val().parse().unwrap_or(0))),
             "--max-mem" => p.max_memory_bytes = Some(val().parse().unwrap_or(0)),
@@ -212,6 +217,7 @@ fn explain(p: &Policy) {
     println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
     println!("isolate PID namespace: {}", p.isolate_pids);
     println!("isolate network (no egress): {}", p.isolate_network);
+    println!("seccomp attack-surface reduction: {}", p.harden_syscalls);
     println!("isolate /proc (env reads): {}", p.isolate_process_info);
     if let Some(t) = p.timeout { println!("timeout: {}s", t.as_secs()); }
     if let Some(m) = p.max_memory_bytes { println!("max memory: {m} bytes"); }
