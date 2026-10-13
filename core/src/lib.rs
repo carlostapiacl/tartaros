@@ -108,6 +108,13 @@ impl Policy {
             .map(|r| r.path.clone())
             .collect();
         denied.extend(self.trust_handoff_rules().into_iter().map(|r| r.path));
+        // Landlock protects by inode: a path that does not exist cannot be
+        // carved out of an allow (and an absent name can still be created inside
+        // a granted dir). So on Linux we only carve denies that EXIST; absent
+        // trust-handoff files are a macOS/Seatbelt strength (regex denies cover
+        // not-yet-existing paths) that Landlock cannot match. Without this an
+        // empty writable root would be made fully unwritable by absent denies.
+        denied.retain(|p| p.exists());
         denied.sort();
         denied.dedup();
 
