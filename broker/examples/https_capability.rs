@@ -16,6 +16,7 @@ fn main() {
         .with_capabilities(vec![Capability {
             prefix: "/ex".into(),
             upstream_base: "https://example.com".into(),
+            methods: vec!["GET".into()],
             injections: vec![Injection {
                 host: None,
                 header: "Authorization".into(),
@@ -25,7 +26,7 @@ fn main() {
     let (listener, broker_port) = broker.bind(0).unwrap();
     thread::spawn(move || {
         let mut sink = JsonlSink::new(std::io::stdout());
-        broker.serve(listener, &mut sink);
+        let _ = broker.serve(listener, &mut sink);
     });
     thread::sleep(Duration::from_millis(400));
 
@@ -62,6 +63,16 @@ fn main() {
     ]).ok();
     let nbody = std::fs::read_to_string(&noauth).unwrap_or_default();
     println!("https via broker (no token): got-example-domain={}  {}", nbody.contains("Example Domain"), pass(!nbody.contains("Example Domain")));
+
+    // method not declared by the capability (POST): denied (405), no injection
+    let m = work.join("method");
+    be.run(&policy, &[
+        "curl".into(), "-s".into(), "-X".into(), "POST".into(), "-o".into(), m.to_string_lossy().into(),
+        "-H".into(), format!("X-Seisin-Auth: {run_token}"),
+        format!("http://127.0.0.1:{broker_port}/ex/"),
+    ]).ok();
+    let mbody = std::fs::read_to_string(&m).unwrap_or_default();
+    println!("method POST (no declarado):  got-example-domain={}  {}", mbody.contains("Example Domain"), pass(!mbody.contains("Example Domain")));
 
     // direct HTTPS: blocked (443 not granted)
     let rc = be.run(&policy, &[

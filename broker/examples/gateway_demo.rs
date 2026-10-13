@@ -32,11 +32,11 @@ fn main() {
     let broker = Broker::new(
         "qa",
         vec![Injection { host: None, header: "Authorization".into(), value: SECRET.into() }],
-    );
+    ).insecure_no_auth();
     let (listener, broker_port) = broker.bind(0).unwrap();
     thread::spawn(move || {
         let mut sink = JsonlSink::new(std::io::stdout());
-        broker.serve(listener, &mut sink);
+        let _ = broker.serve(listener, &mut sink);
     });
 
     thread::sleep(Duration::from_millis(500));

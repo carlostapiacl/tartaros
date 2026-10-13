@@ -42,25 +42,45 @@ impl Injection {
 pub struct Capability {
     pub prefix: String,
     pub upstream_base: String,
+    /// HTTP methods this capability permits (uppercase). Anything else is denied
+    /// with 405 — unknown methods are NOT silently treated as GET (P0-B).
+    pub methods: Vec<String>,
     pub injections: Vec<Injection>,
 }
+
+/// Largest upstream response the broker relays back (P0-B: bound the response).
+const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
 pub struct Broker {
     injections: Vec<Injection>,
     capabilities: Vec<Capability>,
     auth_token: Option<String>,
+    insecure: bool,
     role: String,
 }
 
 impl Broker {
     pub fn new(role: impl Into<String>, injections: Vec<Injection>) -> Self {
-        Broker { injections, capabilities: Vec::new(), auth_token: None, role: role.into() }
+        Broker {
+            injections,
+            capabilities: Vec::new(),
+            auth_token: None,
+            insecure: false,
+            role: role.into(),
+        }
     }
 
-    /// Require every request to carry `X-Seisin-Auth: <token>` (P1-1). Give the
-    /// token only to the authorized agent; others reaching the port get 403.
+    /// Require every request to carry `X-Seisin-Auth: <token>`. Give the token
+    /// only to the authorized agent; others reaching the port get 403.
     pub fn with_auth(mut self, token: impl Into<String>) -> Self {
         self.auth_token = Some(token.into());
+        self
+    }
+
+    /// Explicitly allow running WITHOUT client auth (P0-A). Auth is mandatory by
+    /// default: `serve` refuses to start otherwise. Use this only for tests/demos.
+    pub fn insecure_no_auth(mut self) -> Self {
+        self.insecure = true;
         self
     }
 
@@ -78,14 +98,22 @@ impl Broker {
         Ok((l, p))
     }
 
-    /// Serve forever, logging each forwarded request into `sink`.
-    pub fn serve(&self, listener: TcpListener, sink: &mut dyn EffectSink) {
+    /// Serve forever, logging each forwarded request into `sink`. Fails closed
+    /// (P0-A): refuses to start without client auth unless `insecure_no_auth()`
+    /// was set explicitly.
+    pub fn serve(&self, listener: TcpListener, sink: &mut dyn EffectSink) -> Result<(), String> {
+        if self.auth_token.is_none() && !self.insecure {
+            return Err(
+                "broker refuses to start without client auth; call with_auth(token) or, for tests, insecure_no_auth()".into(),
+            );
+        }
         for stream in listener.incoming().flatten() {
             if let Err(e) = self.handle(stream, sink) {
                 // a logging/forward failure must not take the broker down
                 let _ = e;
             }
         }
+        Ok(())
     }
 
     fn handle(&self, client: TcpStream, sink: &mut dyn EffectSink) -> std::io::Result<()> {
@@ -204,38 +232,41 @@ impl Broker {
                 return Ok(());
             }
         };
+        // P0-B: deny a method this capability did not declare. Unknown methods
+        // are NOT silently treated as GET.
+        if !cap.methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
+            let _ = client.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            return Ok(());
+        }
+        // P0-B: keep the path within the capability's upstream — no traversal out.
         let rest = &path[cap.prefix.len()..];
         let rest = if rest.is_empty() { "/" } else { rest };
+        if rest.contains("..") {
+            let _ = client.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            return Ok(());
+        }
         let url = format!("{}{}", cap.upstream_base.trim_end_matches('/'), rest);
 
         sink.emit(&EffectEvent::now(
             self.role.clone(),
             Axis::Secret,
             "broker-inject",
-            url.clone(),
+            format!("{method} {url}"),
             Direction::OutsideTerritory,
             Outcome::Allowed,
             "broker/capability",
         ));
 
-        // The broker does the TLS. Inject the secret header(s) here.
-        let mut req = match method {
-            "POST" => ureq::post(&url),
-            "PUT" => ureq::put(&url),
-            "DELETE" => ureq::delete(&url),
-            _ => ureq::get(&url),
-        };
+        // The broker does the TLS. No redirects (P0-B: a 3xx must not send the
+        // credential to a different destination). Inject the secret header(s).
+        let agent = ureq::AgentBuilder::new().redirects(0).build();
+        let mut req = agent.request(&method.to_uppercase(), &url);
         for inj in &cap.injections {
             req = req.set(&inj.header, &inj.value);
         }
         let (status, body) = match req.call() {
-            Ok(resp) => {
-                let s = resp.status();
-                (s, resp.into_string().unwrap_or_default())
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                (code, resp.into_string().unwrap_or_default())
-            }
+            Ok(resp) => (resp.status(), read_capped(resp)),
+            Err(ureq::Error::Status(code, resp)) => (code, read_capped(resp)),
             Err(e) => (502, format!("broker upstream error: {e}")),
         };
         let resp = format!(
@@ -247,6 +278,14 @@ impl Broker {
         client.flush()?;
         Ok(())
     }
+}
+
+/// Read an upstream response body, bounded to `MAX_RESPONSE_BYTES` (P0-B).
+fn read_capped(resp: ureq::Response) -> String {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    let _ = resp.into_reader().take(MAX_RESPONSE_BYTES).read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 /// "http://host:port/path" -> (host, port, "/path"). Defaults port 80.
@@ -275,6 +314,26 @@ mod tests {
         );
         assert_eq!(parse_abs_uri("http://example.com/"), Some(("example.com".into(), 80, "/".into())));
         assert_eq!(parse_abs_uri("https://x/"), None);
+    }
+
+    #[test]
+    fn serve_refuses_without_auth() {
+        use std::net::TcpListener;
+        let b = Broker::new("qa", vec![]);
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut sink = seisin_sandbox_core::VecSink::default();
+        // no auth, not insecure -> must refuse immediately
+        assert!(b.serve(l, &mut sink).is_err());
+    }
+
+    #[test]
+    fn serve_allowed_with_explicit_insecure() {
+        // the guard passes when insecure is explicit (we don't actually loop:
+        // just check the guard logic by constructing and inspecting)
+        let b = Broker::new("qa", vec![]).insecure_no_auth();
+        assert!(b.insecure);
+        let b2 = Broker::new("qa", vec![]).with_auth("t");
+        assert!(b2.auth_token.is_some());
     }
 
     #[test]
