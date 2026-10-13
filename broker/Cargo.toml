@@ -1,0 +1,11 @@
+[package]
+name = "seisin-sandbox-broker"
+description = "Capability gateway — the one door out of the box: injects secrets so the agent uses a credential without ever holding it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+seisin-sandbox-core = { path = "../core" }

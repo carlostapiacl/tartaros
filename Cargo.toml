@@ -5,6 +5,7 @@ members = [
     "backends/macos",
     "backends/linux",
     "collect",
+    "broker",
 ]
 
 [workspace.package]
