@@ -86,6 +86,21 @@ tartaros run \
   --timeout 600 --log effects.jsonl -- <cmd>
 ```
 
+### Threat-model profiles
+
+`--profile` selects a named tier instead of hand-picking flags — and states
+honestly what it does and does not guarantee:
+
+| profile | adds | guarantee |
+|---|---|---|
+| `local-agent` | trust-handoff + network-deny (default) | confines a trusted-but-fallible agent's mistakes |
+| `hostile-code` | + PID/mount isolation, AF_UNIX lockdown | confines actively-malicious code on a **shared kernel** (a kernel LPE still crosses it) |
+| `multi-tenant` | + egress-free network namespace | **kernel isolation NOT provided** — shared kernel; real tenant separation needs a microVM backend (not yet built). Maximum single-kernel hardening only. |
+
+A profile only tightens; explicit flags still extend it, and its caveat is
+printed on `run` and in `explain`. TartarOS never claims multi-tenant isolation
+from Landlock/Seatbelt alone.
+
 `tartaros explain [options]` prints exactly what a policy grants without running
 anything, so a security team can audit a profile before deploying it. A policy
 can also be declared once in a TOML file and applied with `--config`. See
