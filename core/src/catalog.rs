@@ -34,6 +34,20 @@ pub const SECRET_FILE_NAMES: &[&str] = &[
     ".dockercfg",
 ];
 
+/// Command-line tools commonly used to move data off a box. Spawning one is
+/// worth recording — not forbidden, but a signal (especially alongside an
+/// outside-territory connect).
+pub const EXFIL_TOOLS: &[&str] = &[
+    "curl", "wget", "nc", "ncat", "netcat", "socat", "ssh", "scp", "sftp",
+    "rsync", "telnet", "nmap", "ftp", "tftp",
+];
+
+/// Is this executable name a known network/exfil tool? Matches the basename.
+pub fn is_exfil_tool(exe: &str) -> bool {
+    let name = exe.rsplit('/').next().unwrap_or(exe);
+    EXFIL_TOOLS.iter().any(|t| *t == name)
+}
+
 /// Does this path reach a known secret location?
 pub fn looks_like_secret(path: &str) -> bool {
     let p = path.replace('\\', "/");
@@ -75,6 +89,15 @@ mod tests {
         assert!(looks_like_secret("/home/x/project/id_rsa"));
         assert!(!looks_like_secret("/repo/src/main.rs"));
         assert!(!looks_like_secret("/repo/README.md"));
+    }
+
+    #[test]
+    fn exfil_tools_flagged() {
+        assert!(is_exfil_tool("curl"));
+        assert!(is_exfil_tool("/usr/bin/nc"));
+        assert!(is_exfil_tool("/opt/homebrew/bin/ssh"));
+        assert!(!is_exfil_tool("git"));
+        assert!(!is_exfil_tool("/bin/ls"));
     }
 
     #[test]

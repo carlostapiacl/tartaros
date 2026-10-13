@@ -7,7 +7,18 @@
 //! Modular and extensible: each axis is a [`Collector`]. Add one by implementing
 //! the trait; `core::catalog` is the shared classification so they agree on what
 //! counts as "outside the territory".
+//!
+//! [`EffectEvent`]: seisin_sandbox_core::EffectEvent
+//! [`Collector`]: seisin_sandbox_core::Collector
 
+mod proc;
+
+pub mod mcp;
 pub mod net;
+pub mod process;
+pub mod secret;
 
+pub use mcp::McpCollector;
 pub use net::NetworkCollector;
+pub use process::ProcessCollector;
+pub use secret::SecretCollector;

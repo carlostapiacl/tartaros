@@ -57,9 +57,12 @@ Build only where measurement shows no existing backend can enforce the policy.
 - [x] **first collector**: `collect::NetworkCollector` — captures the process
       tree's outbound connects (port scans show as many outside events) from
       `/proc/net/tcp`; parser + classification unit-tested; live read Linux
-- [ ] collectors for the other axes (file-write, secret-read, process, mcp) —
-      each a new `Collector`, no core change (see CATALOG.md)
-- [ ] live run of NetworkCollector against a real agent on the Linux test host
+- [x] collectors: `SecretCollector` (fd→secret), `ProcessCollector` (exfil-tool
+      exec + foreign `/proc/<pid>/environ` read), `McpCollector` (ungranted MCP,
+      v1 cmdline heuristic) — classifiers unit-tested; `proc` helpers shared
+- [ ] file-write event capture (enforced already; emit on deny)
+- [ ] live run of the collectors against a real agent on the Linux test host
+- [ ] macOS siblings (lsof for net, fd for secret) 
 - [x] **ports per role**: `Policy::local_ports` opens only granted loopback
       ports (macOS live-verified: 8001 reachable, 8787 blocked); unit-tested.
       `NetworkCollector::for_policy` ties observation to the same territory

@@ -25,9 +25,9 @@ agrees on what counts as "outside".
 | **network** | outbound connect; port scan (many connects); loopback to a neighbour service the role wasn't granted; DNS to external resolver; bind/listen | `collect::NetworkCollector` (Linux `/proc/net/tcp`; `for_policy` wires territory) | **built + enforced**: `Policy::local_ports` opens only granted loopback ports (macOS live-verified: 8001 ✓, 8787 blocked); collector classifies via `catalog` |
 | | same on macOS | `net/lsof` (planned) | ◻️ |
 | **file (write)** | write outside the writable roots; write to a trust-handoff path (`.git/hooks`, `.vscode/tasks.json`, `.envrc`, CI config) | enforced today; event capture ◻️ | 🟡 enforced, not yet logged |
-| **secret (read)** | read of a secret location (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `.env`, cloud creds) — `core::catalog::looks_like_secret` | `secret` collector (planned: fd/open observation) | ◻️ classification done |
-| **process** | exec of an unexpected binary; spawning a shell/curl/nc; reading another process's env/args (KERN_PROCARGS2, `/proc/<pid>/environ`) | `process` collector (planned) | ◻️ |
-| **mcp** | loading an MCP server not granted to the role; tool calls that reach outside | `mcp` collector (planned, from policy + process) | ◻️ |
+| **secret (read)** | open fd to a secret location (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `.env`, cloud creds) | `collect::SecretCollector` (Linux `/proc/<pid>/fd`) | **built** (classification tested; live read Linux) |
+| **process** | spawning a network/exfil tool (curl, nc, ssh…); reading another process's env (`/proc/<pid>/environ` outside own tree) | `collect::ProcessCollector` | **built** (both signals tested; live read Linux) |
+| **mcp** | loading an MCP server not granted to the role | `collect::McpCollector` (v1, cmdline heuristic) | **built** (classification tested); precise source later |
 
 Legend: **built** · 🟡 partial · ◻️ planned (the model and catalog already accept
 it; adding it is a new `Collector`, no change to `core`).
