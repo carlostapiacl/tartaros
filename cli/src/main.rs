@@ -11,6 +11,8 @@
 //!   --read-allow DIR       re-allow reading this path inside a read-deny (repeatable)
 //!   --write-deny DIR       deny writes to this path inside a writable root (repeatable)
 //!   --port N               allow loopback TCP to this port (repeatable)
+//!   --allow-domain HOST    egress ONLY to this domain, via the capability broker
+//!                          (CONNECT/HTTPS + SSRF defense); repeatable
 //!   --net                  allow all network (default: denied)
 //!   --deny-unix            deny AF_UNIX sockets (Linux, seccomp)
 //!   --isolate-pids         run in a private PID+mount namespace (Linux; hides host processes)
@@ -141,6 +143,8 @@ POLICY:
   --read-allow DIR       re-allow reading this path inside a read-deny (repeatable)
   --write-deny DIR       deny writes to this path inside a writable root (repeatable)
   --port N               allow loopback TCP to this port (repeatable)
+  --allow-domain HOST    egress ONLY to this domain through the broker (HTTPS via
+                         CONNECT, SSRF-defended); .example.com matches subdomains
   --net                  allow all network (default: denied)
 
 HARDENING (Linux; the hostile/multi-tenant profiles set these):
@@ -177,10 +181,13 @@ fn cmd_run(rest: &[String]) -> ! {
         eprintln!("error: no command after `--`");
         exit(2);
     }
-    let (p, log, profile) = build_policy(opts);
+    let (mut p, log, profile) = build_policy(opts);
     if p.writable_roots.is_empty() {
         eprintln!("warning: no --write roots; the command cannot write anywhere");
     }
+    // Domain-scoped egress: start the capability broker and route the agent
+    // through it (sets proxy env, grants the one loopback port). Mutates p.
+    start_egress_broker(&mut p);
     // Print the profile's honest caveat before running — a tier must never
     // silently overclaim (esp. multi-tenant on a shared kernel).
     if let Some(pr) = profile {
@@ -189,6 +196,53 @@ fn cmd_run(rest: &[String]) -> ! {
         }
     }
     exit(run(&p, &cmd, log.as_deref()));
+}
+
+/// If the policy names allowed egress domains, start the capability broker on
+/// host loopback as a CONNECT/forward proxy scoped to those hosts (with SSRF
+/// defense), point the agent's HTTP(S)_PROXY at it, and grant ONLY that loopback
+/// port. The agent reaches the allowed domains through the broker and nothing
+/// else — the broker is the one door out of the box.
+fn start_egress_broker(p: &mut Policy) {
+    if p.allow_domains.is_empty() {
+        return;
+    }
+    // `--net` opens all egress, which would make the domain scope meaningless.
+    if p.network == Some(Network::Allowed) {
+        eprintln!("tartaros: --allow-domain scopes egress; it contradicts --net (allow all). Pick one.");
+        exit(2);
+    }
+    // A fully isolated network namespace has only loopback *inside* it and cannot
+    // reach the broker on the host's loopback, so the two are mutually exclusive.
+    if p.isolate_network {
+        eprintln!("tartaros: --allow-domain needs the host-loopback broker, which an isolated network namespace blocks. Drop one.");
+        exit(2);
+    }
+    let hosts = p.allow_domains.clone();
+    let broker = tartaros_broker::Broker::new(p.role.clone(), vec![])
+        .insecure_no_auth() // loopback + the sandbox is the boundary; no secret to send
+        .with_allowed_hosts(hosts.clone())
+        .with_allow_internal(false); // SSRF / rebinding defense stays on
+    let (listener, port) = broker.bind(0).unwrap_or_else(|e| {
+        eprintln!("tartaros: cannot start egress broker: {e}");
+        exit(1);
+    });
+    // Grant exactly this one loopback port; all other egress remains denied.
+    p.local_ports.push(port);
+    // Route the agent through it. Set upper- and lower-case forms (tools differ),
+    // and exempt loopback so the agent's own localhost traffic is not proxied.
+    let proxy = format!("http://127.0.0.1:{port}");
+    for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
+        std::env::set_var(k, &proxy);
+    }
+    for k in ["NO_PROXY", "no_proxy"] {
+        std::env::set_var(k, "127.0.0.1,localhost,::1");
+    }
+    eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {}", hosts.join(", "));
+    std::thread::spawn(move || {
+        let mut sink = tartaros_core::VecSink::default();
+        let _ = broker.serve(listener, &mut sink);
+    });
 }
 
 fn cmd_explain(opts: &[String]) -> ! {
@@ -253,9 +307,9 @@ fn apply_settings_file(p: &mut Policy, path: &str) {
     p.fs_rules.extend(s.filesystem.deny_write.iter().map(|x| FsRule { path: PathBuf::from(expand(x)), access: Access::Deny, even_if_absent: true }));
     // Network: we default-deny. Anything we cannot enforce in-sandbox is refused.
     p.network = Some(Network::Denied);
-    if !s.network.allowed_domains.is_empty() {
-        refuse("per-domain egress (needs the broker; not wired into `run` yet)");
-    }
+    // Per-domain egress IS enforceable: the broker runs as a CONNECT/forward proxy
+    // scoped to these hosts and the agent gets no other egress. Map it through.
+    p.allow_domains = s.network.allowed_domains.clone();
     if !s.network.denied_domains.is_empty() {
         refuse("per-domain deny lists");
     }
@@ -342,6 +396,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
             "--read-allow" => p.read_allows.push(PathBuf::from(expand(&val()))),
             "--write-deny" => p.fs_rules.push(FsRule { path: PathBuf::from(expand(&val())), access: Access::Deny, even_if_absent: true }),
             "--port" => p.local_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --port"); exit(2); })),
+            "--allow-domain" => p.allow_domains.push(val()),
             "--net" => p.network = Some(Network::Allowed),
             "--deny-unix" => p.deny_unix_sockets = true,
             "--isolate-pids" => p.isolate_pids = true,
@@ -368,6 +423,9 @@ fn explain(p: &Policy) {
     println!("network: {:?}", p.network);
     if !p.local_ports.is_empty() {
         println!("loopback ports: {:?}", p.local_ports);
+    }
+    if !p.allow_domains.is_empty() {
+        println!("egress domains (via broker, HTTPS/CONNECT + SSRF defense): {}", p.allow_domains.join(", "));
     }
     println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
     println!("isolate PID namespace: {}", p.isolate_pids);

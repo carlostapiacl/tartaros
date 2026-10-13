@@ -523,6 +523,7 @@ version = "0.1.0-alpha"
 dependencies = [
  "serde",
  "serde_json",
+ "tartaros-broker",
  "tartaros-collect",
  "tartaros-core",
  "tartaros-linux",

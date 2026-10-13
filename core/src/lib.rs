@@ -98,6 +98,15 @@ pub struct Policy {
     pub local_ports: Vec<u16>,
     /// External hosts (by IP) the role may reach; everything else is outside.
     pub allowed_hosts: Vec<String>,
+    /// Egress allow-list BY DOMAIN NAME. Non-empty means: the agent gets no direct
+    /// network; instead the CLI starts the capability broker on host loopback as a
+    /// CONNECT/forward proxy restricted to these hosts (with SSRF defense), points
+    /// the agent's HTTP(S)_PROXY at it, and grants only that one loopback port. An
+    /// entry beginning with `.` (e.g. `.github.com`) matches the domain and its
+    /// subdomains. This is a policy *intent*; the broker is the mechanism. Mutually
+    /// exclusive with a fully isolated network namespace (which cannot reach the
+    /// host-loopback broker).
+    pub allow_domains: Vec<String>,
     /// Paths the agent may NOT read (secret dirs: `~/.ssh`, `~/.aws`, …). The
     /// enforcement counterpart of the secret collector.
     pub read_denies: Vec<PathBuf>,
