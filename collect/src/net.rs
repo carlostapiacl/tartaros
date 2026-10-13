@@ -9,7 +9,7 @@ use seisin_sandbox_core::catalog::endpoint_direction;
 use seisin_sandbox_core::{Axis, Collector, EffectEvent, EffectSink, Outcome};
 use std::collections::HashSet;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::proc;
 
 /// A remote endpoint seen in a socket table.
@@ -109,7 +109,45 @@ fn observe(root_pid: u32) -> Vec<Endpoint> {
     out
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: observe remote endpoints via `lsof -i` over the process tree.
+#[cfg(target_os = "macos")]
+fn observe(root_pid: u32) -> Vec<Endpoint> {
+    let mut out = Vec::new();
+    for pid in proc::process_tree(root_pid) {
+        let o = match std::process::Command::new("lsof")
+            .args(["-nP", "-i", "-a", "-p", &pid.to_string(), "-Fn"])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            if let Some(name) = line.strip_prefix('n') {
+                // e.g. "127.0.0.1:50000->8.8.8.8:53"; only connected sockets.
+                if let Some(idx) = name.find("->") {
+                    if let Some((ip, port)) = parse_host_port(&name[idx + 2..]) {
+                        out.push(Endpoint { ip, port, inode: 0 });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// "8.8.8.8:53" or "[::1]:443" -> (ip, port).
+#[cfg(target_os = "macos")]
+fn parse_host_port(s: &str) -> Option<(String, u16)> {
+    let s = s.trim();
+    if let Some(rest) = s.strip_prefix('[') {
+        let (ip, port) = rest.split_once("]:")?;
+        return Some((ip.to_string(), port.parse().ok()?));
+    }
+    let (ip, port) = s.rsplit_once(':')?;
+    Some((ip.to_string(), port.parse().ok()?))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn observe(_root_pid: u32) -> Vec<Endpoint> {
     Vec::new()
 }
