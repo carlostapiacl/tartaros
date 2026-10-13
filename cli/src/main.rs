@@ -4,6 +4,7 @@
 //!   tartaros run [options] -- <command> [args...]
 //!
 //! Options:
+//!   --profile NAME         threat-model preset: local-agent | hostile-code | multi-tenant
 //!   --role NAME            label for effect-log attribution
 //!   --write DIR            a writable root (repeatable)
 //!   --read-deny DIR        deny reads of this path (repeatable; secrets)
@@ -21,7 +22,7 @@
 //!
 //! Exit code is the command's (128+signal on signal death, 124 on timeout).
 
-use tartaros_core::{Network, Policy};
+use tartaros_core::{Network, Policy, Profile};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::exit;
@@ -31,6 +32,8 @@ use std::time::Duration;
 /// Flags on the command line override / append to it.
 #[derive(Deserialize, Default)]
 struct PolicyFile {
+    #[serde(default)]
+    profile: Option<String>,
     #[serde(default)]
     role: String,
     #[serde(default)]
@@ -96,23 +99,38 @@ fn cmd_run(rest: &[String]) -> ! {
         eprintln!("error: no command after `--`");
         exit(2);
     }
-    let (p, log) = build_policy(opts);
+    let (p, log, profile) = build_policy(opts);
     if p.writable_roots.is_empty() {
         eprintln!("warning: no --write roots; the command cannot write anywhere");
+    }
+    // Print the profile's honest caveat before running — a tier must never
+    // silently overclaim (esp. multi-tenant on a shared kernel).
+    if let Some(pr) = profile {
+        if let Some(c) = pr.caveat() {
+            eprintln!("tartaros: profile {} — {}", pr.name(), c);
+        }
     }
     exit(run(&p, &cmd, log.as_deref()));
 }
 
 fn cmd_explain(opts: &[String]) -> ! {
-    let (p, _) = build_policy(opts);
+    let (p, _, profile) = build_policy(opts);
+    if let Some(pr) = profile {
+        println!("profile: {} — {}", pr.name(), pr.tier());
+        if let Some(c) = pr.caveat() {
+            println!("profile caveat: {c}");
+        }
+        println!();
+    }
     explain(&p);
     exit(0);
 }
 
-/// Build the Policy from --config (if any) + flags. Returns the policy and the
-/// optional --log path.
-fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
+/// Build the Policy from --config (if any) + --profile + flags. Returns the
+/// policy, the optional --log path, and the selected profile (for its caveat).
+fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
     let mut p = Policy { network: Some(Network::Denied), ..Default::default() };
+    let mut profile: Option<Profile> = None;
 
     // First pass: load --config (a policy file), so flags can override it.
     if let Some(i) = opts.iter().position(|a| a == "--config") {
@@ -133,6 +151,26 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
         p.max_memory_bytes = pf.max_memory_bytes;
         p.max_processes = pf.max_processes;
         p.max_cpu_secs = pf.max_cpu_secs;
+        if let Some(name) = &pf.profile {
+            profile = Some(Profile::parse(name).unwrap_or_else(|| {
+                eprintln!("unknown profile in config: {name} (local-agent|hostile-code|multi-tenant)");
+                exit(2);
+            }));
+        }
+    }
+
+    // --profile on the command line overrides a config profile.
+    if let Some(i) = opts.iter().position(|a| a == "--profile") {
+        let name = opts.get(i + 1).unwrap_or_else(|| { eprintln!("--profile needs a name"); exit(2); });
+        profile = Some(Profile::parse(name).unwrap_or_else(|| {
+            eprintln!("unknown profile: {name} (local-agent|hostile-code|multi-tenant)");
+            exit(2);
+        }));
+    }
+    // Apply the profile baseline BEFORE flags, so explicit flags can still extend
+    // it. Profiles only tighten; they never grant.
+    if let Some(pr) = profile {
+        pr.apply(&mut p);
     }
 
     let mut log: Option<String> = None;
@@ -141,6 +179,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
         let mut val = || it.next().cloned().unwrap_or_else(|| { eprintln!("error: {o} needs a value"); exit(2); });
         match o.as_str() {
             "--config" => { let _ = val(); } // handled in the first pass
+            "--profile" => { let _ = val(); } // handled in the pre-scan above
             "--role" => p.role = val(),
             "--write" => p.writable_roots.push(PathBuf::from(expand(&val()))),
             "--read-deny" => p.read_denies.push(PathBuf::from(expand(&val()))),
@@ -159,7 +198,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>) {
             other => { eprintln!("unknown option: {other}"); exit(2); }
         }
     }
-    (p, log)
+    (p, log, profile)
 }
 
 /// Print exactly what a policy grants, without running anything — so a security
