@@ -331,9 +331,9 @@ fn confined_command(
             //     the hostile-code / multi-tenant profiles enable by default).
             set_pdeathsig_kill();
             // Resource limits (P1-B) before dropping into the sandbox.
-            set_rlimit(libc::RLIMIT_AS, max_memory)?;
-            set_rlimit(libc::RLIMIT_NPROC, max_processes)?;
-            set_rlimit(libc::RLIMIT_CPU, max_cpu)?;
+            set_rlimit(libc::RLIMIT_AS as libc::c_int, max_memory)?;
+            set_rlimit(libc::RLIMIT_NPROC as libc::c_int, max_processes)?;
+            set_rlimit(libc::RLIMIT_CPU as libc::c_int, max_cpu)?;
             // Deny AF_UNIX sockets (IPC-1) via seccomp, if the policy asked.
             if deny_unix {
                 apply_deny_af_unix()?;
@@ -519,22 +519,27 @@ unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> std::io::Re
 /// 127.0.0.1-to-self fails. No external interface exists, so egress stays closed.
 #[cfg(target_os = "linux")]
 unsafe fn bring_up_loopback() -> std::io::Result<()> {
-    const SIOCGIFFLAGS: libc::c_ulong = 0x8913;
-    const SIOCSIFFLAGS: libc::c_ulong = 0x8914;
+    // SIOCGIFFLAGS/SIOCSIFFLAGS. The ioctl request arg type differs across libc
+    // flavours (c_ulong on glibc, c_int on musl), so pass with `as _`. We build
+    // `struct ifreq` as a raw byte buffer (name[16] then the flags union) instead
+    // of `libc::ifreq`, whose field names differ between gnu and musl, and we read
+    // and write the flags as native-endian bytes to avoid an unaligned access.
+    const SIOCGIFFLAGS: u64 = 0x8913;
+    const SIOCSIFFLAGS: u64 = 0x8914;
     let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
     if fd < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // struct ifreq: char ifr_name[16]; then the flags union (a c_short first).
-    let mut ifr: libc::ifreq = std::mem::zeroed();
-    let name = b"lo\0";
-    for (i, b) in name.iter().enumerate() {
-        ifr.ifr_name[i] = *b as libc::c_char;
-    }
-    let mut rc = libc::ioctl(fd, SIOCGIFFLAGS, &mut ifr);
+    let mut buf = [0u8; 64]; // >= sizeof(struct ifreq) on both arches
+    buf[0] = b'l';
+    buf[1] = b'o';
+    let p = buf.as_mut_ptr() as *mut libc::c_void;
+    let mut rc = libc::ioctl(fd, SIOCGIFFLAGS as _, p);
     if rc == 0 {
-        ifr.ifr_ifru.ifru_flags |= (libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short;
-        rc = libc::ioctl(fd, SIOCSIFFLAGS, &ifr);
+        let mut flags = i16::from_ne_bytes([buf[16], buf[17]]);
+        flags |= (libc::IFF_UP | libc::IFF_RUNNING) as i16;
+        buf[16..18].copy_from_slice(&flags.to_ne_bytes());
+        rc = libc::ioctl(fd, SIOCSIFFLAGS as _, p);
     }
     let err = std::io::Error::last_os_error();
     libc::close(fd);
@@ -744,10 +749,13 @@ fn now_nanos() -> u128 {
 /// Apply one `setrlimit` (cur=max=limit) when a limit is set. Returns an io error
 /// so a failure aborts the launch (fail closed).
 #[cfg(target_os = "linux")]
-fn set_rlimit(resource: libc::__rlimit_resource_t, limit: Option<u64>) -> std::io::Result<()> {
+// `resource` is a plain c_int so the call sites are portable: glibc types
+// RLIMIT_* as `__rlimit_resource_t` (absent on musl), musl as c_int. We cast to
+// whatever `setrlimit` expects with `as _`.
+fn set_rlimit(resource: libc::c_int, limit: Option<u64>) -> std::io::Result<()> {
     if let Some(v) = limit {
         let rl = libc::rlimit { rlim_cur: v as libc::rlim_t, rlim_max: v as libc::rlim_t };
-        if unsafe { libc::setrlimit(resource, &rl) } != 0 {
+        if unsafe { libc::setrlimit(resource as _, &rl) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
     }
