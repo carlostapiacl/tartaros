@@ -112,6 +112,14 @@ pub struct Policy {
     /// tightens teardown (its death reaps the whole subtree). Needs
     /// CAP_SYS_ADMIN; fails closed if the namespace can't be created.
     pub isolate_pids: bool,
+    /// Opt-in (Linux): run the agent in a private, empty network namespace with
+    /// only loopback up — no external interface or route, so NO protocol can
+    /// leave (TCP, UDP, ICMP, raw). This is the *complete* network-off: Landlock
+    /// network rules only mediate TCP connect/bind, so UDP (DNS exfil) and ICMP
+    /// still escape a Landlock-only deny. Mutually exclusive with granting egress
+    /// (ports / broker on host loopback), since those need the host network.
+    /// Needs CAP_SYS_ADMIN; fails closed.
+    pub isolate_network: bool,
 }
 
 impl Policy {
