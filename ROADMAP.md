@@ -167,7 +167,10 @@ Build only where measurement shows no existing backend can enforce the policy.
       write-outside, trust-handoff advantage on nested .git, nono can't express
       deny-in-allow. `comparison/RESULTS.md` + reproducible script. Includes a
       /tmp-default false-positive correction (honest methodology).
-- [ ] comparisons vs anthropic-srt and OpenShell
+- [x] comparison vs anthropic-srt 0.0.78 (a Linux host): PARITY on
+      write-outside and .claude/settings.json — no srt disadvantage reproduced, none
+      claimed (honest).
+- [ ] comparison vs OpenShell (NVIDIA)
 - [ ] adapters for anthropic-srt / nono / openshell (honest comparison)
 
 ## Both-OS parity (loop)
