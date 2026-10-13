@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 seisin-sandbox-core = { path = "../core" }
+ureq = "2.12.1"
 
 [dev-dependencies]
 seisin-sandbox-linux = { path = "../backends/linux" }
