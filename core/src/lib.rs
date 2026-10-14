@@ -896,7 +896,7 @@ mod tests {
         fn build(dir: &Path, depth: u32, rng: &mut dyn FnMut() -> u64, nodes: &mut Vec<PathBuf>) {
             let n = (rng() % 4) as usize; // 0..=3 children
             for i in 0..n {
-                let is_dir = depth > 0 && rng() % 2 == 0;
+                let is_dir = depth > 0 && rng().is_multiple_of(2);
                 let name = format!("{}{}", if is_dir { "d" } else { "f" }, i);
                 let p = dir.join(&name);
                 if is_dir {

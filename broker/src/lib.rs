@@ -295,7 +295,7 @@ impl Broker {
             Some(l) => l,
             None => return bad_request(&mut client), // EOF or oversized
         };
-        let parts: Vec<&str> = line.trim_end().split_whitespace().collect();
+        let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 3 {
             return bad_request(&mut client);
         }

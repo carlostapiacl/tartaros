@@ -45,7 +45,7 @@ pub const EXFIL_TOOLS: &[&str] = &[
 /// Is this executable name a known network/exfil tool? Matches the basename.
 pub fn is_exfil_tool(exe: &str) -> bool {
     let name = exe.rsplit('/').next().unwrap_or(exe);
-    EXFIL_TOOLS.iter().any(|t| *t == name)
+    EXFIL_TOOLS.contains(&name)
 }
 
 /// Does this path reach a known secret location?
@@ -55,7 +55,7 @@ pub fn looks_like_secret(path: &str) -> bool {
         return true;
     }
     let name = p.rsplit('/').next().unwrap_or(&p);
-    SECRET_FILE_NAMES.iter().any(|f| *f == name)
+    SECRET_FILE_NAMES.contains(&name)
 }
 
 /// Classify a remote endpoint relative to the agent's territory. Loopback on a
