@@ -1,0 +1,11 @@
+[package]
+name = "tartaros-microvm"
+description = "microVM backend for tartaros (design stage — true multi-tenant isolation; see docs/microvm-backend.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+tartaros-core = { path = "../../core" }

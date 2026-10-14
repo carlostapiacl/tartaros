@@ -4,6 +4,7 @@ members = [
     "core",
     "backends/macos",
     "backends/linux",
+    "backends/microvm",
     "collect",
     "broker",
     "security-bench",
