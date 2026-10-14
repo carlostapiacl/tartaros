@@ -171,7 +171,11 @@ the seccomp egress filter, so there is no side-channel around the broker. It is 
 not as a raw TCP endpoint on an arbitrary port. A full
 sandbox-runtime `settings.json` can be mapped in one shot with
 `--settings <file>`, which applies every field it can enforce and **refuses**
-(exit 2) anything it cannot, rather than silently dropping a rule.
+(exit 2) anything it cannot, rather than silently dropping a rule — including its
+`network.allowMachRegister`/`allowMachLookup` (macOS Mach prefixes; Linux refuses
+them). For headless-browser roles, `--browser` adds the minimal Chromium/Chrome
+Seatbelt grants (macOS) and `--private-tmp` gives the run a private, AF_UNIX-scoped
+`TMPDIR` for the browser's control socket.
 
 ### Threat-model profiles
 
