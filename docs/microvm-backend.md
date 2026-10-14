@@ -155,7 +155,13 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         A second run validated the **trust-handoff differentiator** under gVisor:
         overwriting an EXISTING `.git/hooks/pre-commit` fails with "Read-only file
         system" (the ro bind holds), a normal workspace write succeeds, the masked
-        secret is unreadable, and the host hook is untouched.
+        secret is unreadable, and the host hook is untouched. A third run broadened
+        the FS + network checks under gVisor: a write OUTSIDE the workspace and to
+        the (read-only) root both fail, network egress (`wget 1.1.1.1`) is blocked
+        (no NIC — the always-isolated netns), and the read-denied secret stays
+        masked. So under a real runtime the microVM config enforces rw-workspace,
+        ro-root, outside-write-deny, trust-handoff, secret masking, all-caps-dropped,
+        and no-egress — the core guarantees, not just unit-tested JSON.
   - [ ] run the FULL corpus under runsc (scripted bundle per scenario) and settle
         `process.user`/uid mapping against the runtime (remaining M-µ1 polish).
 - **M-µ2 — Firecracker**: guest kernel + rootfs build, virtio-fs shares (rw roots /
