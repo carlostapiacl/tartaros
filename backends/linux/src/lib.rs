@@ -173,6 +173,38 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
 /// Build a `Command` that applies the Landlock ruleset in the child just before
 /// exec. Shared by `run` (waits) and `spawn` (observed).
 #[cfg(target_os = "linux")]
+/// The EXISTING trust-handoff + explicit-write-deny paths we would protect with
+/// read-only bind mounts, or empty when the bind-mount strategy is unavailable
+/// (no mount privilege) or unneeded (nothing to protect). Non-empty means the
+/// workspace is granted wholesale and these are bound read-only (option B:
+/// existing paths only — the working tree is never materialized/touched).
+#[cfg(target_os = "linux")]
+fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Vec::new(); // need CAP_SYS_ADMIN for a mount namespace
+    }
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for r in policy.trust_handoff_rules() {
+        paths.push(r.path);
+    }
+    for r in policy.fs_rules.iter().filter(|r| r.access == tartaros_core::Access::Deny) {
+        paths.push(r.path.clone());
+    }
+    paths.retain(|p| p.exists());
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Would this policy be enforced with the read-only bind-mount strategy (whole
+/// workspace writable + handoff bound read-only), rather than the write carve?
+/// Used by the CLI to decide whether to warn about the carve's create-at-root
+/// limitation.
+#[cfg(target_os = "linux")]
+pub fn uses_bind_mounts(policy: &Policy) -> bool {
+    !robind_targets(policy).is_empty()
+}
+
 fn confined_command(
     policy: &Policy,
     command: &[String],
@@ -295,20 +327,8 @@ fn confined_command(
     // agent's private mount namespace and leave no trace in the real tree (option
     // B: existing paths only; absent ones are not materialized). Without the
     // privilege we fall back to the carve (same guarantees as before).
-    let can_mount = unsafe { libc::geteuid() } == 0;
-    let mut robind_paths: Vec<PathBuf> = Vec::new();
-    if can_mount {
-        for r in policy.trust_handoff_rules() {
-            robind_paths.push(r.path);
-        }
-        for r in policy.fs_rules.iter().filter(|r| r.access == tartaros_core::Access::Deny) {
-            robind_paths.push(r.path.clone());
-        }
-        robind_paths.retain(|p| p.exists()); // option B: only paths that exist
-        robind_paths.sort();
-        robind_paths.dedup();
-    }
-    let use_bind_mounts = can_mount && !robind_paths.is_empty();
+    let robind_paths = robind_targets(policy);
+    let use_bind_mounts = !robind_paths.is_empty();
 
     // Write grant: whole roots when bind mounts protect the handoff; else the carve.
     let write_grants: Vec<PathBuf> =
