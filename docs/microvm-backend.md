@@ -47,11 +47,22 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
 - **`writable_roots`** → a **virtio-fs** (or 9p) share of each root, **read-write**,
   so the agent edits the real repo **in place** (persistence preserved — the host
   directory is the backing store, no copy).
-- **trust-handoff set + `read_denies`** → the handoff paths and secret dirs are
-  shared **read-only** (or not shared at all for secrets). The agent in the guest
-  literally cannot write a ro virtio-fs mount — stronger and simpler than the
-  Landlock carve, and it covers *not-yet-existing* paths too (closing the Linux
-  bind-mount residual: a ro share of the parent makes new handoff files unwritable).
+- **trust-handoff set + `write_denies`** → the handoff paths and any user-declared
+  write-deny (`fs_rules` `Access::Deny`) inside a writable root are shared
+  **read-only**, so the agent can read them (git, its own config) but cannot poison
+  them. The agent in the guest literally cannot write a ro virtio-fs mount — stronger
+  and simpler than the Landlock carve, and it covers *not-yet-existing* paths too
+  (closing the Linux bind-mount residual: a ro share of the parent makes new handoff
+  files unwritable).
+- **`read_allows`** → a re-allowed read branch (even one outside the writable roots)
+  is shared **read-only**, so a legitimately-readable branch under a broad deny stays
+  visible; a deeper `read_denies` inside it is masked on top (deepest-path-wins).
+- **`read_denies`** → a secret inside a shared dir is **masked** so its content never
+  reaches the guest: a secret **directory** by an empty read-only tmpfs, a secret
+  **file** by a read-only bind of `/dev/null` (a tmpfs cannot mount over a regular
+  file). A secret that is only the *parent* of a re-allowed branch is simply never
+  shared (not masked), so the branch stays readable. A secret outside every share is
+  invisible by default (a VM shares only what is listed).
 - **network** → no guest NIC by default (= `--isolate-net` for free, all protocols).
   `--allow-domain` runs the existing broker on the **host**, reached from the guest
   over **vsock** (or a single-host tap), so the capability model is unchanged.
@@ -133,16 +144,29 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         standard default mounts (/proc, /dev, /dev/pts, /dev/shm, /dev/mqueue, /sys
         ro, /sys/fs/cgroup ro) so the bundle is runnable and that hardening has a
         filesystem to apply to. Pure, no runtime (8/8 crate tests).
-  - [ ] **`process.user` + uid/gid mapping (honest gap, not yet emitted).** The
-        bundle sets no `process.user`, so the guest process runs as **uid 0 inside
-        the guest**. The guest kernel is isolated, so this is weaker than the host
-        uid-0 case (no host devices/caps — caps are all dropped, `/dev` is a tmpfs),
-        but it is still not least-privilege. The correct fix is a non-root
-        `process.user` plus `linux.uidMappings`/`gidMappings` that map the guest uid
-        to the launcher's host uid — otherwise the rw workspace binds (owned by the
-        host uid) become unwritable to the guest. That mapping must be *validated
-        against the runtime* (runc vs gVisor handle bind ownership differently), so
-        it is deferred to the runsc step below rather than guessed blind.
+  - [x] **`process.user` + uid/gid mapping — closed, validated against runsc.**
+        The guest identity is now a [`GuestUser`] knob (`backends/microvm`): `Direct`
+        (non-root uid, no userns), `Mapped` (OCI/runc userns form), or `Root` (legacy
+        uid-0). Validating against the real runtime settled the design — and the two
+        runtimes genuinely disagree, exactly as this item warned:
+        - **gVisor rejects the OCI/runc `Mapped` form.** Any spec that declares a
+          user namespace (`linux.uidMappings`/`gidMappings`) fails under `runsc
+          release-20261005.0` with `cannot create gofer process: gofer: fork/exec
+          /proc/self/exe: invalid argument`, independent of the mapping target or
+          the platform flag (`systrap`/`ptrace`), on a kernel with userns enabled
+          (`max_user_namespaces=15127`). So the textbook "non-root guest behind a
+          userns mapped to the host owner" is a runc-class path, **not** a gVisor one.
+        - **gVisor's native least-privilege form is `Direct`.** runsc maps a bind's
+          ownership guest-uid == host-uid directly (no userns), so when the launcher
+          runs as a **non-root** uid that **owns the workspace**, `process.user` set
+          to that uid gives a non-root guest with a writable workspace. Validated
+          end-to-end under `runsc` (launcher uid 2000): in-guest `id` = `2000:2000`
+          (not 0), workspace write succeeds, write outside the ws and to the ro root
+          both fail, the read-denied secret stays masked, caps still all dropped.
+        So the uid-0-in-guest gap is **closed** for the gVisor phase via `Direct`
+        (production launches the backend as a non-root service account owning the
+        workspace); `Mapped` stays emitted for the runc/Firecracker-class runtimes of
+        M-µ2, where the userns form is honoured.
   - [x] **Validated against a real runtime (runsc/gVisor, systrap platform, no KVM).**
         The generated `config.json` + a busybox rootfs runs under `runsc run`: the
         workspace rw bind works, a read-denied dir is masked (invisible), `/proc` is
@@ -162,8 +186,35 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         masked. So under a real runtime the microVM config enforces rw-workspace,
         ro-root, outside-write-deny, trust-handoff, secret masking, all-caps-dropped,
         and no-egress — the core guarantees, not just unit-tested JSON.
-  - [ ] run the FULL corpus under runsc (scripted bundle per scenario) and settle
-        `process.user`/uid mapping against the runtime (remaining M-µ1 polish).
+  - [x] **Corpus run under runsc, scripted bundle per scenario — done; it found
+        three real backend bugs.** `backends/microvm/examples/corpus_runsc.rs`
+        compiles each `security-bench` corpus TOML to a microVM bundle and runs it
+        under `runsc` (non-root `Direct` guest); `scripts/corpus-runsc.sh` is the
+        driver (run as root on a Linux host with runsc + docker). All **20 M-µ1-applicable scenarios
+        PASS** (FS, secrets, read carves, trust-handoff, mknod, env-scrub, pid-ns) —
+        with the SAME real-effect assertions (no secret sentinel leaked, protected
+        path unchanged/absent, control works). Running against the real runtime
+        surfaced three defects a pure unit test did not:
+        1. **`mount_plan` dropped `write_denies`.** A user-declared write-deny inside
+           a writable root (`fs_rules` `Access::Deny`) was never emitted, so the
+           guest could write it (`write-deny-inside-writable` → VIOLATION). Fixed:
+           write-denies now map to a read-only bind (readable, never writable).
+        2. **`mount_plan` ignored `read_allows`.** A re-allowed read branch outside
+           the writable roots was never shared, so a legitimate read failed
+           (`read-allow-*` → control-broke). Fixed: read-allows map to a ro share, and
+           a deeper read-deny inside one is masked on top (deepest-path-wins ordering).
+        3. **A secret that is a FILE could not be masked.** The mask was an empty
+           tmpfs, which cannot mount over a regular file (`runsc: mountpoint isn't a
+           directory`) — so the whole sandbox aborted. Fixed: a secret file is masked
+           by a read-only bind of `/dev/null` (content gone, reads empty — the secrecy
+           property holds), a secret directory by the tmpfs as before.
+        The remaining corpus scenarios are intentionally **out of M-µ1 scope**:
+        `handoff-materialize-absent` is the documented future-handoff residual, and
+        the broker/egress (`broker-credential`, `egress-udp-raw-denied`,
+        `isolate-net-egress`, `net-unauthorized-port`), VM-size resource caps
+        (`resource-cpu/memory/procs`), and server/IPC/seccomp/lifecycle scenarios are
+        M-µ2 work (broker bridge, VM-size limits, teardown-by-destroy), not something
+        the gVisor M-µ1 config claims yet.
 - **M-µ2 — Firecracker**: guest kernel + rootfs build, virtio-fs shares (rw roots /
   ro handoff), vsock broker bridge, VM-size resource caps, teardown = destroy. Run
   the corpus + the multi-tenant scenarios on a KVM host. This is the tenant-isolation

@@ -12,7 +12,7 @@
 //! runtime-capable host.
 
 use std::path::{Path, PathBuf};
-use tartaros_core::{Backend, Policy, PolicyError, RunError, RunOutcome};
+use tartaros_core::{Access, Backend, Policy, PolicyError, RunError, RunOutcome};
 
 /// How a host path is exposed to the guest. A VM shares explicit paths (default:
 /// nothing visible), so the policy's broad "read all but the denies" model is
@@ -46,16 +46,37 @@ pub struct Share {
 /// wins, so a handoff ro-pin inside a rw root and a secret exclusion compose.
 pub fn mount_plan(policy: &Policy) -> Vec<Share> {
     let mut shares: Vec<Share> = Vec::new();
+    // Writable roots: read-write.
     for root in &policy.writable_roots {
         shares.push(Share { host_path: root.clone(), mode: Mode::ReadWrite });
+    }
+    // Re-allowed read branches — these may sit OUTSIDE the writable roots (deny a
+    // broad dir, open one branch within it). A VM shares only what is listed, so a
+    // legitimately-readable branch must be shared read-only or it is invisible and
+    // breaks a legitimate read. (A deeper read-deny inside it is masked below.)
+    for allow in &policy.read_allows {
+        shares.push(Share { host_path: allow.clone(), mode: Mode::ReadOnly });
     }
     // Trust-handoff paths under the roots: read-only overrides within the rw share.
     for r in policy.trust_handoff_rules() {
         shares.push(Share { host_path: r.path, mode: Mode::ReadOnly });
     }
-    // Secrets that fall inside a writable root must be hidden, not merely ro.
+    // User-declared write-denies (`fs_rules` with `Access::Deny`): a path inside a
+    // writable root that must stay READABLE but never writable — the deny-inside-
+    // allow carve for writes. In the VM model that is a read-only bind.
+    for r in &policy.fs_rules {
+        if r.access == Access::Deny {
+            shares.push(Share { host_path: r.path.clone(), mode: Mode::ReadOnly });
+        }
+    }
+    // Secrets that fall inside ANY visible share (a writable root or a re-allowed
+    // read branch) must be hidden, not merely ro. A read-deny that is only the
+    // parent of a re-allowed branch (deny vault, allow vault/mine) is NOT inside a
+    // share, so it is simply never shared — correct, and it does not mask the branch.
     for deny in &policy.read_denies {
-        if policy.writable_roots.iter().any(|root| deny.starts_with(root)) {
+        let inside_writable = policy.writable_roots.iter().any(|root| deny.starts_with(root));
+        let inside_allow = policy.read_allows.iter().any(|a| deny.starts_with(a));
+        if inside_writable || inside_allow {
             shares.push(Share { host_path: deny.clone(), mode: Mode::Excluded });
         }
     }
@@ -73,8 +94,16 @@ pub fn mount_plan(policy: &Policy) -> Vec<Share> {
 ///   reference so the guest gets a fresh, empty one (no egress) unless the policy
 ///   opts in (bridged host-side — not represented here).
 /// `rootfs` is the guest root the runtime overlays the mounts onto (built per the
-/// design's image step). Returned pretty-printed.
-pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> String {
+/// design's image step). `user` selects the guest identity ([`GuestUser`]) — the
+/// knob that closes the uid-0-in-guest gap: `Direct` (gVisor-native non-root, no
+/// userns), `Mapped` (OCI/runc userns form), or `Root` (legacy). Returned
+/// pretty-printed.
+pub fn to_oci_config(
+    policy: &Policy,
+    command: &[String],
+    rootfs: &str,
+    user: &GuestUser,
+) -> String {
     use serde_json::json;
 
     let cwd = policy
@@ -103,7 +132,14 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
         json!({ "destination": "/sys/fs/cgroup", "type": "cgroup", "source": "cgroup",
                 "options": ["nosuid", "noexec", "nodev", "relatime", "ro"] }),
     ];
-    for s in mount_plan(policy) {
+    // Emit the policy binds/masks parent-before-child: a deeper override (a secret
+    // mask inside a shared dir, a write-deny inside a writable root) MUST come after
+    // the shallower share it overrides, since the runtime applies mounts in order
+    // and a longer path wins. Sorting by destination depth guarantees this
+    // regardless of the order the shares were classified in.
+    let mut plan = mount_plan(policy);
+    plan.sort_by_key(|s| s.host_path.components().count());
+    for s in plan {
         let dest = s.host_path.to_string_lossy().into_owned();
         let m = match s.mode {
             // A bind mount needs an EXISTING source: the runtime (runc/runsc) opens
@@ -124,13 +160,23 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
                     "source": dest, "options": ["rbind", if ro { "ro" } else { "rw" }]
                 })
             }
-            // Mask the secret with an empty ro tmpfs so the guest cannot see the
-            // host contents, even though the enclosing root is shared rw. A tmpfs
-            // needs no source, so it is safe to emit even for an absent path.
-            Mode::Excluded => json!({
-                "destination": dest, "type": "tmpfs",
-                "source": "tmpfs", "options": ["ro", "nosuid", "nodev", "size=0"]
-            }),
+            // Mask the secret so the guest cannot see the host contents, even
+            // though the enclosing dir is shared. A tmpfs is a *directory*
+            // filesystem and cannot mount over a regular file (runsc/runc:
+            // "mountpoint isn't a directory"), so a secret FILE is masked by a
+            // read-only bind of `/dev/null` (the content is gone — the guest reads
+            // empty, never the secret), and a secret DIRECTORY (or a not-yet-existing
+            // path) by an empty ro tmpfs. Note the file case reads as EMPTY rather
+            // than erroring — the secrecy property (no leak) holds either way.
+            Mode::Excluded => {
+                if s.host_path.is_file() {
+                    json!({ "destination": dest, "type": "bind",
+                            "source": "/dev/null", "options": ["bind", "ro"] })
+                } else {
+                    json!({ "destination": dest, "type": "tmpfs",
+                            "source": "tmpfs", "options": ["ro", "nosuid", "nodev", "size=0"] })
+                }
+            }
         };
         mounts.push(m);
     }
@@ -152,13 +198,29 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
     // an egress policy under the microVM backend simply gets no network rather than
     // the host's. `guest_wants_egress` is still exposed so the eventual bridge knows
     // whether to wire one in.
-    let namespaces = vec![
+    let mut namespaces = vec![
         json!({"type": "pid"}),
         json!({"type": "mount"}),
         json!({"type": "ipc"}),
         json!({"type": "uts"}),
         json!({"type": "network"}),
     ];
+    // Only the OCI/runc `Mapped` form carries a user namespace + uid/gid mappings.
+    // `Direct` relies on gVisor's guest-uid == host-uid bind ownership (no userns,
+    // which this gVisor rejects); `Root` is the legacy posture.
+    let mapping = match user {
+        GuestUser::Mapped(u) => Some(*u),
+        _ => None,
+    };
+    if mapping.is_some() {
+        namespaces.push(json!({"type": "user"}));
+    }
+    let uid_mappings = mapping.map(|u| {
+        json!([{ "containerID": u.guest_uid, "hostID": u.host_uid, "size": 1u32 }])
+    });
+    let gid_mappings = mapping.map(|u| {
+        json!([{ "containerID": u.guest_gid, "hostID": u.host_gid, "size": 1u32 }])
+    });
 
     // Drop ALL capabilities (every OCI set empty). Without this the runtime applies
     // its DEFAULT capability set — which still includes CAP_NET_RAW, CAP_MKNOD,
@@ -187,10 +249,30 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
         { "type": "RLIMIT_NOFILE", "hard": 65536u64, "soft": 65536u64 }
     ]);
 
+    // The guest process identity inside the guest.
+    let process_user = match user {
+        GuestUser::Root => json!({ "uid": 0, "gid": 0 }),
+        GuestUser::Direct { uid, gid } => json!({ "uid": uid, "gid": gid }),
+        GuestUser::Mapped(u) => json!({ "uid": u.guest_uid, "gid": u.guest_gid }),
+    };
+
+    let mut linux = serde_json::Map::new();
+    linux.insert("resources".into(), json!(resources));
+    linux.insert("namespaces".into(), json!(namespaces));
+    linux.insert("maskedPaths".into(), masked_paths);
+    linux.insert("readonlyPaths".into(), readonly_paths);
+    if let Some(m) = uid_mappings {
+        linux.insert("uidMappings".into(), m);
+    }
+    if let Some(m) = gid_mappings {
+        linux.insert("gidMappings".into(), m);
+    }
+
     let config = json!({
         "ociVersion": "1.0.2",
         "process": {
             "terminal": false,
+            "user": process_user,
             "cwd": cwd,
             "args": command,
             "env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
@@ -200,14 +282,65 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
         },
         "root": { "path": rootfs, "readonly": true },
         "mounts": mounts,
-        "linux": {
-            "resources": resources,
-            "namespaces": namespaces,
-            "maskedPaths": masked_paths,
-            "readonlyPaths": readonly_paths,
-        },
+        "linux": linux,
     });
     serde_json::to_string_pretty(&config).unwrap_or_default()
+}
+
+/// How the guest process's identity maps to the host. Closing the uid-0-in-guest
+/// gap: the guest runs as a **non-root** uid *inside the guest*, and a user
+/// namespace maps that guest uid/gid to the **launcher's host uid/gid** so the
+/// read-write workspace binds (owned by the host uid) stay writable. Without the
+/// mapping a non-root guest uid could not write them; without a non-root guest uid
+/// the guest is root in its own namespace (least-privilege violation). The mapping
+/// is runtime-sensitive (runc vs gVisor treat bind ownership under a userns
+/// differently), so it is emitted here but **validated against the runtime**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserMapping {
+    /// The uid the process has *inside* the guest (non-root, e.g. 1000).
+    pub guest_uid: u32,
+    /// The gid the process has *inside* the guest.
+    pub guest_gid: u32,
+    /// The launcher's uid on the host (what the workspace files are owned by).
+    pub host_uid: u32,
+    /// The launcher's gid on the host.
+    pub host_gid: u32,
+}
+
+impl UserMapping {
+    /// Map a fixed non-root guest id (1000) onto the given host uid/gid — the
+    /// common case (run the agent as a stable in-guest user owning the workspace).
+    pub fn to_host(host_uid: u32, host_gid: u32) -> Self {
+        Self { guest_uid: 1000, guest_gid: 1000, host_uid, host_gid }
+    }
+}
+
+/// Which identity the guest process runs as — the knob that closes (or declares) the
+/// uid-0-in-guest gap. Two non-root forms exist because the runtimes disagree:
+///
+/// - [`GuestUser::Direct`] runs as a non-root uid with **no user namespace**. gVisor
+///   (`runsc`) maps a bind's ownership guest-uid == host-uid directly, so a workspace
+///   **owned by that host uid** is writable by a non-root guest of the same id. This
+///   is the form gVisor accepts and is validated against `runsc` (the launcher runs
+///   as that non-root uid in production).
+/// - [`GuestUser::Mapped`] is the OCI/runc-correct form: a non-root guest uid behind
+///   a **user namespace** mapped to the host owner. runc honours it; **this gVisor
+///   build rejects any userns spec** (`gofer: fork/exec … invalid argument`), so it
+///   is emitted for runc-class runtimes, not gVisor — validated finding, see
+///   `docs/microvm-backend.md`.
+/// - [`GuestUser::Root`] is the legacy uid-0-in-guest posture: still kernel-isolated,
+///   but not least-privilege. Kept for back-compat and honest comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestUser {
+    Root,
+    Direct { uid: u32, gid: u32 },
+    Mapped(UserMapping),
+}
+
+impl Default for GuestUser {
+    fn default() -> Self {
+        GuestUser::Root
+    }
 }
 
 /// Does the policy ask for any egress? A VM gives the guest no NIC by default
@@ -334,6 +467,38 @@ mod tests {
     }
 
     #[test]
+    fn mount_plan_maps_write_denies_and_read_allows() {
+        use tartaros_core::FsRule;
+        let mut p = Policy::default();
+        p.writable_roots = vec![PathBuf::from("/ws")];
+        // a write-deny inside the writable root: must stay readable but ro
+        p.fs_rules = vec![FsRule {
+            path: PathBuf::from("/ws/protected"),
+            access: Access::Deny,
+            even_if_absent: true,
+        }];
+        // deny a broad dir outside the root, re-allow one branch, deny a deeper leaf
+        p.read_denies = vec![PathBuf::from("/vault"), PathBuf::from("/vault/mine/secret")];
+        p.read_allows = vec![PathBuf::from("/vault/mine")];
+        let plan = mount_plan(&p);
+        let has = |path: &str, mode: Mode| {
+            plan.iter().any(|s| s.host_path == PathBuf::from(path) && s.mode == mode)
+        };
+        // write-deny -> read-only (readable, never writable)
+        assert!(has("/ws/protected", Mode::ReadOnly), "write-deny must be a ro bind");
+        // re-allowed branch -> read-only share (visible)
+        assert!(has("/vault/mine", Mode::ReadOnly), "read-allow must be shared ro");
+        // deeper deny inside the re-allowed branch -> excluded (masked)
+        assert!(has("/vault/mine/secret", Mode::Excluded), "deeper deny masks over allow");
+        // the broad parent deny is NOT inside any share -> never shared, not masked
+        // (masking it would hide the re-allowed branch)
+        assert!(
+            !plan.iter().any(|s| s.host_path == PathBuf::from("/vault")),
+            "a parent-only deny must not be emitted as a mask"
+        );
+    }
+
+    #[test]
     fn egress_is_off_by_default() {
         assert!(!guest_wants_egress(&Policy::default()));
         let mut p = Policy::default();
@@ -357,7 +522,7 @@ mod tests {
         p.max_processes = Some(64);
         let cmd = vec!["/bin/sh".to_string(), "-c".to_string(), "echo hi".to_string()];
         let v: serde_json::Value =
-            serde_json::from_str(&to_oci_config(&p, &cmd, "/var/lib/tartaros/rootfs")).unwrap();
+            serde_json::from_str(&to_oci_config(&p, &cmd, "/var/lib/tartaros/rootfs", &GuestUser::Root)).unwrap();
 
         // the command and cwd
         assert_eq!(v["process"]["args"], serde_json::json!(cmd));
@@ -434,11 +599,68 @@ mod tests {
         p.allow_domains = vec!["example.com".into()];
         assert!(guest_wants_egress(&p));
         let v: serde_json::Value =
-            serde_json::from_str(&to_oci_config(&p, &["true".into()], "/rootfs")).unwrap();
+            serde_json::from_str(&to_oci_config(&p, &["true".into()], "/rootfs", &GuestUser::Root)).unwrap();
         let ns = v["linux"]["namespaces"].as_array().unwrap();
         assert!(
             ns.iter().any(|n| n["type"] == "network"),
             "network namespace must always be isolated (never share host net)"
         );
+    }
+
+    #[test]
+    fn legacy_root_user_is_uid0_no_userns() {
+        // GuestUser::Root => the documented legacy posture: uid 0 inside the guest
+        // and NO user namespace / uid mappings emitted.
+        let mut p = Policy::default();
+        p.writable_roots = vec![PathBuf::from("/ws")];
+        let v: serde_json::Value =
+            serde_json::from_str(&to_oci_config(&p, &["true".into()], "/rootfs", &GuestUser::Root)).unwrap();
+        assert_eq!(v["process"]["user"]["uid"], 0);
+        assert!(v["linux"].get("uidMappings").is_none());
+        let ns = v["linux"]["namespaces"].as_array().unwrap();
+        assert!(!ns.iter().any(|n| n["type"] == "user"), "no userns for Root");
+    }
+
+    #[test]
+    fn direct_user_is_nonroot_without_userns() {
+        // GuestUser::Direct => a non-root uid and NO user namespace (the gVisor-native
+        // form validated against runsc). The workspace must be owned by this host uid.
+        let mut p = Policy::default();
+        p.writable_roots = vec![PathBuf::from("/ws")];
+        let v: serde_json::Value = serde_json::from_str(
+            &to_oci_config(&p, &["true".into()], "/rootfs", &GuestUser::Direct { uid: 2000, gid: 2000 }),
+        )
+        .unwrap();
+        assert_eq!(v["process"]["user"]["uid"], 2000);
+        assert_ne!(v["process"]["user"]["uid"], 0, "must not be root in guest");
+        assert!(v["linux"].get("uidMappings").is_none(), "Direct emits no mappings");
+        let ns = v["linux"]["namespaces"].as_array().unwrap();
+        assert!(!ns.iter().any(|n| n["type"] == "user"), "Direct emits no userns");
+        // caps still all dropped
+        assert_eq!(v["process"]["capabilities"]["bounding"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn mapped_user_emits_userns_and_mappings() {
+        // GuestUser::Mapped => the OCI/runc form: a non-root guest uid, a user
+        // namespace, and uid/gid mappings pointing the guest id at the host owner.
+        let mut p = Policy::default();
+        p.writable_roots = vec![PathBuf::from("/ws")];
+        let um = UserMapping::to_host(501, 20);
+        let v: serde_json::Value = serde_json::from_str(
+            &to_oci_config(&p, &["true".into()], "/rootfs", &GuestUser::Mapped(um)),
+        )
+        .unwrap();
+        assert_eq!(v["process"]["user"]["uid"], 1000);
+        assert_ne!(v["process"]["user"]["uid"], 0, "must not be root in guest");
+        let ns = v["linux"]["namespaces"].as_array().unwrap();
+        assert!(ns.iter().any(|n| n["type"] == "user"), "user namespace required");
+        let um_json = &v["linux"]["uidMappings"][0];
+        assert_eq!(um_json["containerID"], 1000);
+        assert_eq!(um_json["hostID"], 501);
+        assert_eq!(um_json["size"], 1);
+        let gm_json = &v["linux"]["gidMappings"][0];
+        assert_eq!(gm_json["hostID"], 20);
+        assert_eq!(v["process"]["capabilities"]["bounding"].as_array().unwrap().len(), 0);
     }
 }
