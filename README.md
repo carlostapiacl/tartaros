@@ -64,9 +64,9 @@ do not sell a competitor's default or scope choice as a vulnerability.
 | Create new files at a writable repo root (while handoff stays unwritable) | ✅ read-only bind mounts (root or user namespace) | ✅ |
 | FS reads of on-disk secrets (`~/.ssh`, `~/.aws`, `.env`) | ✅ carved read grant | ✅ `(deny file-read*)` |
 | Deny-read inside a re-allowed branch (specificity: deepest wins) | ✅ | ✅ |
-| Network: default-deny + per-port (TCP) | ✅ Landlock (ABI v4+, port-based) | ✅ |
+| Network: default-deny, all protocols | ✅ Landlock per-port TCP **+ seccomp denies AF_INET/INET6 UDP·raw** (closes DNS/QUIC/ICMP/IPv6 egress, no netns needed) | ✅ |
 | Network: egress scoped to domains (`--allow-domain`) | ✅ broker CONNECT/HTTPS proxy + SSRF defense | ✅ |
-| Network: complete off, all protocols (`--isolate-net`) | ✅ empty netns (TCP/UDP/ICMP/raw) | ❌ |
+| Network: complete off via namespace (`--isolate-net`) | ✅ empty netns (belt-and-suspenders over the seccomp UDP/raw close) | ❌ |
 | A single AF_UNIX socket by path (`allowUnixSockets`) | ❌ seccomp is all-or-nothing | ✅ Seatbelt `path-literal` |
 | Secret broker (capability, not raw token) | ✅ HTTP+HTTPS (CONNECT), client auth, TTL+quota, host allow-list | ✅ |
 | Resource: memory / processes / CPU | ✅ RLIMIT + cgroup (`memory.max`, `pids.max`), root-proof | 🟡 RLIMIT only |
@@ -75,7 +75,7 @@ do not sell a competitor's default or scope choice as a vulnerability.
 | Attributable kernel denials (unified log) | — | ✅ `(with message)` tag per deny |
 | First-hand effect log (collectors, record modes) | ✅ | ✅ |
 
-**Conformance:** 24/24 security scenarios pass on Linux (kernel 6.8), 0 violations;
+**Conformance:** 25/25 security scenarios pass on Linux (kernel 6.8), 0 violations;
 macOS (Seatbelt) passes the cross-platform subset (16/16). The suite also runs a
 mutation mode (`--mutate`) that proves it would catch a removed protection, and
 marks scenarios UNSUPPORTED on a host that lacks a required capability rather than
@@ -144,10 +144,12 @@ tartaros run \
 ```
 
 `--allow-domain HOST` scopes egress to that domain through the capability broker
-(HTTPS via CONNECT on port 443, SSRF-defended); the agent gets no other network.
-It is a **host:port capability** — a TCP tunnel with TLS end-to-end, so the broker
-does **not** inspect SNI or the certificate; the allowed host is reachable only on
-443, not as a raw TCP endpoint on an arbitrary port. A full
+(HTTPS via CONNECT on port 443, SSRF-defended); the agent gets no other network —
+direct TCP is blocked by Landlock and UDP/ICMP/raw (DNS, QUIC, IPv6 datagrams) by
+the seccomp egress filter, so there is no side-channel around the broker. It is a
+**host:port capability** — a TCP tunnel with TLS end-to-end, so the broker does
+**not** inspect SNI or the certificate; the allowed host is reachable only on 443,
+not as a raw TCP endpoint on an arbitrary port. A full
 sandbox-runtime `settings.json` can be mapped in one shot with
 `--settings <file>`, which applies every field it can enforce and **refuses**
 (exit 2) anything it cannot, rather than silently dropping a rule.

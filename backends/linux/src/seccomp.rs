@@ -56,6 +56,58 @@ pub(crate) fn harden_syscalls() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Close the UDP/ICMP/raw egress gap (F-1). Landlock mediates **TCP only**, so a
+/// network-restricted policy (default-deny, or `--allow-domain` which scopes TCP
+/// through the broker) still left the agent able to exfiltrate over UDP (DNS,
+/// QUIC/HTTP3), ICMP, raw sockets, and IPv6 datagrams. This denies `socket()` for
+/// `AF_INET`/`AF_INET6` with `SOCK_DGRAM` or `SOCK_RAW`, so only TCP streams can be
+/// created — which Landlock still restricts to the granted ports / broker. Local
+/// `AF_UNIX` sockets (any type) and TCP are untouched. Requires no-new-privs.
+///
+/// The type argument carries flags (`SOCK_CLOEXEC`, `SOCK_NONBLOCK`) ORed in, so we
+/// match on the low bits (`SOCK_TYPE_MASK`), not an exact value.
+pub(crate) fn deny_inet_dgram_raw() -> std::io::Result<()> {
+    use seccompiler::{
+        apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
+        SeccompFilter, SeccompRule,
+    };
+    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
+    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    const SOCK_TYPE_MASK: u64 = 0xf; // low bits of `type`, excluding SOCK_CLOEXEC/NONBLOCK
+    let dom = |af: i32| {
+        SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, af as u64)
+    };
+    let typ = |t: i32| {
+        SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(SOCK_TYPE_MASK), t as u64)
+    };
+    let mut rules = Vec::new();
+    for af in [libc::AF_INET, libc::AF_INET6] {
+        for t in [libc::SOCK_DGRAM, libc::SOCK_RAW] {
+            let r = SeccompRule::new(vec![
+                dom(af).map_err(|e| to_io(format!("seccomp cond: {e}")))?,
+                typ(t).map_err(|e| to_io(format!("seccomp cond: {e}")))?,
+            ])
+            .map_err(|e| to_io(format!("seccomp rule: {e}")))?;
+            rules.push(r);
+        }
+    }
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(libc::SYS_socket, rules);
+    let filter = SeccompFilter::new(
+        map,
+        SeccompAction::Allow,                     // default: allow
+        SeccompAction::Errno(libc::EPERM as u32), // AF_INET/INET6 DGRAM|RAW: deny
+        std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
+    )
+    .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
+    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
+    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
+    Ok(())
+}
+
 /// Deny creating `AF_UNIX` sockets via seccomp (IPC-1). Everything else is
 /// allowed, so TCP (AF_INET), files, etc. keep working. Requires no-new-privs,
 /// which we set here (Landlock sets it too, but seccomp is applied first).

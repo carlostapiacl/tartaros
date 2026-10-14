@@ -1,0 +1,29 @@
+id = "egress-udp-raw-denied"
+category = "network"
+severity = "critical"
+os = ["linux"]
+requires = ["landlock"]
+
+# F-1: Landlock network rules mediate ONLY TCP connect/bind, so a Landlock-only
+# network-restricted policy (default-deny, or --allow-domain which scopes TCP
+# through the broker) used to leave the agent able to exfiltrate over UDP (DNS,
+# QUIC/HTTP3), ICMP and raw sockets, and IPv6 datagrams. A seccomp filter now
+# denies socket(AF_INET|AF_INET6, SOCK_DGRAM|SOCK_RAW), closing that channel
+# WITHOUT a network namespace (unlike isolate-net-egress, which needs userns).
+# This policy is default-deny (network not opened), so the filter is active.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+# Creating an AF_INET UDP socket must now fail (EPERM). exit 0 only if the socket
+# was created (a leak); exit 1 when the kernel denied it (the expected block).
+cmd = "python3 -c 'import socket,sys\ntry:\n  socket.socket(socket.AF_INET,socket.SOCK_DGRAM); sys.exit(0)\nexcept OSError:\n  sys.exit(1)'"
+
+[control]
+# A legitimate in-territory write still works (the filter touches only INET
+# datagram/raw sockets, not files or TCP).
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"

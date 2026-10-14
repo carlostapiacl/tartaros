@@ -40,8 +40,18 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   honestly: this is a host:port capability — TLS is end-to-end, the broker does
   not inspect SNI or the certificate. Regression test
   `live_connect_refuses_non_https_port`.
-- **`--isolate-net`**: empty network namespace (loopback only) — closes TCP,
-  UDP, ICMP and raw, not just TCP (NET-1).
+- **Default-deny closes ALL protocols, not just TCP (F-1)**: Landlock mediates
+  TCP connect/bind only, so a network-restricted policy (default-deny, or
+  `--allow-domain` which scopes TCP through the broker) used to leave UDP (DNS,
+  QUIC/HTTP3), ICMP, raw sockets and IPv6 datagrams open — a working exfil
+  side-channel around the broker. A seccomp filter now denies
+  `socket(AF_INET|AF_INET6, SOCK_DGRAM|SOCK_RAW)` whenever the network is
+  restricted; TCP (to the broker / granted ports) and `AF_UNIX` are untouched, and
+  `--net` (opt-in full egress) leaves UDP available. Reproduced and closed on the Linux test host
+  (UDP/DNS, ICMP, IPv6-UDP all `EPERM`; broker HTTPS still 200). Regression
+  `egress-udp-raw-denied`; needs no namespace (unlike `--isolate-net`).
+- **`--isolate-net`**: empty network namespace (loopback only) — belt-and-suspenders
+  over the seccomp close, blocking egress at the routing layer too (NET-1).
 - Per-path **AF_UNIX allow** on macOS (`allowUnixSockets`); Linux is
   all-or-nothing (`--deny-unix`) and says so.
 
@@ -146,7 +156,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   refuses) and the test asserts both are non-permissive. 9/9 on Linux and macOS.
 
 ### Conformance (`tartaros-bench`)
-- 24-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
+- 25-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
   **UNSUPPORTED**; exits non-zero on any failure.
 - **Coverage gate (ADV-05)**: the scorecard prints `coverage: ran/applicable` and
   the JSON carries the host capability stamp + skipped/unsupported counts, so a
