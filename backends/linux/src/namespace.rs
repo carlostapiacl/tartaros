@@ -103,6 +103,69 @@ pub(crate) unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> 
     Ok(())
 }
 
+/// Protect the trust-handoff set with READ-ONLY bind mounts instead of carving
+/// it out of the Landlock write grant. This lets the whole workspace be granted
+/// writable (so the agent can create new files at the repo root — which the carve
+/// cannot allow while a deny sits below) while the handoff paths stay unwritable
+/// at a lower layer (the kernel VFS), exactly as bubblewrap/sandbox-runtime do.
+///
+/// Each path is bound onto itself as ONE mount (not per-entry — a per-entry bind
+/// of `.git` races git's transient lockfiles) and then remounted read-only. The
+/// mounts live only in this process's private mount namespace and vanish when it
+/// exits, so nothing is left in the real tree.
+///
+/// `need_unshare` is true when no mount namespace exists yet (no `--isolate-pids`);
+/// we create a private one here. Fails closed: any mount error aborts the launch,
+/// so the workspace is never left writable with the handoff unprotected.
+pub(crate) unsafe fn setup_ro_binds(
+    paths: &[std::ffi::CString],
+    need_unshare: bool,
+) -> std::io::Result<()> {
+    if need_unshare {
+        if libc::unshare(libc::CLONE_NEWNS) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Make the mount tree private so our binds do not propagate to the host.
+        let root = c"/";
+        if libc::mount(
+            std::ptr::null(),
+            root.as_ptr(),
+            std::ptr::null(),
+            libc::MS_REC | libc::MS_PRIVATE,
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    for p in paths {
+        // Bind the path onto itself (one recursive mount).
+        if libc::mount(
+            p.as_ptr(),
+            p.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Remount that bind read-only. MS_REMOUNT|MS_BIND changes only the mount
+        // flags of the bind, not the underlying filesystem.
+        if libc::mount(
+            std::ptr::null(),
+            p.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC,
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Bring the loopback interface up inside the current (new) network namespace via
 /// SIOCGIFFLAGS/SIOCSIFFLAGS. A fresh netns has `lo` DOWN; without this even
 /// 127.0.0.1-to-self fails. No external interface exists, so egress stays closed.
