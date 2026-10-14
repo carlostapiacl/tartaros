@@ -143,9 +143,17 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         host uid) become unwritable to the guest. That mapping must be *validated
         against the runtime* (runc vs gVisor handle bind ownership differently), so
         it is deferred to the runsc step below rather than guessed blind.
-  - [ ] invoke `runsc run` with this bundle + a guest rootfs and run the corpus
-        under it on a Linux host that has runsc; settle `process.user`/uid mapping
-        against the real runtime (the remaining M-µ1 steps).
+  - [x] **Validated against a real runtime (runsc/gVisor, systrap platform, no KVM).**
+        The generated `config.json` + a busybox rootfs runs under `runsc run`: the
+        workspace rw bind works, a read-denied dir is masked (invisible), `/proc` is
+        present, and `CapEff: 0000000000000000` — every capability dropped, i.e. the
+        guest is no more privileged than the Landlock backend, confirmed by the
+        runtime not just unit tests. This surfaced and fixed a real bug a pure test
+        could not: `to_oci_config` emitted ro binds for trust-handoff paths that do
+        not exist on disk, and a missing bind source makes runsc abort the whole
+        sandbox — absent bind sources are now skipped (see `emit_oci` example).
+  - [ ] run the FULL corpus under runsc (scripted bundle per scenario) and settle
+        `process.user`/uid mapping against the runtime (remaining M-µ1 polish).
 - **M-µ2 — Firecracker**: guest kernel + rootfs build, virtio-fs shares (rw roots /
   ro handoff), vsock broker bridge, VM-size resource caps, teardown = destroy. Run
   the corpus + the multi-tenant scenarios on a KVM host. This is the tenant-isolation
