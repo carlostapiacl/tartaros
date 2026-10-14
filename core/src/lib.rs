@@ -172,6 +172,17 @@ pub struct Policy {
     /// for parity even though the base profile already allows mach-lookup broadly.
     pub allow_mach_lookup: Vec<String>,
     pub allow_mach_register: Vec<String>,
+    /// macOS-only: directories under which the agent may BIND and CONNECT AF_UNIX
+    /// sockets (`local`/`remote unix-socket (subpath …)`). Used by `--private-tmp`
+    /// so a headless browser can publish its control socket in a run-private dir
+    /// without opening all of `$TMPDIR` (where other runs' sockets live). On Linux
+    /// AF_UNIX is governed all-or-nothing, so this is a no-op there (the dir is a
+    /// writable root and AF_UNIX is already allowed unless `--deny-unix`).
+    pub unix_socket_subpaths: Vec<PathBuf>,
+    /// Opt-in: give the run its own private temp dir (exported as `TMPDIR`), made
+    /// writable and scoped for AF_UNIX, so a browser's socket lands there and
+    /// nowhere shared. The CLI creates it per run and tears it down after.
+    pub private_tmp: bool,
     /// Opt-in (Linux): run the agent in a private PID + mount namespace so it
     /// sees ONLY its own process subtree — it cannot enumerate, inspect
     /// (`/proc/<pid>/cmdline`) or signal host processes, and a fresh `/proc` is

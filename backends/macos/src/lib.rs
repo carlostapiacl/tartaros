@@ -387,6 +387,22 @@ fn build_profile(policy: &Policy) -> String {
         ));
     }
 
+    // Run-private AF_UNIX socket directories (`--private-tmp`): the agent may BIND
+    // (listen) and CONNECT to unix sockets ONLY under these dirs — a headless
+    // browser publishes its control socket here, and nothing reaches a socket in
+    // the shared temp. Scoped by subpath; everything else stays denied.
+    for dir in &policy.unix_socket_subpaths {
+        let real = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        p.push_str(&format!(
+            "(allow network-bind (local unix-socket (subpath {})))\n",
+            quote(&real)
+        ));
+        p.push_str(&format!(
+            "(allow network-outbound (remote unix-socket (subpath {})))\n",
+            quote(&real)
+        ));
+    }
+
     // Writable roots.
     for root in &policy.writable_roots {
         p.push_str(&format!("(allow file-write* (subpath {}))\n", quote(root)));

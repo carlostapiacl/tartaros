@@ -20,6 +20,7 @@
 //!   --seccomp-strict       deny dangerous syscalls to shrink kernel attack surface (Linux)
 //!   --strict               a requested guarantee that cannot be installed aborts the run
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
+//!   --private-tmp          run-private TMPDIR, AF_UNIX scoped to it (headless browsers)
 //!   --timeout SECS         kill the process group after SECS (exit 124)
 //!   --max-mem BYTES        address-space limit
 //!   --max-procs N          process limit
@@ -155,6 +156,7 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --deny-unix            deny AF_UNIX sockets
   --isolate-proc         deny reads of other processes' /proc
   --materialize          pre-create absent trust-handoff placeholders
+  --private-tmp          run-private TMPDIR; AF_UNIX scoped to it (headless browsers)
 
 LIMITS:
   --timeout SECS         kill the run after SECS (exit 124)
@@ -195,8 +197,50 @@ fn cmd_run(rest: &[String]) -> ! {
             eprintln!("tartaros: profile {} — {}", pr.name(), c);
         }
     }
+    let private_tmp = setup_private_tmp(&mut p);
     warn_reachable_host_sockets(&p);
-    exit(run(&p, &cmd, log.as_deref()));
+    let code = run(&p, &cmd, log.as_deref());
+    // Tear down the run-private temp dir (our own ephemeral scratch for this run).
+    if let Some(dir) = private_tmp {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    exit(code);
+}
+
+/// `--private-tmp`: give the run its own temp dir, export it as TMPDIR, make it
+/// writable, and (macOS) scope AF_UNIX bind/connect to it — so a headless
+/// browser's control socket (Playwright publishes under `$TMPDIR`) lands in a
+/// run-private dir instead of the shared temp where other runs' sockets live.
+/// Returns the dir for teardown. No Playwright internals: we only set TMPDIR.
+fn setup_private_tmp(p: &mut Policy) -> Option<std::path::PathBuf> {
+    if !p.private_tmp {
+        return None;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("tartaros-tmp-{}-{}", std::process::id(), nanos));
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("tartaros: cannot create private tmp dir {}: {e}", dir.display());
+        exit(1);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    // The child (and any tool that reads os.tmpdir()/TMPDIR) publishes here.
+    for k in ["TMPDIR", "TMP", "TEMP"] {
+        std::env::set_var(k, &dir);
+    }
+    p.writable_roots.push(dir.clone());
+    p.unix_socket_subpaths.push(dir.clone());
+    eprintln!(
+        "tartaros: private tmp {} (exported as TMPDIR; AF_UNIX scoped to it on macOS)",
+        dir.display()
+    );
+    Some(dir)
 }
 
 /// Never leave a host-escape silent (F-3). On Linux there is no per-path AF_UNIX
@@ -597,6 +641,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             "--seccomp-strict" => p.harden_syscalls = true,
             "--strict" => p.strict = true,
             "--materialize" => p.materialize_absent_handoff = true,
+            "--private-tmp" => p.private_tmp = true,
             "--timeout" => p.timeout = Some(Duration::from_secs(val().parse().unwrap_or(0))),
             "--max-mem" => p.max_memory_bytes = Some(val().parse().unwrap_or(0)),
             "--max-procs" => p.max_processes = Some(val().parse().unwrap_or(0)),
@@ -626,6 +671,12 @@ fn explain(p: &Policy) {
     }
     if !p.allow_mach_lookup.is_empty() {
         println!("macOS Mach lookup (prefix): {}", p.allow_mach_lookup.join(", "));
+    }
+    if p.private_tmp {
+        println!("private tmp: a run-private TMPDIR is created, made writable, and AF_UNIX-scoped (macOS)");
+    }
+    for d in &p.unix_socket_subpaths {
+        println!("AF_UNIX bind/connect scoped to (subpath): {}", d.display());
     }
     println!("isolate PID namespace: {}", p.isolate_pids);
     println!("isolate network (no egress): {}", p.isolate_network);
