@@ -71,6 +71,14 @@ impl Backend for LandlockBackend {
                     .into(),
             });
         }
+        if policy.browser {
+            return Err(PolicyError {
+                reason: "--browser (the headless-browser Seatbelt grants: POSIX shm/sem, IOKit \
+                         user clients, kern.proc.pid/tcsm sysctls) is a macOS concept with no \
+                         Linux equivalent. Run browser roles under the macOS (Seatbelt) backend."
+                    .into(),
+            });
+        }
         // TartarOS can always express the rest of the policy by restructuring.
         let _allow = policy.linux_write_allowlist();
         Ok(())

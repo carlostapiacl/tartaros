@@ -158,6 +158,7 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --isolate-proc         deny reads of other processes' /proc
   --materialize          pre-create absent trust-handoff placeholders
   --private-tmp          run-private TMPDIR; AF_UNIX scoped to it (headless browsers)
+  --browser              macOS: minimal extra Seatbelt grants for headless Chromium/Chrome
 
 LIMITS:
   --timeout SECS         kill the run after SECS (exit 124)
@@ -655,6 +656,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             "--strict" => p.strict = true,
             "--materialize" => p.materialize_absent_handoff = true,
             "--private-tmp" => p.private_tmp = true,
+            "--browser" => p.browser = true,
             "--timeout" => p.timeout = Some(Duration::from_secs(parse_num_or_exit(&val(), "--timeout (seconds)"))),
             "--max-mem" => p.max_memory_bytes = Some(parse_num_or_exit(&val(), "--max-mem (bytes)")),
             "--max-procs" => p.max_processes = Some(parse_num_or_exit(&val(), "--max-procs")),

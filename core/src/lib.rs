@@ -183,6 +183,13 @@ pub struct Policy {
     /// writable and scoped for AF_UNIX, so a browser's socket lands there and
     /// nowhere shared. The CLI creates it per run and tears it down after.
     pub private_tmp: bool,
+    /// macOS-only: emit the minimal extra Seatbelt grants a headless Chromium/Chrome
+    /// needs (POSIX shared memory for `apple.cfprefs.*` + the notification centre,
+    /// POSIX semaphores, the IOSurface/RootDomain IOKit user clients, and
+    /// `sysctl-read kern.proc.pid.` / `sysctl-write kern.tcsm_enable`). Scoped, not
+    /// a blanket open. Without these the browser SIGSEGVs at startup. No effect on
+    /// Linux.
+    pub browser: bool,
     /// Opt-in (Linux): run the agent in a private PID + mount namespace so it
     /// sees ONLY its own process subtree — it cannot enumerate, inspect
     /// (`/proc/<pid>/cmdline`) or signal host processes, and a fresh `/proc` is

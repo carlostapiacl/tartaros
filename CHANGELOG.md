@@ -166,6 +166,21 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   path; any-depth globs covered by the handoff set map to it; single-`*` globs
   compile to anchored Seatbelt regexes on macOS (refused on Linux); arbitrary
   globs are refused rather than treated as never-matching literals.
+- **`--browser` — headless Chromium/Chrome Seatbelt grants (macOS)**: the minimal
+  extra rules a headless browser needs, measured against Playwright + the headless
+  shell (seisin encargo 6): POSIX shared memory for `apple.cfprefs.*` and
+  `apple.shm.notification_center`, POSIX semaphores, the IOSurface/RootDomain IOKit
+  user clients + `iokit-get-properties`, and `sysctl-read kern.proc.pid.` /
+  `sysctl-write kern.tcsm_enable`. Scoped and opt-in — never a blanket open — and
+  the `kern.proc.pid.` read is emitted after the env-leak deny so the browser's own
+  process info is readable while other processes stay denied. Linux refuses
+  `--browser` (macOS concept). Without these headless Chromium SIGSEGVs at startup.
+- **Ancestor metadata under a carved read grant (macOS)**: when a read-deny covers
+  an ancestor of the territory (e.g. `/private/tmp` above the repo), the ancestor
+  directory NODES are now `file-read-metadata`-readable, so a tool can `lstat`/
+  `stat` them to reach the paths it is allowed (Node failed with
+  `EPERM lstat('/private/tmp')` before) — contents stay denied. Matches
+  sandbox-runtime.
 - **Headless-browser Mach rendezvous (macOS)**: `--settings` maps
   `network.allowMachLookup` and the new `allowMachRegister` (sandbox-runtime's
   `*`-suffix = name prefix) onto scoped Seatbelt `(allow mach-register
