@@ -75,7 +75,7 @@ do not sell a competitor's default or scope choice as a vulnerability.
 | Attributable kernel denials (unified log) | — | ✅ `(with message)` tag per deny |
 | First-hand effect log (collectors, record modes) | ✅ | ✅ |
 
-**Conformance:** 27/27 security scenarios pass on Linux (kernel 6.8), 0 violations;
+**Conformance:** 28/28 security scenarios pass on Linux (kernel 6.8), 0 violations;
 macOS (Seatbelt) passes the cross-platform subset (18/18). The suite also runs a
 mutation mode (`--mutate`) that proves it would catch a removed protection, and
 marks scenarios UNSUPPORTED on a host that lacks a required capability rather than
@@ -115,6 +115,15 @@ silently passing.
   AF_UNIX by path (`allowUnixSockets`) and denies it by default in the Seatbelt
   profile, so this is Linux-only. (Reproduced: a default run reached `docker.sock`
   and the D-Bus bus; `--deny-unix` / `hostile-code` close it.)
+- **Running the agent as root is hardened, not a microVM.** A root agent now runs
+  with **no capabilities** (bounding set emptied, `SECBIT_NOROOT`, cap sets zeroed)
+  and cannot create device nodes (Landlock drops `MakeBlock`/`MakeChar`; seccomp
+  denies `mknod`), so module load, raw I/O, host ptrace and raw-disk-via-`mknod`
+  are closed. One residual: a uid-0 agent can still *read an already-existing*
+  root-owned block device (e.g. `/dev/sda`) through owner permissions, which raw
+  bytes bypass path rules — run the agent as a **non-root uid** (or don't expose
+  block devices) for that case. A shared kernel is still a shared kernel; true
+  tenant isolation needs the microVM backend (not yet built).
 - **The effect log is observed, not a guarantee.** Enforcement is guaranteed; the
   log is fed by collectors that sample the process tree (network, secret, process,
   MCP and file-write, on both OS), so a very short-lived event can be missed. The

@@ -98,6 +98,18 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   message or a silent degrade. Non-strict degradation to RLIMIT is warned for
   **every** affected cap (`--max-procs` and `--max-mem`), not just processes.
 
+### Root-agent hardening (adversarial review #3)
+- **No device-node creation**: the Landlock write grant drops `MakeBlock`/
+  `MakeChar`, and `mknod`/`mknodat` are denied via seccomp — a root agent can no
+  longer `mknod` a block device and read the raw disk to bypass path-based secret
+  protection.
+- **All capabilities dropped before exec** when running as real root: the bounding
+  set is emptied, `SECBIT_NOROOT` is set+locked, and the effective/permitted/
+  inheritable sets are zeroed, so the agent loses CAP_SYS_MODULE, CAP_SYS_RAWIO,
+  CAP_SYS_PTRACE, CAP_SYS_ADMIN, CAP_MKNOD, CAP_NET_RAW, … (verified: the agent's
+  `CapEff` is `0000000000000000`). No-op for a non-root euid / inside a userns.
+  Regression `root-mknod-device-denied`.
+
 ### Process isolation & kernel attack surface
 - **`--isolate-pids`**: private PID + mount namespace — the agent sees only its
   own subtree, cannot enumerate/inspect/signal host processes.
@@ -215,7 +227,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   refuses) and the test asserts both are non-permissive. 9/9 on Linux and macOS.
 
 ### Conformance (`tartaros-bench`)
-- 27-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
+- 28-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
   **UNSUPPORTED**; exits non-zero on any failure.
 - **Coverage gate (ADV-05)**: the scorecard prints `coverage: ran/applicable` and
   the JSON carries the host capability stamp + skipped/unsupported counts, so a

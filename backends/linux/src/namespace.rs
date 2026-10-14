@@ -325,6 +325,58 @@ pub(crate) unsafe fn bring_up_loopback() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Drop ALL capabilities before exec when running as real root (adversarial
+/// review #3). A uid-0 agent otherwise keeps CAP_SYS_MODULE (load a kernel module
+/// = full escape), CAP_SYS_RAWIO, CAP_NET_RAW, CAP_SYS_PTRACE, CAP_SYS_ADMIN, …
+/// Agent workloads (sh, git, node) need none. Order matters: drop the bounding set
+/// and set SECBIT_NOROOT FIRST (these need CAP_SETPCAP), then zero the
+/// effective/permitted/inheritable sets. No-op when euid != 0 (incl. inside a user
+/// namespace, where host caps are already empty). Fails closed.
+pub(crate) unsafe fn drop_all_capabilities() -> std::io::Result<()> {
+    if libc::geteuid() != 0 {
+        return Ok(());
+    }
+    // Drop the whole bounding set so no capability can be regained via a setuid
+    // exec. Past CAP_LAST_CAP this returns EINVAL, which we ignore.
+    for cap in 0..=63_i32 {
+        let _ = libc::prctl(libc::PR_CAPBSET_DROP, cap as libc::c_ulong, 0, 0, 0);
+    }
+    // SECBIT_NOROOT (+ locked): uid 0 no longer auto-grants caps on exec, and the
+    // agent cannot undo it. Belt-and-suspenders with no_new_privs (set by seccomp).
+    const SECBIT_NOROOT: libc::c_ulong = 1 << 0;
+    const SECBIT_NOROOT_LOCKED: libc::c_ulong = 1 << 1;
+    let _ = libc::prctl(
+        libc::PR_SET_SECUREBITS,
+        SECBIT_NOROOT | SECBIT_NOROOT_LOCKED,
+        0,
+        0,
+        0,
+    );
+    // Finally zero the effective/permitted/inheritable sets (capability version 3
+    // = two 32-bit words). Done LAST, since the steps above need CAP_SETPCAP.
+    #[repr(C)]
+    struct CapHeader {
+        version: u32,
+        pid: libc::c_int,
+    }
+    #[repr(C)]
+    struct CapData {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+    const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+    let hdr = CapHeader { version: LINUX_CAPABILITY_VERSION_3, pid: 0 };
+    let data = [
+        CapData { effective: 0, permitted: 0, inheritable: 0 },
+        CapData { effective: 0, permitted: 0, inheritable: 0 },
+    ];
+    if libc::syscall(libc::SYS_capset, &hdr as *const _, data.as_ptr()) != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Ask the kernel to SIGKILL this task when its parent dies (`PR_SET_PDEATHSIG`).
 /// pdeathsig is cleared across `fork`, so this must be set after the fork and is
 /// preserved across the following `execve`. If the parent already died in the

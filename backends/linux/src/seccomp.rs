@@ -32,12 +32,17 @@ pub(crate) fn harden_syscalls() -> std::io::Result<()> {
         // host-wide state
         libc::SYS_reboot, libc::SYS_acct, libc::SYS_swapon, libc::SYS_swapoff,
         libc::SYS_settimeofday, libc::SYS_clock_settime, libc::SYS_adjtimex,
+        // device-node creation: a root agent could mknod a block device and read
+        // the raw disk, bypassing path-based confinement (review #3). mknodat is on
+        // every arch; the legacy mknod is x86-only (added below).
+        libc::SYS_mknodat,
     ];
     #[cfg(target_arch = "x86_64")]
     {
-        // x86-only port I/O.
+        // x86-only port I/O and the legacy mknod.
         deny.push(libc::SYS_iopl);
         deny.push(libc::SYS_ioperm);
+        deny.push(libc::SYS_mknod);
     }
 
     let mut map = std::collections::BTreeMap::new();
