@@ -278,10 +278,17 @@ impl Policy {
     /// backend applies this with `env_clear()` + `envs(..)`, so enforcement does
     /// not depend on the CLI pre-scrubbing its own process env.
     pub fn child_env(&self) -> Option<Vec<(String, String)>> {
+        let original: Vec<(String, String)> = std::env::vars().collect();
+        self.child_env_from(&original)
+    }
+
+    /// Pure core of [`child_env`]: given the launcher's environment `original`,
+    /// compute the child's. Split out so the allowlist/passthrough logic is
+    /// deterministically testable without touching the process environment.
+    pub fn child_env_from(&self, original: &[(String, String)]) -> Option<Vec<(String, String)>> {
         if self.inherit_env {
             return None;
         }
-        let original: Vec<(String, String)> = std::env::vars().collect();
         let mut out: Vec<(String, String)> = original
             .iter()
             .filter(|(k, _)| ENV_ALLOWLIST.contains(&k.as_str()) || k.starts_with("LC_"))
@@ -707,6 +714,71 @@ mod tests {
 
     fn has_deny(rules: &[FsRule], p: &Path) -> bool {
         rules.iter().any(|r| r.access == Access::Deny && r.path == p)
+    }
+
+    fn get<'a>(env: &'a [(String, String)], k: &str) -> Option<&'a str> {
+        env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn child_env_scrubs_secrets_keeps_allowlist_by_default() {
+        let launcher = vec![
+            ("PATH".into(), "/usr/bin".into()),
+            ("HOME".into(), "/home/a".into()),
+            ("LC_ALL".into(), "C".into()),
+            ("AWS_SECRET_ACCESS_KEY".into(), "leak".into()),
+            ("GITHUB_TOKEN".into(), "leak2".into()),
+        ];
+        let p = Policy::default(); // inherit_env = false
+        let env = p.child_env_from(&launcher).expect("should scrub, not inherit");
+        // allowlisted + LC_* survive; the agent stays functional
+        assert_eq!(get(&env, "PATH"), Some("/usr/bin"));
+        assert_eq!(get(&env, "HOME"), Some("/home/a"));
+        assert_eq!(get(&env, "LC_ALL"), Some("C"));
+        // secrets are gone
+        assert_eq!(get(&env, "AWS_SECRET_ACCESS_KEY"), None);
+        assert_eq!(get(&env, "GITHUB_TOKEN"), None);
+    }
+
+    #[test]
+    fn child_env_passthrough_and_explicit_set() {
+        let launcher = vec![
+            ("PATH".into(), "/usr/bin".into()),
+            ("AWS_SECRET_ACCESS_KEY".into(), "from-launcher".into()),
+        ];
+        let p = Policy {
+            // KEY carries the launcher's value through; KEY=VALUE sets explicitly;
+            // a passthrough naming an absent var is a silent no-op.
+            env_passthrough: vec![
+                "AWS_SECRET_ACCESS_KEY".into(),
+                "MY_FLAG=hello".into(),
+                "NOT_PRESENT".into(),
+            ],
+            ..Default::default()
+        };
+        let env = p.child_env_from(&launcher).unwrap();
+        assert_eq!(get(&env, "AWS_SECRET_ACCESS_KEY"), Some("from-launcher"));
+        assert_eq!(get(&env, "MY_FLAG"), Some("hello"));
+        assert_eq!(get(&env, "NOT_PRESENT"), None);
+    }
+
+    #[test]
+    fn child_env_inherit_opts_into_full_passthrough() {
+        let launcher = vec![("AWS_SECRET_ACCESS_KEY".into(), "leak".into())];
+        let p = Policy { inherit_env: true, ..Default::default() };
+        // None = backend leaves the inherited environment untouched (secrets and all)
+        assert!(p.child_env_from(&launcher).is_none());
+    }
+
+    #[test]
+    fn child_env_explicit_set_overrides_allowlist_value() {
+        let launcher = vec![("PATH".into(), "/usr/bin".into())];
+        let p = Policy { env_passthrough: vec!["PATH=/sandbox/bin".into()], ..Default::default() };
+        let env = p.child_env_from(&launcher).unwrap();
+        // the explicit --env PATH=... wins over the inherited allowlisted PATH,
+        // and is not duplicated
+        assert_eq!(get(&env, "PATH"), Some("/sandbox/bin"));
+        assert_eq!(env.iter().filter(|(k, _)| k == "PATH").count(), 1);
     }
 
     #[test]
