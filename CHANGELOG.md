@@ -5,6 +5,18 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### microVM (M-µ1) — validated against a real runtime (runsc/gVisor)
+- Ran the generated OCI `config.json` + a busybox rootfs under `runsc run`
+  (systrap platform, no KVM). Confirmed by the runtime, not just unit tests:
+  workspace rw bind works, a read-denied dir is masked, `/proc` is present, and
+  `CapEff: 0000000000000000` (every capability dropped).
+- **Fix a bug only a real runtime revealed:** `to_oci_config` emitted read-only
+  bind mounts for trust-handoff paths that do not exist on disk (the set is
+  protect-even-if-absent). A missing bind source makes runsc abort the whole
+  sandbox, so absent bind sources are now skipped. Added an `emit_oci` example
+  (prints the config for a given rootfs/workspace) and a regression test that an
+  absent handoff path is not emitted as a bind.
+
 ### CLI fixes (found by running the README example verbatim)
 - **Relative paths now work.** `--write`/`--read-deny`/`--read-allow`/`--write-deny`
   (and the same keys in a `--config` file) accept relative paths, resolved to

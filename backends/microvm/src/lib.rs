@@ -106,16 +106,27 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
     for s in mount_plan(policy) {
         let dest = s.host_path.to_string_lossy().into_owned();
         let m = match s.mode {
-            Mode::ReadWrite => json!({
-                "destination": dest, "type": "bind",
-                "source": dest, "options": ["rbind", "rw"]
-            }),
-            Mode::ReadOnly => json!({
-                "destination": dest, "type": "bind",
-                "source": dest, "options": ["rbind", "ro"]
-            }),
+            // A bind mount needs an EXISTING source: the runtime (runc/runsc) opens
+            // the source at sandbox creation and aborts the whole sandbox if it is
+            // missing. The trust-handoff set is protect-even-if-absent, so many of
+            // its paths (e.g. a not-yet-created `.claude/agents`) do not exist on
+            // disk — binding them would crash the guest. Skip an absent bind source;
+            // there is nothing to protect yet, and the ro-root + masks still hold.
+            // (A not-yet-existing handoff path under the rw share is the documented
+            // microVM "future handoff" residual, closed later by materialization.)
+            Mode::ReadWrite | Mode::ReadOnly => {
+                if !s.host_path.exists() {
+                    continue;
+                }
+                let ro = matches!(s.mode, Mode::ReadOnly);
+                json!({
+                    "destination": dest, "type": "bind",
+                    "source": dest, "options": ["rbind", if ro { "ro" } else { "rw" }]
+                })
+            }
             // Mask the secret with an empty ro tmpfs so the guest cannot see the
-            // host contents, even though the enclosing root is shared rw.
+            // host contents, even though the enclosing root is shared rw. A tmpfs
+            // needs no source, so it is safe to emit even for an absent path.
             Mode::Excluded => json!({
                 "destination": dest, "type": "tmpfs",
                 "source": "tmpfs", "options": ["ro", "nosuid", "nodev", "size=0"]
@@ -328,9 +339,16 @@ mod tests {
 
     #[test]
     fn oci_config_maps_policy() {
+        // Real temp workspace: a bind mount needs an existing source, so the ws root,
+        // the secret, and an EXISTING handoff file must be on disk to be emitted.
+        let ws = std::env::temp_dir().join(format!("mv-oci-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(ws.join("secret"));
+        std::fs::write(ws.join(".mcp.json"), "{}").unwrap(); // existing handoff file
+        let ws_s = ws.to_string_lossy().into_owned();
+
         let mut p = Policy::default();
-        p.writable_roots = vec![PathBuf::from("/ws")];
-        p.read_denies = vec![PathBuf::from("/ws/secret")];
+        p.writable_roots = vec![ws.clone()];
+        p.read_denies = vec![ws.join("secret")];
         p.max_memory_bytes = Some(512 * 1024 * 1024);
         p.max_processes = Some(64);
         let cmd = vec!["/bin/sh".to_string(), "-c".to_string(), "echo hi".to_string()];
@@ -339,7 +357,7 @@ mod tests {
 
         // the command and cwd
         assert_eq!(v["process"]["args"], serde_json::json!(cmd));
-        assert_eq!(v["process"]["cwd"], "/ws");
+        assert_eq!(v["process"]["cwd"], ws_s);
         assert_eq!(v["process"]["noNewPrivileges"], true);
 
         // hardening: every capability set is empty (drop all caps), rlimit set, and
@@ -374,16 +392,22 @@ mod tests {
         let cg = find("/sys/fs/cgroup").unwrap();
         assert!(cg["options"].as_array().unwrap().iter().any(|o| o == "ro"));
         // workspace root: rw bind
-        let ws = find("/ws").unwrap();
-        assert_eq!(ws["type"], "bind");
-        assert!(ws["options"].as_array().unwrap().iter().any(|o| o == "rw"));
+        let ws_m = find(&ws_s).unwrap();
+        assert_eq!(ws_m["type"], "bind");
+        assert!(ws_m["options"].as_array().unwrap().iter().any(|o| o == "rw"));
         // secret: masked by a ro tmpfs (invisible)
-        let sec = find("/ws/secret").unwrap();
+        let sec = find(&ws.join("secret").to_string_lossy()).unwrap();
         assert_eq!(sec["type"], "tmpfs");
         assert!(sec["options"].as_array().unwrap().iter().any(|o| o == "ro"));
-        // a handoff path: ro bind
-        let mcp = find("/ws/.mcp.json").unwrap();
+        // an EXISTING handoff path: ro bind
+        let mcp = find(&ws.join(".mcp.json").to_string_lossy()).unwrap();
         assert!(mcp["options"].as_array().unwrap().iter().any(|o| o == "ro"));
+        // an ABSENT handoff path (e.g. .claude/agents) is NOT emitted as a bind —
+        // a missing bind source would make the runtime abort the whole sandbox.
+        assert!(
+            find(&ws.join(".claude/agents").to_string_lossy()).is_none(),
+            "absent handoff path must not become a bind mount"
+        );
 
         // resources
         assert_eq!(v["linux"]["resources"]["memory"]["limit"], 512 * 1024 * 1024);
@@ -392,6 +416,7 @@ mod tests {
         // default-deny egress -> a fresh (pathless) network namespace is requested
         let ns = v["linux"]["namespaces"].as_array().unwrap();
         assert!(ns.iter().any(|n| n["type"] == "network"));
+        let _ = std::fs::remove_dir_all(&ws);
     }
 
     #[test]
