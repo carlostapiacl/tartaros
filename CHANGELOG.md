@@ -5,6 +5,22 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### NET-01 closed on Linux-root — network-namespace-scoped egress broker
+- `--allow-domain` now (Linux, as root) runs the agent in a network namespace whose
+  only route is a veth to the broker's host-side address, with **no default route**.
+  The agent reaches the broker and nothing else; Landlock's port-based filter is no
+  longer the only thing standing between the agent and the open internet. Verified
+  on a Linux host: the allowed domain works through the broker (HTTP 200), while a
+  direct TCP connect to an external host AND to the host's own public IP on the
+  broker port are both blocked; the agent's netns shows only `lo` + the veth.
+- **Fail-closed:** if the namespace cannot be built and verified isolating (no
+  default route; the connected /30 present), it is torn down and `--allow-domain`
+  falls back to the loopback port grant with a loud NET-01 warning (the documented
+  non-guarantee) — never a silent weaker mode. The namespace, veth and a scoped
+  INPUT firewall rule (for hosts with a default-DROP INPUT policy) are torn down
+  after the run. Needs root + iproute2; on macOS the Seatbelt profile already
+  filters egress by address, so the gap never applied there.
+
 ### macOS — allow signalling same-sandbox processes (reported by seisin)
 - The Seatbelt profile allowed `signal` only to `(target self)`, so a process
   could not signal its own children — killing a timed-out subprocess or closing a

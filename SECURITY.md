@@ -27,14 +27,16 @@ Explicitly **out of scope** (documented non-guarantees, not vulnerabilities):
 - A capability a host cannot provide. These fail closed or are reported
   `UNSUPPORTED`; they are never silently downgraded.
 - A difference in defaults or a misconfiguration.
-- **Egress scope bypass via the broker's port on Linux (NET-01, known).**
-  `--allow-domain` grants the broker's loopback port through Landlock, whose
-  network filter is port-based, not address-based — so the grant cannot be pinned
-  to loopback and a malicious agent that learns the port can open a direct TCP
-  connection to an external host on it, bypassing the domain scope. `--allow-domain`
-  is therefore scoped egress for a **trusted-but-fallible** agent, not containment
-  of hostile code. The closure (a network-namespace-scoped broker with no external
-  route) is tracked; until it lands this is a documented non-guarantee.
+- **Egress scope bypass via the broker's port (NET-01) — closed on Linux-root.**
+  Landlock's network filter is port-based, so a port grant alone does not stop an
+  agent from reaching an external host on the broker's port. On Linux as root this
+  is now closed: the agent runs in a network namespace whose only route is a veth to
+  the broker (no default route), fail-closed. On macOS the Seatbelt profile filters
+  by remote address, so the gap never applied. The remaining non-guarantee is the
+  **non-root Linux fallback**, where the scoped namespace can't be created: there
+  `--allow-domain` degrades (with a loud warning) to the port grant — scoped egress
+  for a trusted-but-fallible agent, not hostile-code containment. Run as root for
+  the closed behavior.
 
 ## Reporting a vulnerability
 

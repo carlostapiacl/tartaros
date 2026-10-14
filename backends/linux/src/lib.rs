@@ -451,6 +451,13 @@ fn confined_command(
     // uid/gid maps (euid/egid are preserved across fork).
     let cgroup_procs_c: Option<std::ffi::CString> =
         cgroup_procs.as_ref().and_then(|p| std::ffi::CString::new(p.as_str()).ok());
+    // NET-01: path to the prepared egress network namespace the child must join
+    // (set by the CLI when it built the scoped netns). Pre-built here so pre_exec
+    // only does open/setns/close — no allocation after the fork.
+    let egress_netns_c: Option<std::ffi::CString> = policy
+        .egress_netns
+        .as_ref()
+        .and_then(|n| std::ffi::CString::new(format!("/var/run/netns/{n}")).ok());
     let (userns_uid_map, userns_gid_map) = namespace::uid_gid_maps();
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
@@ -480,6 +487,22 @@ fn confined_command(
                     let _ = libc::write(fd, pid.as_ptr() as *const _, pid.len());
                     libc::close(fd);
                 }
+            }
+            // NET-01: join the prepared egress network namespace (scoped veth to the
+            // broker, no default route). Must happen while still root in the host
+            // user namespace (joining a netns needs CAP_SYS_ADMIN in its owning
+            // userns) — so BEFORE any enter_user_namespace below. Fails closed.
+            if let Some(nspath) = &egress_netns_c {
+                let fd = libc::open(nspath.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+                if fd < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::setns(fd, libc::CLONE_NEWNET) != 0 {
+                    let e = std::io::Error::last_os_error();
+                    libc::close(fd);
+                    return Err(e);
+                }
+                libc::close(fd);
             }
             // Private namespaces and bind mounts (all opt-in) need CAP_SYS_ADMIN.
             // A non-root user gains it by entering a USER namespace first — the

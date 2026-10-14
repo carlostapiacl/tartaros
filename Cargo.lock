@@ -521,6 +521,7 @@ dependencies = [
 name = "tartaros-cli"
 version = "0.1.0-alpha"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tartaros-broker",

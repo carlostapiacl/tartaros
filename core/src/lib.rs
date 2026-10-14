@@ -219,6 +219,13 @@ pub struct Policy {
     /// (ports / broker on host loopback), since those need the host network.
     /// Needs CAP_SYS_ADMIN; fails closed.
     pub isolate_network: bool,
+    /// Runtime-only (Linux, not from config): the name of a prepared network
+    /// namespace the agent must join (`setns`) at spawn, for NET-01 egress scoping.
+    /// The namespace has only a veth to the broker's host IP and NO default route,
+    /// so the agent can reach the broker and nothing else. Set by the CLI after it
+    /// builds the netns; the backend joins it in `pre_exec`. `None` = no scoped
+    /// netns (ordinary host-network posture).
+    pub egress_netns: Option<String>,
     /// Opt-in (Linux): install a seccomp filter that denies a curated set of
     /// dangerous, rarely-needed syscalls (kernel-module load, kexec, keyring,
     /// bpf, perf, ptrace, process_vm_*, mount/unshare/setns, reboot/time/swap).
