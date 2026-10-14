@@ -137,6 +137,13 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
 - **Attributable denials on macOS**: every deny carries `(with message
   "CMD64_…_SBX")` so a kernel denial is traceable in the unified log even after
   the process exits (matches sandbox-runtime's `generateLogTag`/`renderRule`).
+- **Differential corpus for apply-fully-or-refuse (ADV-08)**: `cli/tests/
+  settings_corpus.rs` drives the real binary with `explain --settings` over valid
+  and invalid patterns (literals, single-char classes, any-depth covered/uncovered
+  by the handoff set, globs in allow rules, per-domain deny, and a single-`*` glob)
+  and asserts each is applied (exit 0) or refused (exit 2) — never silently
+  widened. The single-`*` case is OS-differential (macOS regex applies, Linux
+  refuses) and the test asserts both are non-permissive. 9/9 on Linux and macOS.
 
 ### Conformance (`tartaros-bench`)
 - 24-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
