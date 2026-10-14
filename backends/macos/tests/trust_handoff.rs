@@ -152,3 +152,26 @@ fn git_runs_under_profile() {
     assert_eq!(rc, 0, "git must run under the sandbox profile");
     fs::remove_dir_all(&work).ok();
 }
+
+// --max-mem is an address-space cap (RLIMIT_AS) that the Darwin kernel does not
+// enforce (setrlimit returns EINVAL). It must be REFUSED up front with a clear
+// message, not crash the run with a cryptic "spawning sandbox-exec: Invalid
+// argument". The caps that DO work on macOS (--max-procs, --max-cpu) must still
+// be accepted.
+#[test]
+fn max_mem_is_refused_on_macos_with_a_clear_message() {
+    let work = mk_work();
+    let be = SeatbeltBackend;
+    let mut p = policy_for(&work);
+    p.max_memory_bytes = Some(512 * 1024 * 1024);
+    let err = be.validate(&p).expect_err("--max-mem must be refused on macOS");
+    assert!(err.reason.contains("--max-mem"), "message must name the flag: {}", err.reason);
+    assert!(!err.reason.contains("Invalid argument"), "must be a clear refusal, not the raw errno");
+
+    // the working caps are still accepted
+    let mut ok = policy_for(&work);
+    ok.max_processes = Some(256);
+    ok.max_cpu_secs = Some(600);
+    assert!(be.validate(&ok).is_ok(), "--max-procs/--max-cpu must still be accepted");
+    fs::remove_dir_all(&work).ok();
+}
