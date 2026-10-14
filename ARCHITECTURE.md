@@ -79,11 +79,12 @@ The full list of what we capture, by axis, is in [`CATALOG.md`](CATALOG.md).
 The highest-leverage piece is the log itself. TartarOS records **allowed and
 denied** events across the network, secret, process and MCP axes, per role, with
 timestamps — `core::effect` (the `EffectEvent` / `Outcome` / `RecordMode` model)
-fed by four collectors in `collect/`, on both OS. The **file-write axis is
-enforced today but not yet emitted as events** — that one remaining collector is
-the honest gap. The log is what gives the intent layer its first-hand feed;
-the intent layer treats TartarOS as a replaceable source, not a hard dependency (there are
-adapters for other effect collectors).
+fed by five collectors in `collect/` (network, secret, process, MCP, file-write),
+on both OS. The file-write collector observes *allowed* writes; a denied write is
+blocked by enforcement before the fd opens, so it is enforced, not logged. The log
+is what gives the intent layer its first-hand feed; the intent layer treats TartarOS as a
+replaceable source, not a hard dependency (there are adapters for other effect
+collectors).
 
 ## Status
 
@@ -92,6 +93,6 @@ write / trust-handoff core, read-deny of secret dirs with a specificity carve,
 per-port loopback network, domain-scoped egress through the broker, the capability
 broker (HTTP + HTTPS/CONNECT, mandatory auth, TTL, quota, SSRF defense), resource
 caps (cgroup v2 on Linux, RLIMIT on macOS), PID/mount/net isolation on Linux, and
-the effect log with its collectors. Still open: the file-write event collector, a
+the effect log with its five collectors (including file-write). Still open: a
 microVM backend for true multi-tenant isolation, and the the intent layer intent feed. The
 per-OS matrix is the README capability table.

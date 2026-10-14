@@ -22,6 +22,35 @@ pub fn fd_targets(pid: u32) -> Vec<(u32, String)> {
     out
 }
 
+/// (fd number, path) for every open fd of `pid` that is a real filesystem path
+/// opened for WRITING (O_WRONLY or O_RDWR), read from `/proc/<pid>/fdinfo/<fd>`.
+/// Sockets/pipes/anon inodes (whose link target is not an absolute path) are
+/// skipped — this is the file axis, not the network axis.
+#[cfg(target_os = "linux")]
+pub fn write_fd_targets(pid: u32) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    for (fd, target) in fd_targets(pid) {
+        if !target.starts_with('/') {
+            continue; // socket:[...], pipe:[...], anon_inode:... — not a file
+        }
+        // fdinfo `flags:` is octal; the low two bits are the access mode
+        // (O_RDONLY=0, O_WRONLY=1, O_RDWR=2).
+        if let Ok(info) = std::fs::read_to_string(format!("/proc/{pid}/fdinfo/{fd}")) {
+            if let Some(accmode) = info
+                .lines()
+                .find_map(|l| l.strip_prefix("flags:"))
+                .and_then(|v| u32::from_str_radix(v.trim(), 8).ok())
+                .map(|flags| flags & 0o3)
+            {
+                if accmode == 1 || accmode == 2 {
+                    out.push((fd, target));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The executable backing `pid` (resolved `/proc/<pid>/exe`), if readable.
 #[cfg(target_os = "linux")]
 pub fn exe(pid: u32) -> Option<String> {
@@ -106,6 +135,36 @@ pub fn fd_targets(pid: u32) -> Vec<(u32, String)> {
     res
 }
 
+/// macOS: write-mode file fds via `lsof -F fan` (a = access: r/w/u). Keep only
+/// real paths opened for writing (w or u) — the file axis, not sockets.
+#[cfg(target_os = "macos")]
+pub fn write_fd_targets(pid: u32) -> Vec<(u32, String)> {
+    let out = match std::process::Command::new("lsof")
+        .args(["-p", &pid.to_string(), "-F", "fan", "-w"])
+        .output()
+    {
+        Ok(o) => o.stdout,
+        Err(_) => return Vec::new(),
+    };
+    let mut res = Vec::new();
+    let mut cur_fd: u32 = u32::MAX;
+    let mut writable = false;
+    for line in String::from_utf8_lossy(&out).lines() {
+        if let Some(rest) = line.strip_prefix('f') {
+            cur_fd = rest.parse().unwrap_or(u32::MAX);
+            writable = false;
+        } else if let Some(acc) = line.strip_prefix('a') {
+            // lsof access field: r, w, or u (read+write).
+            writable = acc.contains('w') || acc.contains('u');
+        } else if let Some(name) = line.strip_prefix('n') {
+            if writable && name.starts_with('/') {
+                res.push((cur_fd, name.to_string()));
+            }
+        }
+    }
+    res
+}
+
 #[cfg(target_os = "macos")]
 pub fn exe(pid: u32) -> Option<String> {
     let out = std::process::Command::new("ps")
@@ -156,6 +215,10 @@ pub fn process_tree(root: u32) -> Vec<u32> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn fd_targets(_pid: u32) -> Vec<(u32, String)> {
+    Vec::new()
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn write_fd_targets(_pid: u32) -> Vec<(u32, String)> {
     Vec::new()
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

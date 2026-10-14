@@ -33,11 +33,14 @@ in order of value × reachability:
          vulnerable setuid helper. Verified (both refuse messages) on the same host.
    - [ ] lift create-at-root where no userns is grantable at all (needs an
          install-time AppArmor profile or a packaged helper; design TBD).
-2. **Reliable violation observability + the file-write event collector.** Linux
-   Landlock returns EPERM without a path on older kernels and macOS drops denials
-   under log pressure (srt #696/#582); "which rule denied me and why" is a
-   top, easy-to-win ask (nono #2081). Finishing the file-write collector also
-   closes the one honest gap in the effect log and feeds the intent layer.
+2. **Reliable violation observability.** [x] The file-write collector is done
+   (`collect::FileCollector`) — the effect log now covers all five axes on both
+   OS, closing the last honest gap in the observed feed. [ ] Still open: capturing
+   DENIED effects with their rule/path — Landlock returns EPERM without a path on
+   older kernels and macOS can drop denials under log pressure (srt #696/#582);
+   "which rule denied me and why" is a top, easy-to-win ask (nono #2081). On macOS
+   the `(with message)` deny tags already make this traceable; Linux needs a
+   denial path (Landlock audit on new kernels, or an EPERM-correlating probe).
 3. **DNS egress parity.** Landlock mediates TCP only; `--allow-domain` resolves
    through the broker, but a direct UDP:53 query is not cut unless `--isolate-net`.
    Close or clearly document the UDP path so domain scoping is airtight.
@@ -121,7 +124,12 @@ provide fails closed or reports UNSUPPORTED, never a silent downgrade.
       (symmetric read carve) and macOS `(deny file-read*)`; Linux live-verified
       on a Linux host (~/.ssh unreadable, /etc + /usr/bin readable). Secret dimension now
       complete: observe (collector) + deny-read + broker (capability)
-- [ ] file-write event capture (enforced already; emit on deny)
+- [x] file-write event capture — `collect::FileCollector` observes write-mode fds
+      across the process tree (Linux `/proc/<pid>/fdinfo` flags, macOS `lsof -F fan`),
+      classifies within/outside territory, emits `Axis::File` `write-open` events.
+      Wired into `--log`; live-verified on Linux and macOS. Honest scope: observes
+      ALLOWED writes (a denied write is blocked before the fd opens — enforced, not
+      logged). The effect log now covers all five axes on both OS.
 - [x] **observed session live on a Linux host**: `LandlockBackend::spawn` + `collect::
       observe_until_exit` drive the collectors while a confined agent runs; real
       effect log captured first-hand (secret read of ~/.ssh + curl exec), filtered

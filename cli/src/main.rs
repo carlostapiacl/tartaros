@@ -654,7 +654,7 @@ fn run_common<B>(be: &B, policy: &Policy, cmd: &[String], log: Option<&str>, net
 where
     B: RunObserved,
 {
-    use tartaros_collect::{NetworkCollector, ProcessCollector, SecretCollector};
+    use tartaros_collect::{FileCollector, NetworkCollector, ProcessCollector, SecretCollector};
     use tartaros_core::{Collector, FilterSink, JsonlSink, RecordMode};
     match log {
         Some(path) => {
@@ -669,6 +669,7 @@ where
                 if net { v.push(Box::new(NetworkCollector::for_policy(pid, &pol))); }
                 v.push(Box::new(SecretCollector::for_policy(pid, &pol)));
                 v.push(Box::new(ProcessCollector::for_policy(pid, &pol)));
+                v.push(Box::new(FileCollector::for_policy(pid, &pol)));
                 v
             });
             match res { Ok(o) => o.exit_code, Err(e) => { eprintln!("tartaros: {}", e.reason); 1 } }

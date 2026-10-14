@@ -71,6 +71,19 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   bpf, perf, ptrace, process_vm_*, mount/unshare/setns, reboot/time/swap).
 - Opt-in `--deny-unix` (AF_UNIX via seccomp).
 
+### Effect log (observability)
+- Collectors observe the process tree and emit `EffectEvent`s on five axes —
+  network, secret, process, MCP and **file-write** — on both OS. `RecordMode`
+  (Off / DeniedOnly / OutsideOnly / Boundary / All) + an axis filter choose how
+  much is recorded; `--log` writes JSON Lines.
+- **`FileCollector`** (new) watches write-mode file descriptors across the tree
+  (Linux `/proc/<pid>/fdinfo` flags, macOS `lsof -F fan`) and classifies each
+  within / outside the writable roots — the file axis now has a collector, so the
+  log covers all five axes. Honest scope: it observes *allowed* writes; a denied
+  write is blocked by enforcement before the fd opens (enforced, not logged). The
+  log is a sampled observation feed for visibility and intent (the intent layer), never the
+  enforcement boundary.
+
 ### Threat-model profiles
 - `--profile local-agent | hostile-code | multi-tenant`, applied before flags,
   each with an honest caveat printed on run and in `explain`. `multi-tenant`
