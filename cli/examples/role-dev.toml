@@ -1,8 +1,13 @@
 # A role's confinement, declared once — applies on macOS (Seatbelt) and Linux (Landlock).
 role = "dev"
-writable_roots = ["./repo"]
+writable_roots = ["./repo"]          # relative paths resolve against the cwd at launch
 read_denies = ["~/.ssh", "~/.aws", "~/.config/gcloud"]
 local_ports = [8001, 8081]
 materialize_absent_handoff = true   # Linux: protect absent .claude/settings.json etc.
 timeout_secs = 600
-max_memory_bytes = 2147483648       # 2 GiB
+max_cpu_secs = 600                   # CPU-time cap (RLIMIT_CPU) — works on macOS and Linux
+
+# Memory cap is Linux-only: it needs a cgroup (or RLIMIT_AS), and the Darwin kernel
+# does not enforce RLIMIT_AS, so macOS refuses it rather than run uncapped. Uncomment
+# on Linux:
+# max_memory_bytes = 2147483648      # 2 GiB (Linux: cgroup memory.max)
