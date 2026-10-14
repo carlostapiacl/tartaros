@@ -306,10 +306,9 @@ fn main() {
     let _ = std::fs::create_dir_all("reports");
     let mut j = String::from("{\n");
     j.push_str(&format!(
-        "  \"os\": \"{OS}\",\n  \"environment\": {{\"os\":\"{}\",\"kernel\":\"{}\",\"tool_version\":\"{}\",\"unix_time\":{},\"caps\":{{\"landlock\":{},\"cgroup_v2\":{},\"userns\":{}}}}},\n  \"total\": {total},\n  \"passed\": {passed},\n  \"violations\": {violations},\n  \"critical_violations\": {crit_viol},\n  \"control_broken\": {broke},\n  \"scenarios\": [\n",
+        "  \"os\": \"{OS}\",\n  \"environment\": {{\"os\":\"{}\",\"kernel\":\"{}\",\"tool_version\":\"{}\",\"unix_time\":{},\"caps\":{{\"landlock\":{},\"cgroup_v2\":{},\"userns\":{}}}}},\n  \"total\": {total},\n  \"passed\": {passed},\n  \"violations\": {violations},\n  \"critical_violations\": {crit_viol},\n  \"control_broken\": {broke},\n  \"skipped\": {skipped},\n  \"unsupported\": {unsupported},\n  \"scenarios\": [\n",
         env.os, env.kernel, env.version, env.unix_time, env.landlock, env.cgroup_v2, env.userns
     ));
-    j.push_str(&format!("  \"skipped\": {skipped},\n  \"unsupported\": {unsupported},\n"));
     for (i, o) in outcomes.iter().enumerate() {
         j.push_str(&format!(
             "    {{\"id\":\"{}\",\"category\":\"{}\",\"severity\":\"{}\",\"passed\":{},\"violation\":{},\"control_broke\":{},\"infra_error\":{}}}{}\n",
