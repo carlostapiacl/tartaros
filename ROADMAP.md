@@ -51,7 +51,7 @@ in order of value × reachability:
    srt's `srt-win` is alpha with serious bugs (#658/#623/#559). A large bet, later.
 5. **True multi-tenant isolation (microVM / gVisor backend).** The honest "not
    yet" we already scope out in SECURITY.md (srt #605 asks the same of srt). The
-   1.0+ moonshot; shared-kernel hardening is the ceiling until then.
+   1.0+ moonshot; shared-kernel hardening is the ceiling until then. Design: `docs/microvm-backend.md`.
 
 Cross-cutting: keep the "honest limits" contract — every capability a host cannot
 provide fails closed or reports UNSUPPORTED, never a silent downgrade.
