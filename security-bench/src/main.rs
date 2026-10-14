@@ -179,11 +179,24 @@ fn main() {
     }
 
     let mutate = args.iter().any(|a| a == "--mutate");
-    // The corpus dir is the first non-flag, non-numeric positional argument.
+    // --require-caps <comma,list>: host capabilities a full-coverage certification
+    // run demands. Any listed cap absent on this host => FAIL (ADV-05), so a green
+    // exit can never be cited when scenarios were silently UNSUPPORTED. Omit it for
+    // a best-effort run on a capability-poor host (tests what it can).
+    let require_caps: Vec<String> = args
+        .iter()
+        .position(|a| a == "--require-caps")
+        .and_then(|i| args.get(i + 1))
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    // The corpus dir is the first non-flag, non-numeric positional argument,
+    // excluding the value that follows --require-caps (not a positional).
+    let rc_val_idx = args.iter().position(|a| a == "--require-caps").map(|i| i + 1);
     let dir = args
         .iter()
-        .find(|a| !a.starts_with("--") && a.parse::<usize>().is_err())
-        .cloned()
+        .enumerate()
+        .find(|(i, a)| Some(*i) != rc_val_idx && !a.starts_with("--") && a.parse::<usize>().is_err())
+        .map(|(_, a)| a.clone())
         .unwrap_or_else(|| "corpus".into());
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("reading {dir}: {e}"))
@@ -260,6 +273,11 @@ fn main() {
     println!("  INFRA_ERROR:             {infra_errors}  [target 0]");
     println!("  SKIPPED (other OS):      {skipped}");
     println!("  UNSUPPORTED (host caps): {unsupported}");
+    // Coverage of the scenarios MEANT for this OS (ran vs. unsupported-by-host).
+    // A high UNSUPPORTED count means this host certified little, even if green —
+    // make that legible instead of hiding behind a single exit code (ADV-05).
+    let applicable = total + unsupported;
+    println!("  coverage:                {total}/{applicable} applicable scenarios ran");
 
     // Environment stamp: a scorecard is only citeable if it says WHERE it ran and
     // which enforcement primitives the host actually offered (a PASS on a host
@@ -305,7 +323,33 @@ fn main() {
         );
         std::process::exit(1);
     }
-    println!("\nOK: all {passed} scenarios passed ({skipped} skipped, {unsupported} unsupported)");
+    // Required-coverage gate (ADV-05): when the caller demands a full-coverage
+    // certification (`--require-caps`), a host missing any demanded capability must
+    // FAIL — otherwise its scenarios came back UNSUPPORTED and a green exit would
+    // overstate what was verified. `has_cap` maps the cap name to the host stamp.
+    if !require_caps.is_empty() {
+        // Dedicated check: an UNKNOWN cap name (a typo) counts as missing, so a
+        // bogus requirement fails loudly instead of passing like `has_cap` lets an
+        // unknown scenario requirement run.
+        let cap_present = |c: &str| match c {
+            "landlock" | "landlock-net" => env.landlock || OS == "macos",
+            "cgroup" => env.cgroup_v2,
+            "userns" => env.userns,
+            _ => false,
+        };
+        let missing: Vec<&str> = require_caps.iter().map(|s| s.as_str()).filter(|c| !cap_present(c)).collect();
+        if !missing.is_empty() {
+            eprintln!(
+                "\nFAIL: --require-caps not met on this host: missing [{}] (unsupported={unsupported}). \
+                 A full-coverage certification cannot be claimed here; re-run on a host with these \
+                 capabilities or drop the requirement for a best-effort run.",
+                missing.join(", ")
+            );
+            std::process::exit(1);
+        }
+    }
+    let cov_note = if require_caps.is_empty() { String::new() } else { format!(", require-caps [{}] met", require_caps.join(", ")) };
+    println!("\nOK: all {passed} scenarios passed ({skipped} skipped, {unsupported} unsupported, coverage {total}/{applicable}{cov_note})");
 }
 
 /// A deliberate weakening of a policy, used by `--mutate` to prove the corpus
