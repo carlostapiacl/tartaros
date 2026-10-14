@@ -56,6 +56,35 @@ pub(crate) fn harden_syscalls() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Deny io_uring (adversarial review #4 / F-#1 bypass): io_uring can create and
+/// connect sockets via `IORING_OP_SOCKET` / `IORING_OP_CONNECT` WITHOUT the
+/// `socket()`/`connect()` syscalls, so it bypasses the seccomp socket filters
+/// (`deny_af_unix`, `deny_inet_dgram_raw`). Denying `io_uring_setup` means no ring
+/// can be created; `enter`/`register` are denied too. Applied whenever any socket
+/// filter is active. Ordinary agent tools use the plain syscalls; libraries that
+/// probe io_uring (e.g. libuv) fall back when setup fails.
+pub(crate) fn deny_io_uring() -> std::io::Result<()> {
+    use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter};
+    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
+    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut map = std::collections::BTreeMap::new();
+    for nr in [libc::SYS_io_uring_setup, libc::SYS_io_uring_enter, libc::SYS_io_uring_register] {
+        map.insert(nr, Vec::new()); // match unconditionally
+    }
+    let filter = SeccompFilter::new(
+        map,
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::EPERM as u32),
+        std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
+    )
+    .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
+    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
+    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
+    Ok(())
+}
+
 /// Close the UDP/ICMP/raw egress gap (F-1). Landlock mediates **TCP only**, so a
 /// network-restricted policy (default-deny, or `--allow-domain` which scopes TCP
 /// through the broker) still left the agent able to exfiltrate over UDP (DNS,
