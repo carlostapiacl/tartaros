@@ -1,0 +1,70 @@
+tartaros-bench · backend=macos
+
+  -- egress-udp-raw-denied (SKIPPED: not for macos)
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-escape-49337/work/link/secret: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-write-outside-territory-49337/outside.txt: Operation not permitted
+  -- trust-handoff-materialize-absent (SKIPPED: not for macos)
+  -- ipc-unix-socket-outside (SKIPPED: not for macos)
+  -- isolate-net-egress (SKIPPED: not for macos)
+  -- isolate-pid-namespace (SKIPPED: not for macos)
+  -- lifecycle-daemon-escape (SKIPPED: not for macos)
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-deny-nested-49337/vault/mine/settings.json: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-inside-deny-49337/vault/other-secret: Operation not permitted
+  -- read-deny-proc-magic-symlink (SKIPPED: not for macos)
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlink-bypass-49337/work/link: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-wins-exact-tie-49337/vault/sec/key.txt: Operation not permitted
+  -- resource-memory-limit (SKIPPED: not for macos)
+  -- resource-process-limit (SKIPPED: not for macos)
+  -- root-mknod-device-denied (SKIPPED: not for macos)
+  -- seccomp-attack-surface (SKIPPED: not for macos)
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secret-read-inside-writable-49337/work/.secrets/token: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secret-read-deny-49337/vault/key: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-ancestor-rename-49337/work/a/n2/.git/hooks/pre-commit: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-claude-commands-49337/work/a/b/.claude/commands/evil.md: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-mcp-json-49337/work/proj/.mcp.json: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-nested-git-hook-49337/work/a/nested/.git/hooks/pre-commit: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-rename-over-hook-49337/work/evil.sh to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-rename-over-hook-49337/work/.git/hooks/pre-commit: Operation not permitted
+sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-submodule-hook-49337/work/.git/modules/m/hooks/pre-commit: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-inside-writable-49337/work/protected/evil: Operation not permitted
+
+scenario                             sev      result
+----------------------------------------------------------------
+broker-credential-egress             critical PASS  attack rc=7 control rc=0
+env-secret-scrub                     critical PASS  attack rc=1 control rc=0
+fs-hardlink-bypass-read-deny         critical PASS  attack rc=1 control rc=0
+fs-symlink-escape                    critical PASS  attack rc=1 control rc=0
+fs-write-outside-territory           critical PASS  attack rc=1 control rc=0
+lifecycle-timeout-kills-group        high     PASS  attack rc=124 control rc=0
+net-unauthorized-port                critical PASS  attack rc=7 control rc=0
+read-allow-deny-nested               critical PASS  attack rc=1 control rc=0
+read-allow-inside-deny               critical PASS  attack rc=1 control rc=0
+read-deny-symlink-bypass             critical PASS  attack rc=1 control rc=0
+read-deny-wins-exact-tie             critical PASS  attack rc=1 control rc=0
+resource-cpu-limit                   high     PASS  attack rc=152 control rc=0
+secret-read-inside-writable          critical PASS  attack rc=1 control rc=0
+secret-read-deny                     critical PASS  attack rc=1 control rc=0
+trust-handoff-ancestor-rename        critical PASS  attack rc=1 control rc=0
+trust-handoff-claude-commands        critical PASS  attack rc=1 control rc=0
+trust-handoff-mcp-json               critical PASS  attack rc=1 control rc=0
+trust-handoff-nested-git-hook        critical PASS  attack rc=1 control rc=0
+trust-handoff-rename-over-hook       critical PASS  attack rc=1 control rc=0
+trust-handoff-submodule-hook         critical PASS  attack rc=1 control rc=0
+write-deny-inside-writable           critical PASS  attack rc=1 control rc=0
+
+== scorecard ==
+  scenarios run:           21
+  PASS:                    21/21
+  VIOLATION:               0  (critical: 0)  [target 0]
+  CONTROL_BROKE:           0  [target 0]
+  INFRA_ERROR:             0  [target 0]
+  SKIPPED (other OS):      11
+  UNSUPPORTED (host caps): 0
+  coverage:                21/21 applicable scenarios ran
+
+environment: macos · kernel 24.6.0 · tartaros-bench 0.1.0-alpha
+host caps:  landlock=false cgroup_v2=false userns=false
+
+report: reports/last.json
+
+OK: all 21 scenarios passed (11 skipped, 0 unsupported, coverage 21/21)
+corpus exit=0

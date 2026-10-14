@@ -1,0 +1,19 @@
+tartaros-bench · MUTATION MODE · backend=macos
+
+Each mutation removes one protection; a healthy corpus flips >=1 scenario.
+
+mutation             flips      sensitive scenarios
+----------------------------------------------------------------------
+drop-read-denies     6/7        read-allow-deny-nested, read-allow-inside-deny, read-deny-symlink-bypass, read-deny-wins-exact-tie, secret-read-inside-writable, secret-read-deny [ok]
+grant-network        2/2        broker-credential-egress, net-unauthorized-port [ok]
+drop-isolate-net     n/a        (no scenario uses this protection)
+drop-isolate-pids    n/a        (no scenario uses this protection)
+raise-proc-limit     n/a        (no scenario uses this protection)
+raise-mem-limit      n/a        (no scenario uses this protection)
+drop-env-scrub       1/1        env-secret-scrub [ok]
+
+== mutation scorecard ==
+  mutations with a blind spot: 0  [target 0]
+
+OK: every removable protection is caught by at least one scenario.
+mutate exit=0

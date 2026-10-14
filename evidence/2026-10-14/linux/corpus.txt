@@ -1,0 +1,75 @@
+tartaros-bench · backend=linux
+
+/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-escape-3226828/work/link/secret: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-fs-write-outside-territory-3226828/outside.txt: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-materialize-absent-3226828/work/.claude/settings.json: Read-only file system
+launched
+cat: /tmp/secbench-read-allow-deny-nested-3226828/vault/mine/settings.json: Permission denied
+cat: /tmp/secbench-read-allow-inside-deny-3226828/vault/other-secret: Permission denied
+cat: /proc/self/root/tmp/secbench-read-deny-proc-magic-symlink-3226828/vault/key: Permission denied
+cat: /tmp/secbench-read-deny-symlink-bypass-3226828/work/link: Permission denied
+cat: /tmp/secbench-read-deny-wins-exact-tie-3226828/vault/sec/key.txt: Permission denied
+Killed
+mknod: /tmp/secbench-root-mknod-device-denied-3226828/work/disk: Operation not permitted
+cat: /tmp/secbench-secret-read-inside-writable-3226828/work/.secrets/token: Permission denied
+cat: /tmp/secbench-secret-read-deny-3226828/vault/key: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-ancestor-rename-3226828/work/a/n2/.git/hooks/pre-commit: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-claude-commands-3226828/work/a/b/.claude/commands/evil.md: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-mcp-json-3226828/work/proj/.mcp.json: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-nested-git-hook-3226828/work/a/nested/.git/hooks/pre-commit: Read-only file system
+mv: inter-device move failed: '/tmp/secbench-trust-handoff-rename-over-hook-3226828/work/evil.sh' to '/tmp/secbench-trust-handoff-rename-over-hook-3226828/work/.git/hooks/pre-commit'; unable to remove target: Read-only file system
+sh: 1: cannot create /tmp/secbench-trust-handoff-submodule-hook-3226828/work/.git/modules/m/hooks/pre-commit: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-inside-writable-3226828/work/protected/evil: Read-only file system
+
+scenario                             sev      result
+----------------------------------------------------------------
+broker-credential-egress             critical PASS  attack rc=7 control rc=0
+egress-udp-raw-denied                critical PASS  attack rc=1 control rc=0
+env-secret-scrub                     critical PASS  attack rc=1 control rc=0
+fs-hardlink-bypass-read-deny         critical PASS  attack rc=1 control rc=0
+fs-symlink-escape                    critical PASS  attack rc=2 control rc=0
+fs-write-outside-territory           critical PASS  attack rc=2 control rc=0
+trust-handoff-materialize-absent     high     PASS  attack rc=2 control rc=0
+ipc-unix-socket-outside              critical PASS  attack rc=1 control rc=0
+isolate-net-egress                   critical PASS  attack rc=1 control rc=0
+isolate-pid-namespace                high     PASS  attack rc=1 control rc=0
+lifecycle-daemon-escape              high     PASS  attack rc=124 control rc=0
+lifecycle-timeout-kills-group        high     PASS  attack rc=124 control rc=0
+net-unauthorized-port                critical PASS  attack rc=7 control rc=0
+read-allow-deny-nested               critical PASS  attack rc=1 control rc=0
+read-allow-inside-deny               critical PASS  attack rc=1 control rc=0
+read-deny-proc-magic-symlink         critical PASS  attack rc=1 control rc=0
+read-deny-symlink-bypass             critical PASS  attack rc=1 control rc=0
+read-deny-wins-exact-tie             critical PASS  attack rc=1 control rc=0
+resource-cpu-limit                   high     PASS  attack rc=137 control rc=0
+resource-memory-limit                high     PASS  attack rc=1 control rc=0
+resource-process-limit               high     PASS  attack rc=1 control rc=0
+root-mknod-device-denied             critical PASS  attack rc=1 control rc=0
+seccomp-attack-surface               high     PASS  attack rc=1 control rc=0
+secret-read-inside-writable          critical PASS  attack rc=1 control rc=0
+secret-read-deny                     critical PASS  attack rc=1 control rc=0
+trust-handoff-ancestor-rename        critical PASS  attack rc=2 control rc=0
+trust-handoff-claude-commands        critical PASS  attack rc=2 control rc=0
+trust-handoff-mcp-json               critical PASS  attack rc=2 control rc=0
+trust-handoff-nested-git-hook        critical PASS  attack rc=2 control rc=0
+trust-handoff-rename-over-hook       critical PASS  attack rc=1 control rc=0
+trust-handoff-submodule-hook         critical PASS  attack rc=2 control rc=0
+write-deny-inside-writable           critical PASS  attack rc=2 control rc=0
+
+== scorecard ==
+  scenarios run:           32
+  PASS:                    32/32
+  VIOLATION:               0  (critical: 0)  [target 0]
+  CONTROL_BROKE:           0  [target 0]
+  INFRA_ERROR:             0  [target 0]
+  SKIPPED (other OS):      0
+  UNSUPPORTED (host caps): 0
+  coverage:                32/32 applicable scenarios ran
+
+environment: linux · kernel 6.8.0-146-generic · tartaros-bench 0.1.0-alpha
+host caps:  landlock=true cgroup_v2=true userns=true
+
+report: reports/last.json
+
+OK: all 32 scenarios passed (0 skipped, 0 unsupported, coverage 32/32)
+corpus exit=0

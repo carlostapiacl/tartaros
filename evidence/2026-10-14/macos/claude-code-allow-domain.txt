@@ -1,0 +1,9 @@
+# Claude Code confined by TartarOS on macOS 15.7.9 (Seatbelt), 2026-10-14.
+# Writable: a scratch git repo only. ~/.ssh and ~/.aws read-denied.
+# Egress: api.anthropic.com only, through the broker. Nothing else reachable.
+$ tartaros run --timeout 120 --write ./repo --read-deny ~/.ssh --read-deny ~/.aws \
+    --allow-domain api.anthropic.com -- claude -p "reply with just the word OK"
+tartaros: egress broker on 127.0.0.1:51115 — allowed: api.anthropic.com (HTTPS/443; TCP tunnel, no TLS inspection)
+OK
+exit=0
+# (two unrelated warnings about the operator's personal Claude Code permission rules omitted)

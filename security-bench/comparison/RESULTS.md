@@ -48,8 +48,8 @@ present): srt blocks write-outside and nested `.git/hooks` (via its glob deny) â
 parity with TartarOS â€” and nono allows the nested hook (the measured differentiator).
 The srt column activates only where the tooling is installed.
 
-Where the measured rows differ: deny-inside-allow on
-Linux (nono cannot express it; srt uses bwrap). Against nono and the Codex class
+Where the measured rows differ: deny-inside-allow on Linux (nono cannot express
+it; srt implements it with bwrap mounts). Against nono and the Codex class
 the trust-handoff advantage is public and measured (above).
 
 ## Not yet compared

@@ -8,7 +8,7 @@
 //! - **Modular.** `Collector`s observe (network, filesystem, secrets, …) and
 //!   feed one common event stream. Adding an axis = adding a collector.
 //! - **Extensible.** `EffectEvent` is an open shape with a free-form `action`
-//!   and `target`; `EffectSink` is where events go (a file, a channel, the intent layer).
+//!   and `target`; `EffectSink` is where events go (a file, a channel, an analyzer).
 //! - **Trustworthy.** Collectors observe effects from outside the agent; nothing
 //!   here trusts what the agent reports about itself.
 
@@ -118,7 +118,7 @@ impl EffectEvent {
     }
 
     /// One JSON object, no trailing newline. Hand-rolled to keep `core`
-    /// dependency-free; the field set is stable and the intent layer reads it.
+    /// dependency-free; the field set is stable so external readers can rely on it.
     pub fn to_json(&self) -> String {
         format!(
             "{{\"ts\":{},\"role\":{},\"axis\":\"{}\",\"action\":{},\"target\":{},\"direction\":\"{}\",\"outcome\":\"{}\",\"source\":{}}}",
@@ -158,7 +158,7 @@ pub trait EffectSink {
     fn emit(&mut self, event: &EffectEvent);
 }
 
-/// Append events as JSON Lines to any writer (a file, stdout, a pipe to the intent layer).
+/// Append events as JSON Lines to any writer (a file, stdout, a pipe to an analyzer).
 pub struct JsonlSink<W: Write> {
     writer: W,
 }
