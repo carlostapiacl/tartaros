@@ -493,6 +493,14 @@ fn confined_command(
             if harden_syscalls {
                 seccomp::harden_syscalls()?;
             }
+            // Close the UDP/ICMP/raw egress gap (F-1): Landlock mediates TCP only,
+            // so a network-restricted policy (default-deny or --allow-domain) must
+            // also deny AF_INET/AF_INET6 datagram/raw sockets, or the agent could
+            // exfiltrate over UDP/DNS/QUIC, ICMP, or IPv6 while only TCP was scoped.
+            // TCP (to the broker / granted ports) and AF_UNIX stay available.
+            if restrict_net {
+                seccomp::deny_inet_dgram_raw()?;
+            }
             // Landlock.
             created
                 .take()

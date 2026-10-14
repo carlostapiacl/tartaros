@@ -87,6 +87,11 @@ struct PolicySpec {
     harden_syscalls: bool,
     #[serde(default)]
     strict: bool,
+    /// "allowed" opts into full egress (so the UDP/raw seccomp filter is OFF and a
+    /// scenario can test what ONLY the network namespace blocks). Default/omitted =
+    /// denied, the normal confined posture.
+    #[serde(default)]
+    network: Option<String>,
 }
 
 /// A loopback TCP server the runner starts for network scenarios.
@@ -686,7 +691,10 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         read_allows: c.policy.read_allows.iter().map(|s| PathBuf::from(sub(s))).collect(),
         fs_rules: c.policy.write_denies.iter().map(|s| tartaros_core::FsRule { path: PathBuf::from(sub(s)), access: tartaros_core::Access::Deny, even_if_absent: true }).collect(),
         local_ports: c.policy.local_ports.clone(),
-        network: Some(Network::Denied),
+        network: match c.policy.network.as_deref() {
+            Some("allowed") => Some(Network::Allowed),
+            _ => Some(Network::Denied),
+        },
         materialize_absent_handoff: c.policy.materialize_absent_handoff,
         isolate_process_info: c.policy.isolate_process_info,
         timeout: c.policy.timeout_secs.map(std::time::Duration::from_secs),
