@@ -54,6 +54,14 @@ impl Backend for LandlockBackend {
                     .into(),
             });
         }
+        if !policy.glob_denies.is_empty() {
+            return Err(PolicyError {
+                reason: "glob_denies is unsupported on Linux: Landlock matches by inode and \
+                         cannot enforce a single-* path glob. Use concrete paths, or run the \
+                         macOS (Seatbelt) backend, which compiles these to anchored regexes."
+                    .into(),
+            });
+        }
         // TartarOS can always express the rest of the policy by restructuring.
         let _allow = policy.linux_write_allowlist();
         Ok(())

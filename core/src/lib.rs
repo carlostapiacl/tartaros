@@ -35,6 +35,18 @@ pub struct FsRule {
     pub even_if_absent: bool,
 }
 
+/// A single-segment glob deny (e.g. `~/.codex/*.config.toml`): `*`/`?` within
+/// ONE path segment, no `**`. Only the macOS Seatbelt backend can enforce this
+/// (as an anchored regex); the Linux/seccomp+Landlock backend matches by inode
+/// and cannot, so a non-empty list is a policy error there (surfaced by the CLI).
+#[derive(Debug, Clone)]
+pub struct GlobDeny {
+    /// The expanded pattern (absolute path with glob metacharacters).
+    pub pattern: String,
+    pub read: bool,
+    pub write: bool,
+}
+
 /// Whether the confined process may reach the network.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Network {
@@ -59,6 +71,9 @@ pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
     ".claude/commands",
     ".claude/agents",
     ".claude/skills",
+    // Codex CLI config/prompts a trusted Codex run later loads and acts on —
+    // the same passive-RCE surface as .claude, protected as a whole directory.
+    ".codex",
     // Editor auto-run surfaces.
     ".vscode/tasks.json",
     ".vscode/launch.json",
@@ -137,6 +152,11 @@ pub struct Policy {
     /// pathname unix sockets). Default off — real agents use unix sockets, so this
     /// is a strict mode the policy turns on when that is acceptable.
     pub deny_unix_sockets: bool,
+    /// Single-segment glob denies (e.g. `~/.codex/*.config.toml`). macOS-only
+    /// (compiled to anchored Seatbelt regexes); the Linux backend rejects a
+    /// non-empty list. Kept apart from `fs_rules` because they are patterns, not
+    /// concrete inode paths.
+    pub glob_denies: Vec<GlobDeny>,
     /// Specific AF_UNIX socket paths the agent MAY connect to. On macOS Seatbelt
     /// this is enforced per path (`remote unix-socket (path-literal …)`), so a
     /// single audit/IPC socket can be allowed while everything else stays denied.
