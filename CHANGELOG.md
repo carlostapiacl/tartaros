@@ -93,6 +93,11 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   even as root); memory via `memory.max` + `RLIMIT_AS`; CPU via `RLIMIT_CPU`.
 - Reliable teardown via **`cgroup.kill`**: reaps even a daemon that
   double-forked and `setsid`'d out of the process group.
+- **Open-fd ceiling bounded**: the inherited soft `RLIMIT_NOFILE` (often 1024) is
+  raisable by the agent up to the hard limit (often ~1M), letting it exhaust kernel
+  fd-table memory. The hard limit is now capped at 65536 (generous for real
+  toolchains, un-raisable past it). Disk space is still not quota'd — see Honest
+  limits.
 - **Kill-switch** (`PR_SET_PDEATHSIG`): the agent dies with its supervisor;
   with `--isolate-pids` the whole PID-namespace tree collapses.
 - **Strict caps are guaranteed-or-abort, with a precise cause (ADV-04)**: in

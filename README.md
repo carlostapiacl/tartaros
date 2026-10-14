@@ -115,6 +115,13 @@ silently passing.
   AF_UNIX by path (`allowUnixSockets`) and denies it by default in the Seatbelt
   profile, so this is Linux-only. (Reproduced: a default run reached `docker.sock`
   and the D-Bus bus; `--deny-unix` / `hostile-code` close it.)
+- **No disk-space quota.** `--max-mem` caps memory, not disk: an agent can fill a
+  writable root (and the underlying filesystem) until it is full — a host DoS that
+  path-based confinement does not stop. Open fds are bounded (hard `RLIMIT_NOFILE`
+  capped at 65536) and processes by `pids.max`, but bytes-on-disk are not. For
+  untrusted code, give the writable root its own size-limited mount (a `tmpfs` with
+  `size=`, a loop device, or a filesystem project quota) — a disk-quota knob is not
+  yet built.
 - **Running the agent as root is hardened, not a microVM.** A root agent now runs
   with **no capabilities** (bounding set emptied, `SECBIT_NOROOT`, cap sets zeroed)
   and cannot create device nodes (Landlock drops `MakeBlock`/`MakeChar`; seccomp
