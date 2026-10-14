@@ -144,7 +144,10 @@ tartaros run \
 ```
 
 `--allow-domain HOST` scopes egress to that domain through the capability broker
-(HTTPS via CONNECT, SSRF-defended); the agent gets no other network. A full
+(HTTPS via CONNECT on port 443, SSRF-defended); the agent gets no other network.
+It is a **host:port capability** — a TCP tunnel with TLS end-to-end, so the broker
+does **not** inspect SNI or the certificate; the allowed host is reachable only on
+443, not as a raw TCP endpoint on an arbitrary port. A full
 sandbox-runtime `settings.json` can be mapped in one shot with
 `--settings <file>`, which applies every field it can enforce and **refuses**
 (exit 2) anything it cannot, rather than silently dropping a rule.
