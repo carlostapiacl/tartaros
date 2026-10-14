@@ -195,7 +195,47 @@ fn cmd_run(rest: &[String]) -> ! {
             eprintln!("tartaros: profile {} — {}", pr.name(), c);
         }
     }
+    warn_reachable_host_sockets(&p);
     exit(run(&p, &cmd, log.as_deref()));
+}
+
+/// Never leave a host-escape silent (F-3). On Linux there is no per-path AF_UNIX
+/// filtering — Landlock does not govern `connect()` to a pathname socket, and the
+/// seccomp AF_UNIX deny is all-or-nothing — so a confined agent can still reach a
+/// host daemon's unix socket (docker.sock, containerd, dbus, systemd), which is a
+/// full host-escape vector. We cannot block it per-path, but we warn loudly when
+/// the network is restricted, `--deny-unix` is off, and a dangerous socket is
+/// present, and point to the fix. macOS denies AF_UNIX egress in the Seatbelt
+/// profile natively, so this is Linux-only.
+fn warn_reachable_host_sockets(p: &Policy) {
+    use tartaros_core::Network;
+    if cfg!(not(target_os = "linux")) {
+        return;
+    }
+    if matches!(p.network, Some(Network::Allowed)) || p.deny_unix_sockets {
+        return;
+    }
+    const DANGEROUS: &[&str] = &[
+        "/var/run/docker.sock",
+        "/run/docker.sock",
+        "/run/containerd/containerd.sock",
+        "/run/podman/podman.sock",
+        "/var/run/podman/podman.sock",
+        "/run/dbus/system_bus_socket",
+        "/run/systemd/private",
+        "/var/run/libvirt/libvirt-sock",
+    ];
+    let found: Vec<&str> =
+        DANGEROUS.iter().copied().filter(|s| std::path::Path::new(s).exists()).collect();
+    if !found.is_empty() {
+        eprintln!(
+            "tartaros: warning: a host daemon socket is present and reachable by the \
+             agent over AF_UNIX ({}) — Landlock cannot filter unix sockets by path, so \
+             this is a host-escape vector. Add --deny-unix (or --profile hostile-code) \
+             to block ALL AF_UNIX, or do not expose the socket.",
+            found.join(", ")
+        );
+    }
 }
 
 /// If the policy names allowed egress domains, start the capability broker on
