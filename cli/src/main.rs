@@ -103,7 +103,7 @@ fn main() {
         }
         Some("help" | "--help" | "-h") | None => {
             print!("{HELP}");
-            exit(if args.first().is_none() { 2 } else { 0 });
+            exit(if args.is_empty() { 2 } else { 0 });
         }
         Some(other) => {
             eprintln!("tartaros: unknown command `{other}`\n");

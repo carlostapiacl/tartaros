@@ -255,7 +255,7 @@ fn main() {
         outcomes.push(run_scenario(c));
     }
 
-    println!("\n{:<36} {:<8} {}", "scenario", "sev", "result");
+    println!("\n{:<36} {:<8} result", "scenario", "sev");
     println!("{}", "-".repeat(64));
     for o in &outcomes {
         let r = if o.passed { "PASS" } else if o.violation { "VIOLATION" } else if o.infra_error { "INFRA_ERROR" } else { "control-broke" };
@@ -553,7 +553,7 @@ fn run_mutations(files: &[PathBuf]) {
 
     println!("tartaros-bench · MUTATION MODE · backend={OS}\n");
     println!("Each mutation removes one protection; a healthy corpus flips >=1 scenario.\n");
-    println!("{:<20} {:<10} {}", "mutation", "flips", "sensitive scenarios");
+    println!("{:<20} {:<10} sensitive scenarios", "mutation", "flips");
     println!("{}", "-".repeat(70));
 
     let mut blind_spots = 0usize;
