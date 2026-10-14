@@ -40,6 +40,7 @@ use std::time::Duration;
 /// A policy file (TOML) — declare a role's confinement once, apply it on any OS.
 /// Flags on the command line override / append to it.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct PolicyFile {
     #[serde(default)]
     profile: Option<String>,
@@ -360,6 +361,7 @@ fn cmd_explain(opts: &[String]) -> ! {
 /// sandbox-runtime settings schema (the subset we read). An adapter maps it onto
 /// the generic Policy; anything we cannot enforce makes the launch refuse.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct SandboxSettings {
     #[serde(default)]
     filesystem: SandboxFs,
@@ -367,6 +369,7 @@ struct SandboxSettings {
     network: SandboxNet,
 }
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct SandboxFs {
     #[serde(default, rename = "allowWrite")]
     allow_write: Vec<String>,
@@ -378,6 +381,7 @@ struct SandboxFs {
     deny_read: Vec<String>,
 }
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct SandboxNet {
     #[serde(default, rename = "allowedDomains")]
     allowed_domains: Vec<String>,
@@ -560,6 +564,15 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     p.strict = true;
 }
 
+/// Parse a numeric flag value or exit with a clear message — never silently fall
+/// back to 0, which would turn `--timeout 10m` into "no timeout" (a fail-open).
+fn parse_num_or_exit<T: std::str::FromStr>(v: &str, flag: &str) -> T {
+    v.parse().unwrap_or_else(|_| {
+        eprintln!("error: {flag} expects a number, got '{v}'");
+        exit(2);
+    })
+}
+
 /// Build the Policy from --config (if any) + --profile + flags. Returns the
 /// policy, the optional --log path, and the selected profile (for its caveat).
 fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Option<Profile>) {
@@ -642,10 +655,10 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             "--strict" => p.strict = true,
             "--materialize" => p.materialize_absent_handoff = true,
             "--private-tmp" => p.private_tmp = true,
-            "--timeout" => p.timeout = Some(Duration::from_secs(val().parse().unwrap_or(0))),
-            "--max-mem" => p.max_memory_bytes = Some(val().parse().unwrap_or(0)),
-            "--max-procs" => p.max_processes = Some(val().parse().unwrap_or(0)),
-            "--max-cpu" => p.max_cpu_secs = Some(val().parse().unwrap_or(0)),
+            "--timeout" => p.timeout = Some(Duration::from_secs(parse_num_or_exit(&val(), "--timeout (seconds)"))),
+            "--max-mem" => p.max_memory_bytes = Some(parse_num_or_exit(&val(), "--max-mem (bytes)")),
+            "--max-procs" => p.max_processes = Some(parse_num_or_exit(&val(), "--max-procs")),
+            "--max-cpu" => p.max_cpu_secs = Some(parse_num_or_exit(&val(), "--max-cpu (seconds)")),
             "--isolate-proc" => p.isolate_process_info = true,
             "--log" => log = Some(val()),
             other => { eprintln!("unknown option: {other}"); exit(2); }

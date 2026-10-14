@@ -103,6 +103,11 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
 - **`--seccomp-strict`**: deny dangerous syscalls (module load, kexec, keyring,
   bpf, perf, ptrace, process_vm_*, mount/unshare/setns, reboot/time/swap).
 - Opt-in `--deny-unix` (AF_UNIX via seccomp).
+- **io_uring denied when any socket filter is active (review #4)**: `IORING_OP_SOCKET`/
+  `IORING_OP_CONNECT` create and connect sockets WITHOUT the `socket()`/`connect()`
+  syscalls, bypassing `deny_af_unix` and the F-1 UDP/raw deny. `io_uring_setup`/
+  `enter`/`register` are now denied whenever a socket filter runs, so the bypass is
+  closed; libraries that probe io_uring fall back.
 - **Host-socket reachability is never silent (F-3)**: Linux has no per-path AF_UNIX
   filtering (Landlock does not govern `connect()` to a pathname socket; seccomp is
   all-or-nothing), so a confined agent can reach `docker.sock`, containerd, D-Bus
@@ -133,6 +138,13 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
 - Fail-closed capability probes (Landlock fs/net; a cgroup membership probe).
 - macOS refuses Linux-only hardening instead of silently ignoring it.
 - A cgroup-less host warns that `--max-procs` degraded to RLIMIT.
+- **Config typos fail closed, not open (review)**: the `--config` TOML and
+  `--settings` JSON structs use `deny_unknown_fields`, so a mistyped key (e.g.
+  `read_deny` for `read_denies`) is a hard parse error (exit 2) instead of being
+  silently dropped and leaving a secret readable.
+- **Numeric flags reject non-numbers (review)**: `--timeout`/`--max-mem`/
+  `--max-procs`/`--max-cpu` error on an unparseable value instead of silently
+  becoming 0 — so `--timeout 10m` no longer means "no timeout".
 - **Namespace unavailable → named diagnostic, never a silent downgrade.** Where a
   host forbids unprivileged user namespaces (hardened Ubuntu
   `apparmor_restrict_unprivileged_userns=1`, Debian/Arch `unprivileged_userns_clone=0`,

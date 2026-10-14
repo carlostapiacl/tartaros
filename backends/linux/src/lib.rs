@@ -509,6 +509,12 @@ fn confined_command(
             if restrict_net {
                 seccomp::deny_inet_dgram_raw()?;
             }
+            // io_uring can create/connect sockets via its own ops, bypassing the
+            // socket() seccomp filters above — so deny it whenever any socket
+            // filter is active (adversarial review #4).
+            if restrict_net || deny_unix || harden_syscalls {
+                seccomp::deny_io_uring()?;
+            }
             // Landlock.
             created
                 .take()
