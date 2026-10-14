@@ -364,12 +364,26 @@ fn build_profile(policy: &Policy) -> String {
     // those tools with EPERM; `same-sandbox` allows signalling any process in THIS
     // sandbox but never one outside it (same scope srt uses).
     p.push_str("(allow signal (target same-sandbox))\n");
-    p.push_str("(allow mach-lookup)\n");
+    // mach-lookup. Broad by default: the dynamic linker and ordinary tools look up a
+    // wide, version-dependent set of system services, and a single denied lookup can
+    // break them — so closing it requires a curated allow-list of the essential
+    // services (what srt ships). When the role PROVIDES such a list (via
+    // `network.allowMachLookup` in --settings), we honour it: deny-by-default (the
+    // profile's `(deny default)`) and open ONLY those name prefixes — the tight,
+    // opt-in posture. With no list, stay broad (back-compat; nothing silently breaks).
+    if policy.allow_mach_lookup.is_empty() {
+        p.push_str("(allow mach-lookup)\n");
+    } else {
+        for prefix in &policy.allow_mach_lookup {
+            let escaped = prefix.replace('\\', "\\\\").replace('"', "\\\"");
+            p.push_str(&format!(
+                "(allow mach-lookup (global-name-prefix \"{escaped}\"))\n"
+            ));
+        }
+    }
     // Scoped mach-REGISTER for headless browsers (Chromium/Chrome publish a
     // rendezvous service their child processes look up). mach-register is denied by
-    // default; we open ONLY the requested name prefixes, never blanket. mach-lookup
-    // is already allowed broadly above, so allow_mach_lookup prefixes need no extra
-    // rule — they are accepted for parity with sandbox-runtime's settings schema.
+    // default; we open ONLY the requested name prefixes, never blanket.
     for prefix in &policy.allow_mach_register {
         let escaped = prefix.replace('\\', "\\\\").replace('"', "\\\"");
         p.push_str(&format!(

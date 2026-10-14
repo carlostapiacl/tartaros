@@ -5,6 +5,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### macOS — opt-in mach-lookup scoping (reported by seisin)
+- `mach-lookup` was allowed broadly (the dynamic linker and ordinary tools look up a
+  wide, version-dependent set of system services, so a blind close breaks them).
+  Now, when a role provides `network.allowMachLookup` (via `--settings`, its curated
+  srt-derived list), the profile switches to **deny-by-default + only those name
+  prefixes** — the tight posture seisin asked for. With no list it stays broad
+  (back-compat; nothing silently breaks). `allowMachLookup` prefixes were previously
+  accepted but inert; they now actually scope.
+
 ### N1 — reach declared loopback ports through the broker
 - A role's declared `local_ports` (e.g. a local MCP server on `127.0.0.1:8768` or a
   model proxy) are now reachable THROUGH the broker, not just by a direct loopback
