@@ -85,7 +85,10 @@ impl SeatbeltBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
-        let profile = compile_profile(policy);
+        // Tag every deny with a per-run message so each kernel denial is
+        // attributable in the macOS unified log (consumers filter on "_SBX").
+        let tag = log_tag(command);
+        let profile = compile_profile_tagged(policy, Some(&tag));
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
         cmd.arg("-p").arg(&profile).arg("--").args(command);
         let max_memory = policy.max_memory_bytes;
@@ -256,6 +259,23 @@ pub fn enforcement_report(policy: &Policy) -> Vec<String> {
 /// every deny is emitted AFTER the broad allows, and the trust-handoff denies
 /// cannot be re-allowed.
 pub fn compile_profile(policy: &Policy) -> String {
+    build_profile(policy)
+}
+
+/// Like [`compile_profile`], but tag every `deny` rule with `(with message
+/// "<tag>")` so each kernel sandbox denial is attributable in the macOS unified
+/// log. Consumers (e.g. seisin) filter with `eventMessage ENDSWITH "_SBX"` and
+/// match the embedded command, so a denial is attributable even after the denied
+/// process has exited. `None` = no tags (identical to `compile_profile`).
+pub fn compile_profile_tagged(policy: &Policy, log_tag: Option<&str>) -> String {
+    let profile = build_profile(policy);
+    match log_tag {
+        Some(tag) => tag_deny_rules(&profile, tag),
+        None => profile,
+    }
+}
+
+fn build_profile(policy: &Policy) -> String {
     // Seatbelt matches real paths, so resolve symlinked roots (e.g. macOS
     // /var -> /private/var) before emitting. Trust-handoff paths are derived
     // from these roots, so canonicalizing here keeps allows and denies aligned.
@@ -523,6 +543,96 @@ fn canonical_best_effort(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// Insert `(with message "<tag>")` into every `deny` rule of a compiled profile,
+/// including `(deny default)`. Done as a post-pass over lines so every deny —
+/// however it was emitted — is tagged uniformly. Each deny is a single line that
+/// ends in `)`, so we splice the message in just before that closing paren,
+/// where it becomes a sibling clause of the rule's filter. The tag is
+/// `[A-Za-z0-9_+/=]` only, so it needs no SBPL string escaping.
+fn tag_deny_rules(profile: &str, tag: &str) -> String {
+    let suffix = format!(" (with message \"{tag}\")");
+    let mut out = String::with_capacity(profile.len() + profile.len() / 8);
+    for line in profile.lines() {
+        if line.trim_start().starts_with("(deny ") && line.ends_with(')') {
+            let pos = line.rfind(')').unwrap(); // the rule's closing paren
+            out.push_str(&line[..pos]);
+            out.push_str(&suffix);
+            out.push_str(&line[pos..]);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Build the per-run Seatbelt log tag for a command, matching sandbox-runtime's
+/// `generateLogTag`: `CMD64_<base64 of the first 100 chars of the shell line>`
+/// `_END__<9 random [a-z0-9]>_SBX`. The random suffix (one `_` before it)
+/// separates this run from any other sandbox on the machine.
+fn log_tag(command: &[String]) -> String {
+    let line = shell_line(command);
+    let first100: String = line.chars().take(100).collect();
+    format!("CMD64_{}_END__{}_SBX", base64_encode(first100.as_bytes()), rand9())
+}
+
+/// Render argv as a shell line: each word verbatim when it is made only of safe
+/// characters, otherwise single-quoted (POSIX `shlex.quote` rules), so a
+/// `shellSplit` of the decoded line yields the original argv.
+fn shell_line(command: &[String]) -> String {
+    command.iter().map(|w| shell_quote(w)).collect::<Vec<_>>().join(" ")
+}
+
+fn shell_quote(w: &str) -> String {
+    let safe = !w.is_empty()
+        && w.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-')
+        });
+    if safe {
+        w.to_string()
+    } else {
+        // Wrap in single quotes; close/escape/reopen for any embedded single quote.
+        format!("'{}'", w.replace('\'', "'\"'\"'"))
+    }
+}
+
+/// Standard base64 (RFC 4648, with `=` padding). No external crate — the backends
+/// are std-only.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
+        out.push(ALPHA[((n >> 18) & 63) as usize] as char);
+        out.push(ALPHA[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { ALPHA[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { ALPHA[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// Nine random chars from `[a-z0-9]`. Not cryptographic — just unique enough to
+/// tell this run apart from any other sandbox on the machine. Seeded from the
+/// clock and pid, advanced with xorshift64.
+fn rand9() -> String {
+    const SYM: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
+        ^ ((std::process::id() as u64) << 32)
+        | 1;
+    let mut out = String::with_capacity(9);
+    for _ in 0..9 {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        out.push(SYM[(s % 36) as usize] as char);
+    }
+    out
+}
+
 /// Quote a path as an SBPL string literal.
 fn quote(path: &Path) -> String {
     let s = path.to_string_lossy();
@@ -593,6 +703,62 @@ mod tests {
             allow_mine < deny_settings,
             "the deeper deny must come after the re-allow so it wins (specificity)"
         );
+    }
+
+    #[test]
+    fn log_tag_format_and_deny_tagging() {
+        // Shell line + base64, matching sandbox-runtime's generateLogTag shape.
+        let cmd = vec!["sh".to_string(), "-c".to_string(), "echo x > /tmp/ws/.git/hooks/pre-commit".to_string()];
+        let line = shell_line(&cmd);
+        assert_eq!(line, "sh -c 'echo x > /tmp/ws/.git/hooks/pre-commit'", "shell line quoting");
+        let tag = log_tag(&cmd);
+        assert!(tag.starts_with("CMD64_"), "tag: {tag}");
+        assert!(tag.ends_with("_SBX"), "tag: {tag}");
+        let b64 = tag.strip_prefix("CMD64_").unwrap().split("_END__").next().unwrap();
+        // The random suffix is 9 chars of [a-z0-9] after exactly one extra '_'.
+        let rand = tag.strip_suffix("_SBX").unwrap().rsplit("_END__").next().unwrap();
+        assert_eq!(rand.len(), 9, "random suffix length: {rand}");
+        assert!(rand.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()), "random charset: {rand}");
+        // Decoding the base64 must give the shell line (first 100 chars).
+        assert_eq!(base64_roundtrip(b64), &line[..line.len().min(100)]);
+
+        // Every deny in a tagged profile carries the message; allows do not.
+        let policy = Policy {
+            writable_roots: vec![PathBuf::from("/work")],
+            network: Some(Network::Denied),
+            ..Default::default()
+        };
+        let tagged = compile_profile_tagged(&policy, Some(&tag));
+        for l in tagged.lines() {
+            if l.trim_start().starts_with("(deny ") {
+                assert!(l.contains(&format!("(with message \"{tag}\")")), "deny not tagged: {l}");
+            }
+            if l.trim_start().starts_with("(allow ") {
+                assert!(!l.contains("with message"), "allow should not be tagged: {l}");
+            }
+        }
+        assert!(tagged.contains("(deny default (with message"), "default must be tagged");
+        // Untagged profile is unchanged.
+        assert!(!compile_profile(&policy).contains("with message"));
+    }
+
+    // Decode standard base64 back to a String (test helper).
+    fn base64_roundtrip(s: &str) -> String {
+        const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut bits = 0u32;
+        let mut nbits = 0;
+        let mut out = Vec::new();
+        for c in s.bytes() {
+            if c == b'=' { break; }
+            let v = ALPHA.iter().position(|&a| a == c).unwrap() as u32;
+            bits = (bits << 6) | v;
+            nbits += 6;
+            if nbits >= 8 {
+                nbits -= 8;
+                out.push((bits >> nbits) as u8);
+            }
+        }
+        String::from_utf8(out).unwrap()
     }
 
     #[test]
