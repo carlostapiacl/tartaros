@@ -23,7 +23,7 @@ Explicitly **out of scope** (documented non-guarantees, not vulnerabilities):
 - Kernel-level isolation between tenants. TartarOS runs on a **shared kernel**;
   a kernel exploit can cross the boundary. `multi-tenant` is single-kernel
   hardening only — real tenant isolation needs a microVM backend (not yet
-  built).
+  built; designed in [`docs/microvm-backend.md`](docs/microvm-backend.md)).
 - A capability a host cannot provide. These fail closed or are reported
   `UNSUPPORTED`; they are never silently downgraded.
 - A difference in defaults or a misconfiguration.
