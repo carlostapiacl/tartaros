@@ -74,7 +74,10 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   IPs (loopback, RFC1918, 169.254 metadata, ULA, CGNAT), connects to the
   resolved address (no rebinding window).
 - **Bounded request parsing** (per-line and header-count caps) so a confined
-  agent cannot OOM the supervisor.
+  agent cannot OOM the supervisor. Fuzzed (F-12): `read_line_capped` and
+  `parse_abs_uri` are panic-free and byte-bounded over thousands of random/
+  adversarial inputs, and the broker survives a barrage of garbage connections
+  (binary, partial, empty authority) — a legitimate request still gets served.
 - **Secret never printed; token compared in constant time (review)**: `Injection`
   has a manual `Debug` that redacts its value (a derived `Debug` would print the
   injected secret if a broker/capability were ever logged), and the client-auth
