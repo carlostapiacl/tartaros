@@ -418,8 +418,14 @@ fn build_profile(policy: &Policy) -> String {
     for path in &policy.read_allows {
         read_rules.push((canonical_best_effort(path), true));
     }
-    // Specificity = number of path components, then string length as a tiebreak.
-    read_rules.sort_by_key(|(path, _)| (path.components().count(), path.as_os_str().len()));
+    // Specificity = number of path components, then string length. On an EXACT tie
+    // (the same path both denied and re-allowed) the deny must win (fail-safe), so
+    // break the tie by emitting allow BEFORE deny — Seatbelt is last-match-wins, so
+    // the deny lands last and takes precedence. (For different paths of equal depth
+    // the order is irrelevant; they do not overlap.)
+    read_rules.sort_by_key(|(path, is_allow)| {
+        (path.components().count(), path.as_os_str().len(), u8::from(!*is_allow))
+    });
     for (real, is_allow) in &read_rules {
         if *is_allow {
             p.push_str(&format!("(allow file-read* (subpath {}))\n", quote(real)));
