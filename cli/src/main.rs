@@ -591,12 +591,33 @@ fn explain(p: &Policy) {
     }
     #[cfg(target_os = "linux")]
     {
-        println!("\n--- Linux Landlock allow-lists (based on the current filesystem) ---");
-        println!("write (carved):");
-        for a in p.linux_write_allowlist() { println!("  w {}", a.display()); }
-        println!("read (carved):");
-        for a in p.linux_read_allowlist() { println!("  r {}", a.display()); }
-        println!("note: writes grant write-only; reads are governed by the read carve.");
+        let bind = tartaros_linux::uses_bind_mounts(p);
+        if bind {
+            println!("\n--- Linux enforcement: whole workspace writable + read-only bind mounts ---");
+            println!("The trust-handoff set is protected by read-only bind mounts (mount namespace),");
+            println!("so new entries CAN be created at a writable root. Handoff paths stay unwritable.");
+        } else {
+            println!("\n--- Linux Landlock allow-lists (based on the current filesystem) ---");
+            println!("write (carved):");
+            for a in p.linux_write_allowlist() { println!("  w {}", a.display()); }
+            println!("read (carved):");
+            for a in p.linux_read_allowlist() { println!("  r {}", a.display()); }
+            println!("note: writes grant write-only; reads are governed by the read carve.");
+            // Warn where the carve cannot allow creating NEW entries directly at a
+            // writable root (a trust-handoff/explicit deny sits below). This is LESS
+            // permission, not a contract break — seisin surfaces it as a notice.
+            // Running with mount privileges (root/container) lifts it via bind mounts.
+            for root in &p.writable_roots {
+                let deny_below = p.trust_handoff_rules().iter().any(|r| r.path.starts_with(root) && r.path.exists())
+                    || p.fs_rules.iter().any(|r| r.access == Access::Deny && r.path.starts_with(root) && r.path.exists());
+                if deny_below {
+                    println!(
+                        "warning: on Linux, new entries cannot be created directly in {} (Landlock cannot subtract .git/hooks); existing files and subdirectories are writable. Run with mount privileges (root/container) to lift this via read-only bind mounts.",
+                        root.display()
+                    );
+                }
+            }
+        }
     }
 }
 
