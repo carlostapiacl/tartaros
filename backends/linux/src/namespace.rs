@@ -111,19 +111,56 @@ pub(crate) unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> 
 /// an error and the caller aborts (the parent only picks this path after a probe
 /// said it would work, so a failure here is an unexpected-environment abort, not
 /// a silent downgrade).
-pub(crate) unsafe fn enter_user_namespace() -> std::io::Result<()> {
-    let uid = libc::geteuid();
-    let gid = libc::getegid();
+/// The uid_map and gid_map bytes mapping the current euid/egid to themselves,
+/// built in the PARENT (allocation is fine there). fork preserves euid/egid, so
+/// these are valid in the child too — passing them in keeps `enter_user_namespace`
+/// allocation-free after the fork (review #7).
+pub(crate) fn uid_gid_maps() -> (Vec<u8>, Vec<u8>) {
+    let uid = unsafe { libc::geteuid() };
+    let gid = unsafe { libc::getegid() };
+    (
+        format!("{uid} {uid} 1\n").into_bytes(),
+        format!("{gid} {gid} 1\n").into_bytes(),
+    )
+}
+
+/// Enter a new USER namespace and apply the pre-built uid/gid maps (self→self),
+/// which grants CAP_SYS_ADMIN *inside* the namespace — enough to create a mount
+/// namespace and bind-mount without being real root (bubblewrap's approach). Maps
+/// are passed in (built by [`uid_gid_maps`] in the parent) so nothing is allocated
+/// after the fork. Fails closed: if unshare or the maps are refused (e.g. AppArmor
+/// blocks unprivileged user namespaces on hardened Ubuntu) it returns an error and
+/// the caller aborts (a probe already confirmed it would work, so this is an
+/// unexpected-environment abort, not a silent downgrade).
+pub(crate) unsafe fn enter_user_namespace(uid_map: &[u8], gid_map: &[u8]) -> std::io::Result<()> {
     if libc::unshare(libc::CLONE_NEWUSER) != 0 {
         return Err(std::io::Error::last_os_error());
     }
     // setgroups must be denied before writing gid_map in an unprivileged userns.
     write_proc_self(c"/proc/self/setgroups", b"deny\n")?;
-    let uid_map = format!("{uid} {uid} 1\n");
-    let gid_map = format!("{gid} {gid} 1\n");
-    write_proc_self(c"/proc/self/uid_map", uid_map.as_bytes())?;
-    write_proc_self(c"/proc/self/gid_map", gid_map.as_bytes())?;
+    write_proc_self(c"/proc/self/uid_map", uid_map)?;
+    write_proc_self(c"/proc/self/gid_map", gid_map)?;
     Ok(())
+}
+
+/// Format a (positive) pid as decimal + '\n' into `buf`, returning the written
+/// slice. Async-signal-safe (no allocation) — for the post-fork cgroup.procs write.
+pub(crate) fn fmt_pid(buf: &mut [u8; 16], pid: libc::pid_t) -> &[u8] {
+    let mut n = if pid < 0 { 0u32 } else { pid as u32 };
+    let mut tmp = [0u8; 10];
+    let mut i = tmp.len();
+    loop {
+        i -= 1;
+        tmp[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    let digits = &tmp[i..];
+    buf[..digits.len()].copy_from_slice(digits);
+    buf[digits.len()] = b'\n';
+    &buf[..digits.len() + 1]
 }
 
 /// Write `data` to a /proc/self control file with a single open+write (the
@@ -153,6 +190,8 @@ pub(crate) fn mount_ns_capable() -> bool {
     if unsafe { libc::geteuid() } == 0 {
         return true;
     }
+    // Build the maps BEFORE the fork (allocation in the parent is fine).
+    let (uid_map, gid_map) = uid_gid_maps();
     unsafe {
         let pid = libc::fork();
         if pid < 0 {
@@ -160,7 +199,7 @@ pub(crate) fn mount_ns_capable() -> bool {
         }
         if pid == 0 {
             // Child: attempt the full unprivileged setup; _exit(0) only if it works.
-            if enter_user_namespace().is_err() {
+            if enter_user_namespace(&uid_map, &gid_map).is_err() {
                 libc::_exit(1);
             }
             if libc::unshare(libc::CLONE_NEWNS) != 0 {
