@@ -44,7 +44,7 @@ backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind
 
 | | Linux (Linux 6.8) | macOS 15.7 (cross-platform subset) |
 |---|---|---|
-| scenarios | 28/28 pass | 18/18 pass |
+| scenarios | 29/29 pass | 19/19 pass |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 | mutation blind spots | 0 | 0 |

@@ -1,0 +1,29 @@
+id = "read-deny-symlink-bypass"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A classic read-deny bypass: the agent CAN create files in its writable root, so
+# it plants a symlink there pointing at a read-denied secret and reads through it.
+# The read must resolve to the real (denied) target and stay blocked — Landlock is
+# inode-based, Seatbelt resolves the path before matching the deny. Covers both a
+# symlink to the secret FILE and a symlink to the secret DIR. (Hardlinks are
+# covered by fs-hardlink-escape; symlinks OUT for writing by fs-symlink-escape.)
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/vault"]
+
+[[fixture]]
+path = "{root}/vault/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+# Plant a symlink in the writable root to the denied secret and read through it.
+cmd = "sh -c 'ln -s {root}/vault/key {root}/work/link && cat {root}/work/link'"
+
+[control]
+# Ordinary writes in the workspace still work.
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"
