@@ -17,6 +17,13 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   `.gitmodules`, `.envrc`, `.pre-commit-config.yaml`, `.github/workflows`.
 - `.codex` (Codex CLI config) added to the handoff set; macOS expresses the
   whole set as any-depth regex rules (no filesystem walk at compile time).
+- **Handoff set completed (adversarial review #2)**: added `.claude/hooks`,
+  `.husky/` (git `core.hooksPath`), and `.vscode/settings.json`; **submodule
+  gitdirs** (`.git/modules/<name>/{hooks,config}` at any nesting, objects/refs left
+  writable); and the **`.git` pointer file** of a worktree/submodule (rewriting it
+  repoints the repo at attacker hooks) — denied on Linux (the walk denies the
+  existing file) and, on macOS, hooks/config under `.git/modules` via regex.
+  Regression `trust-handoff-submodule-hook`; verified on both OS.
 - **Deny-inside-allow** on Linux via a carved Landlock allow-list (a policy
   nono cannot express). Ancestor-rename and symlink-escape safe.
 - `read_denies` carves secret dirs out of the read grant; **`read_allows`**
@@ -208,7 +215,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   refuses) and the test asserts both are non-permissive. 9/9 on Linux and macOS.
 
 ### Conformance (`tartaros-bench`)
-- 26-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
+- 27-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
   **UNSUPPORTED**; exits non-zero on any failure.
 - **Coverage gate (ADV-05)**: the scorecard prints `coverage: ran/applicable` and
   the JSON carries the host capability stamp + skipped/unsupported counts, so a

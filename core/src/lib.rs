@@ -71,12 +71,16 @@ pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
     ".claude/commands",
     ".claude/agents",
     ".claude/skills",
+    ".claude/hooks",
     // Codex CLI config/prompts a trusted Codex run later loads and acts on —
     // the same passive-RCE surface as .claude, protected as a whole directory.
     ".codex",
     // Editor auto-run surfaces.
     ".vscode/tasks.json",
     ".vscode/launch.json",
+    ".vscode/settings.json",
+    // Git hooks relocated via core.hooksPath (Husky and friends).
+    ".husky",
     // Git handoff beyond hooks/config: clean/smudge filters, submodule URLs.
     ".gitattributes",
     ".gitmodules",
@@ -511,8 +515,21 @@ fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
         return;
     }
     if is_git_repo(dir) {
-        for name in HANDOFF_GIT_NAMES {
-            out.push(deny(dir.join(name), true));
+        let dotgit = dir.join(".git");
+        if dotgit.is_file() {
+            // Worktree / submodule: `.git` is a FILE holding `gitdir: <path>`.
+            // Rewriting it repoints the repo at attacker-controlled hooks, so deny
+            // writing the pointer itself (the real gitdir elsewhere is protected
+            // when it falls under a writable root, or is simply out of territory).
+            out.push(deny(dotgit, true));
+        } else {
+            for name in HANDOFF_GIT_NAMES {
+                out.push(deny(dir.join(name), true));
+            }
+            // Submodule gitdirs live under `.git/modules/<name>/…`; their hooks and
+            // config are the same handoff surface. Deny those (leaving objects/refs
+            // writable so submodule operations still work).
+            deny_git_modules_handoff(&dotgit.join("modules"), 0, out);
         }
     }
     if !is_root {
@@ -551,6 +568,35 @@ fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
 fn is_git_repo(dir: &Path) -> bool {
     let dotgit = dir.join(".git");
     dotgit.is_dir() || dotgit.is_file()
+}
+
+/// Deny the handoff surface (`hooks/`, `config`) of every submodule gitdir under a
+/// repo's `.git/modules`, recursively (bounded) for nested submodules. Only these
+/// two are denied, so a submodule's objects/refs stay writable and `git submodule`
+/// operations keep working. Each entry directly under a `modules` dir is a
+/// submodule gitdir; its own nested submodules live under its `modules`.
+fn deny_git_modules_handoff(modules_dir: &Path, depth: usize, out: &mut Vec<FsRule>) {
+    if depth > MAX_WALK_DEPTH {
+        out.push(deny(modules_dir.to_path_buf(), true));
+        return;
+    }
+    let entries = match std::fs::read_dir(modules_dir) {
+        Ok(e) => e,
+        Err(_) => return, // no .git/modules (no submodules) or unreadable
+    };
+    for entry in entries.flatten() {
+        let gitdir = entry.path();
+        let meta = match std::fs::symlink_metadata(&gitdir) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            continue;
+        }
+        out.push(deny(gitdir.join("hooks"), true));
+        out.push(deny(gitdir.join("config"), true));
+        deny_git_modules_handoff(&gitdir.join("modules"), depth + 1, out);
+    }
 }
 
 fn dedup(rules: &mut Vec<FsRule>) {

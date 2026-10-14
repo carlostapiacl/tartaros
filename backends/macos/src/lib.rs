@@ -604,6 +604,16 @@ fn emit_handoff_regex(p: &mut String, root: &Path) {
     for name in HANDOFF_GIT_NAMES {
         emit(name);
     }
+    // Submodule gitdirs: `.git/modules/<name>/{hooks,config}` at any depth — the
+    // `.git/hooks`/`.git/config` patterns above do not match these (different
+    // path). `.*` spans nested submodules too. Contents (objects/refs) stay
+    // writable so submodule ops work.
+    p.push_str(&format!(
+        "(deny file-write* (regex #\"^{root_re}(/.*)?/\\.git/modules/.*/hooks(/.*)?$\"))\n"
+    ));
+    p.push_str(&format!(
+        "(deny file-write* (regex #\"^{root_re}(/.*)?/\\.git/modules/.*/config$\"))\n"
+    ));
 }
 
 /// Escape a literal string for use inside a Seatbelt `(regex #"...")`. Escapes
