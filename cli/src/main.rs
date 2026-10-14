@@ -608,8 +608,17 @@ fn explain(p: &Policy) {
         let bind = tartaros_linux::uses_bind_mounts(p);
         if bind {
             println!("\n--- Linux enforcement: whole workspace writable + read-only bind mounts ---");
-            println!("The trust-handoff set is protected by read-only bind mounts (mount namespace),");
-            println!("so new entries CAN be created at a writable root. Handoff paths stay unwritable.");
+            println!("The EXISTING trust-handoff set is protected by read-only bind mounts (mount");
+            println!("namespace), so new entries CAN be created at a writable root while existing");
+            println!("handoff paths stay unwritable.");
+            println!("warning: because the whole root is writable, a NOT-YET-EXISTING handoff path");
+            println!("(e.g. a new top-level .claude/settings.json, or a newly-created nested git");
+            println!("repo's .git/hooks) is NOT protected under this strategy — only paths that");
+            println!("exist when the sandbox starts are bound read-only. Pre-planting defense for");
+            println!("absent paths is a macOS (Seatbelt regex) property; on Linux it needs the carve");
+            println!("+ --materialize (top-level only), which is mutually exclusive with whole-root");
+            println!("create-at-root. The real-world attack (poisoning an EXISTING repo config) is");
+            println!("blocked; seeding a brand-new config/repo for a later trusted tool is not.");
         } else {
             println!("\n--- Linux Landlock allow-lists (based on the current filesystem) ---");
             println!("write (carved):");

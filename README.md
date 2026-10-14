@@ -40,11 +40,14 @@ measured competitors (Codex `0.162.1`, nono, `@anthropic-ai/sandbox-runtime`):
   mount namespace is available (root, container, or an unprivileged user
   namespace), the workspace is granted writable and each handoff path is pinned
   read-only with a bind mount, so the agent can create new files at a repo root
-  while `.git/hooks` stays unwritable. Unlike bubblewrap/sandbox-runtime, option
-  B touches only paths that exist, so it leaves **no placeholder/bind-mount
-  residue** in the working tree; `.git` is bound as one mount (no lockfile race).
-  Without a mount namespace it falls back to the Landlock carve and `explain`
-  warns about the create-at-root limitation — never a silent downgrade.
+  while the **existing** `.git/hooks` stays unwritable. Unlike bubblewrap/
+  sandbox-runtime, option B touches only paths that exist, so it leaves **no
+  placeholder/bind-mount residue** in the working tree; `.git` is bound as one
+  mount (no lockfile race). The tradeoff of a whole-writable root is that a
+  *not-yet-existing* handoff path (a new top-level `.claude/settings.json`, or a
+  brand-new nested repo's hooks) is **not** protected under this strategy — see
+  Honest limits. Without a mount namespace it falls back to the Landlock carve and
+  `explain` warns about the create-at-root limitation — never a silent downgrade.
 
 The rest of the hardening below (root-proof cgroup caps, `cgroup.kill` teardown,
 `--isolate-pids`, `--isolate-net`, `--seccomp-strict`) is strong but **not**
@@ -91,6 +94,17 @@ silently passing.
   "kern.procargs2"))` remains available as defense-in-depth for older macOS.
 - **Resource caps on a cgroup-less host degrade to RLIMIT** (bypassable by root)
   and TartarOS warns on stderr rather than pretending to confine.
+- **Not-yet-existing handoff paths: macOS yes, Linux limited.** The real-world
+  Trust-Handoff attack — poisoning a config/hook that *already exists* in the repo
+  the agent works in — is blocked on both OS at any depth. Protecting a handoff
+  path that does **not exist yet** (pre-planting: a new top-level
+  `.claude/settings.json`, or a brand-new nested git repo's `.git/hooks`) is a
+  macOS property (Seatbelt matches by regex, so absent paths are covered). On
+  Linux it is inode-based: the carve + opt-in `--materialize` covers absent
+  **top-level** configs (at the cost of placeholder residue), but under the
+  whole-root-writable **bind-mount** strategy a not-yet-existing handoff path is
+  not protected, and a newly-created nested repo's hooks are never auto-protected.
+  `explain` states this for the active strategy. Measured, not hidden.
 - **The effect log is observed, not a guarantee.** Enforcement is guaranteed; the
   log is fed by collectors that sample the process tree (network, secret, process,
   MCP and file-write, on both OS), so a very short-lived event can be missed. The
