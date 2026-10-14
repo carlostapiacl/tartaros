@@ -62,6 +62,89 @@ pub fn mount_plan(policy: &Policy) -> Vec<Share> {
     shares
 }
 
+/// Emit an OCI runtime `config.json` (opencontainers/runtime-spec) for this policy
+/// and command — the bundle a gVisor `runsc` (or any OCI runtime) consumes. This is
+/// a STANDARD spec, so it is deterministic and unit-testable without a runtime:
+/// - `process.args` = the command; `cwd` = the first writable root; no-new-privs.
+/// - `mounts` from [`mount_plan`]: rw bind for a writable root, ro bind for a
+///   trust-handoff path, and an empty read-only tmpfs masking an excluded secret
+///   (so it is invisible even though it sits inside a shared rw dir).
+/// - `linux.resources` from the caps; `linux.namespaces` omit the network namespace
+///   reference so the guest gets a fresh, empty one (no egress) unless the policy
+///   opts in (bridged host-side — not represented here).
+/// `rootfs` is the guest root the runtime overlays the mounts onto (built per the
+/// design's image step). Returned pretty-printed.
+pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> String {
+    use serde_json::json;
+
+    let cwd = policy
+        .writable_roots
+        .first()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/".into());
+
+    let mut mounts = Vec::new();
+    for s in mount_plan(policy) {
+        let dest = s.host_path.to_string_lossy().into_owned();
+        let m = match s.mode {
+            Mode::ReadWrite => json!({
+                "destination": dest, "type": "bind",
+                "source": dest, "options": ["rbind", "rw"]
+            }),
+            Mode::ReadOnly => json!({
+                "destination": dest, "type": "bind",
+                "source": dest, "options": ["rbind", "ro"]
+            }),
+            // Mask the secret with an empty ro tmpfs so the guest cannot see the
+            // host contents, even though the enclosing root is shared rw.
+            Mode::Excluded => json!({
+                "destination": dest, "type": "tmpfs",
+                "source": "tmpfs", "options": ["ro", "nosuid", "nodev", "size=0"]
+            }),
+        };
+        mounts.push(m);
+    }
+
+    let mut resources = serde_json::Map::new();
+    if let Some(m) = policy.max_memory_bytes {
+        resources.insert("memory".into(), json!({ "limit": m }));
+    }
+    if let Some(n) = policy.max_processes {
+        resources.insert("pids".into(), json!({ "limit": n }));
+    }
+
+    // Namespaces: a fresh pid/mount/ipc/uts, and — when egress is NOT wanted — a
+    // fresh empty network namespace (no `path`, so the runtime creates it). An
+    // egress policy would instead bridge to a host-side broker (design, not here).
+    let mut namespaces = vec![
+        json!({"type": "pid"}),
+        json!({"type": "mount"}),
+        json!({"type": "ipc"}),
+        json!({"type": "uts"}),
+    ];
+    if !guest_wants_egress(policy) {
+        namespaces.push(json!({"type": "network"}));
+    }
+
+    let config = json!({
+        "ociVersion": "1.0.2",
+        "process": {
+            "terminal": false,
+            "cwd": cwd,
+            "args": command,
+            "env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+            "noNewPrivileges": true,
+        },
+        "root": { "path": rootfs, "readonly": true },
+        "mounts": mounts,
+        "linux": {
+            "resources": resources,
+            "namespaces": namespaces,
+        },
+    });
+    serde_json::to_string_pretty(&config).unwrap_or_default()
+}
+
 /// Does the policy ask for any egress? A VM gives the guest no NIC by default
 /// (= all protocols off); only an explicit allow/port needs a host-side bridge.
 pub fn guest_wants_egress(policy: &Policy) -> bool {
@@ -191,5 +274,56 @@ mod tests {
         let mut p = Policy::default();
         p.allow_domains = vec!["example.com".into()];
         assert!(guest_wants_egress(&p));
+    }
+
+    #[test]
+    fn oci_config_maps_policy() {
+        let mut p = Policy::default();
+        p.writable_roots = vec![PathBuf::from("/ws")];
+        p.read_denies = vec![PathBuf::from("/ws/secret")];
+        p.max_memory_bytes = Some(512 * 1024 * 1024);
+        p.max_processes = Some(64);
+        let cmd = vec!["/bin/sh".to_string(), "-c".to_string(), "echo hi".to_string()];
+        let v: serde_json::Value =
+            serde_json::from_str(&to_oci_config(&p, &cmd, "/var/lib/tartaros/rootfs")).unwrap();
+
+        // the command and cwd
+        assert_eq!(v["process"]["args"], serde_json::json!(cmd));
+        assert_eq!(v["process"]["cwd"], "/ws");
+        assert_eq!(v["process"]["noNewPrivileges"], true);
+
+        let mounts = v["mounts"].as_array().unwrap();
+        let find = |dest: &str| mounts.iter().find(|m| m["destination"] == dest).cloned();
+        // workspace root: rw bind
+        let ws = find("/ws").unwrap();
+        assert_eq!(ws["type"], "bind");
+        assert!(ws["options"].as_array().unwrap().iter().any(|o| o == "rw"));
+        // secret: masked by a ro tmpfs (invisible)
+        let sec = find("/ws/secret").unwrap();
+        assert_eq!(sec["type"], "tmpfs");
+        assert!(sec["options"].as_array().unwrap().iter().any(|o| o == "ro"));
+        // a handoff path: ro bind
+        let mcp = find("/ws/.mcp.json").unwrap();
+        assert!(mcp["options"].as_array().unwrap().iter().any(|o| o == "ro"));
+
+        // resources
+        assert_eq!(v["linux"]["resources"]["memory"]["limit"], 512 * 1024 * 1024);
+        assert_eq!(v["linux"]["resources"]["pids"]["limit"], 64);
+
+        // default-deny egress -> a fresh (pathless) network namespace is requested
+        let ns = v["linux"]["namespaces"].as_array().unwrap();
+        assert!(ns.iter().any(|n| n["type"] == "network"));
+    }
+
+    #[test]
+    fn oci_config_bridges_network_when_egress_wanted() {
+        let mut p = Policy::default();
+        p.writable_roots = vec![PathBuf::from("/ws")];
+        p.allow_domains = vec!["example.com".into()];
+        let v: serde_json::Value =
+            serde_json::from_str(&to_oci_config(&p, &["true".into()], "/rootfs")).unwrap();
+        // egress wanted -> do NOT isolate the network namespace here (bridged host-side)
+        let ns = v["linux"]["namespaces"].as_array().unwrap();
+        assert!(!ns.iter().any(|n| n["type"] == "network"));
     }
 }
