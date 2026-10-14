@@ -12,6 +12,25 @@ pub(crate) const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 /// proxy, so a slow or unresponsive upstream cannot pin a broker thread.
 pub(crate) const UPSTREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Availability bounds for the trusted broker (ADV-01). The agent is adversarial
+/// input, so one client must never be able to block others or pin the broker.
+///
+/// Per-client read/write timeout on the request head and the forward-proxy
+/// response: a slowloris client (dribbling headers, or reading the response one
+/// byte at a time) times out instead of holding a worker open.
+pub(crate) const CLIENT_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Idle read timeout on an established CONNECT tunnel: a tunnel with NO bytes in
+/// either direction for this long is torn down. Generous so a legitimately quiet
+/// but live transfer is not killed, while a client that opens a tunnel and sits
+/// on it cannot hold it (and its worker slot) indefinitely.
+pub(crate) const CONNECT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Max connections handled concurrently. Each runs on its own worker thread;
+/// beyond this the broker sheds load with 503 rather than queueing unboundedly or
+/// letting slow clients starve others. Bounds worker threads and memory.
+pub(crate) const MAX_CONCURRENT_SESSIONS: u32 = 64;
+
 /// Caps on the agent-supplied request head.
 pub(crate) const MAX_LINE_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_HEADERS: usize = 100;
