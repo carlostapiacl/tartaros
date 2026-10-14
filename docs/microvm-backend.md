@@ -111,6 +111,11 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
 - **M-µ1 — wiring + gVisor**: `backends/microvm` crate, `Backend` impl, capability
   probe, policy→runsc config, run the corpus under runsc on a plain Linux host. No
   KVM. Proves the abstraction and finds compat gaps cheaply.
+  - [x] **Crate + trait wiring + capability probe landed, fail-closed.**
+        `backends/microvm` implements `core::Backend`; `probe_runtime()` reports
+        `runsc`/`firecracker`/`/dev/kvm`; `run` refuses (never runs under-confined)
+        until guest execution exists. Builds and tests on Linux + macOS (4/4).
+  - [ ] policy→runsc OCI config + virtio-fs/9p shares; run the corpus under runsc.
 - **M-µ2 — Firecracker**: guest kernel + rootfs build, virtio-fs shares (rw roots /
   ro handoff), vsock broker bridge, VM-size resource caps, teardown = destroy. Run
   the corpus + the multi-tenant scenarios on a KVM host. This is the tenant-isolation
