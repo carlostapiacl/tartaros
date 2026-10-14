@@ -88,6 +88,11 @@ pub struct Broker {
     /// incl. cloud metadata, ULA). Default false: an allowed hostname that
     /// resolves to an internal address is refused (SSRF / DNS-rebinding defense).
     allow_internal: bool,
+    /// CONNECT destination ports allowed (ADV-03). `None` = any port (the library
+    /// default, back-compat). Domain-scoped egress sets this to `[443]` so an
+    /// allowed host cannot be reached on an arbitrary TCP port — `--allow-domain`
+    /// is a capability to speak HTTPS to the host, not raw TCP to any port on it.
+    allowed_connect_ports: Option<Vec<u16>>,
 }
 
 impl Broker {
@@ -103,6 +108,23 @@ impl Broker {
             used: AtomicU32::new(0),
             allowed_hosts: Vec::new(),
             allow_internal: false,
+            allowed_connect_ports: None,
+        }
+    }
+
+    /// Restrict CONNECT tunnels to these destination ports (ADV-03). Domain-scoped
+    /// egress uses `[443]`: an allow-listed host is reachable only for HTTPS, not
+    /// as an arbitrary TCP endpoint on some alternate port. Unset = any port.
+    pub fn with_connect_ports(mut self, ports: Vec<u16>) -> Self {
+        self.allowed_connect_ports = Some(ports);
+        self
+    }
+
+    /// Is `port` an allowed CONNECT destination port? Unset list = any (back-compat).
+    fn connect_port_allowed(&self, port: u16) -> bool {
+        match &self.allowed_connect_ports {
+            Some(ports) => ports.contains(&port),
+            None => true,
         }
     }
 
@@ -521,6 +543,25 @@ impl Broker {
             return refuse(&mut client, "403 Forbidden", b"host not allowed");
         }
 
+        // Port mediation (ADV-03): a CONNECT tunnel to an allow-listed host is
+        // still only permitted on an allowed destination port (443 for
+        // domain-scoped egress), so an authorized host cannot be reached as a raw
+        // TCP endpoint on an arbitrary port. The broker does NOT inspect TLS/SNI or
+        // the certificate — the tunnel is end-to-end by design — so this is a
+        // host:port capability, not a semantic "HTTPS to domain X" guarantee.
+        if !self.connect_port_allowed(port) {
+            let _ = tx.send(EffectEvent::now(
+                self.role.clone(),
+                Axis::Network,
+                "broker-connect-port-denied",
+                format!("{host}:{port}"),
+                Direction::OutsideTerritory,
+                Outcome::Denied,
+                "broker",
+            ));
+            return refuse(&mut client, "403 Forbidden", b"port not allowed");
+        }
+
         // SSRF / DNS-rebinding defense: refuse internal destinations.
         let target = match self.resolve_external(&host, port) {
             Some(a) => a,
@@ -915,6 +956,30 @@ mod tests {
         let mut resp = String::new();
         let _ = c.read_to_string(&mut resp);
         assert!(resp.contains("403"), "CONNECT to a host off the allow-list must be 403, got: {resp:?}");
+    }
+
+    // ADV-03: a CONNECT to an allow-listed host is still refused on a port that is
+    // not in the connect-port allow-list (domain-scoped egress permits only 443).
+    #[test]
+    fn live_connect_refuses_non_https_port() {
+        let b = Broker::new("qa", vec![])
+            .insecure_no_auth()
+            .with_allowed_hosts(vec!["github.com".into()])
+            .with_connect_ports(vec![443]);
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        // allowed host, but port 8080 is not in the connect-port allow-list
+        c.write_all(b"CONNECT github.com:8080 HTTP/1.1\r\nHost: github.com\r\n\r\n").unwrap();
+        let mut resp = String::new();
+        let _ = c.read_to_string(&mut resp);
+        assert!(resp.contains("403"), "CONNECT to a non-allowed port must be 403, got: {resp:?}");
+        assert!(resp.contains("port not allowed"), "got: {resp:?}");
     }
 
     #[test]

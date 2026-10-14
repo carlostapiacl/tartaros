@@ -222,6 +222,7 @@ fn start_egress_broker(p: &mut Policy) {
     let broker = tartaros_broker::Broker::new(p.role.clone(), vec![])
         .insecure_no_auth() // loopback + the sandbox is the boundary; no secret to send
         .with_allowed_hosts(hosts.clone())
+        .with_connect_ports(vec![443]) // HTTPS only: an allowed host is not a raw TCP endpoint (ADV-03)
         .with_allow_internal(false); // SSRF / rebinding defense stays on
     let (listener, port) = broker.bind(0).unwrap_or_else(|e| {
         eprintln!("tartaros: cannot start egress broker: {e}");
@@ -238,7 +239,7 @@ fn start_egress_broker(p: &mut Policy) {
     for k in ["NO_PROXY", "no_proxy"] {
         std::env::set_var(k, "127.0.0.1,localhost,::1");
     }
-    eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {}", hosts.join(", "));
+    eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; TCP tunnel, no TLS inspection)", hosts.join(", "));
     std::thread::spawn(move || {
         let mut sink = tartaros_core::VecSink::default();
         let _ = broker.serve(listener, &mut sink);

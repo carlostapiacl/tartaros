@@ -34,6 +34,12 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   a CONNECT/forward proxy (HTTPS tunneled end-to-end, SSRF-defended); the agent
   gets no other egress and a proxy-bypassing direct dial is blocked by the
   sandbox. Mutually exclusive with `--net` / `--isolate-net`.
+- **CONNECT port mediation (ADV-03)**: a CONNECT tunnel is permitted only on an
+  allowed destination port (domain-scoped egress uses **443**), so an allow-listed
+  host cannot be reached as a raw TCP endpoint on an arbitrary port. Stated
+  honestly: this is a host:port capability — TLS is end-to-end, the broker does
+  not inspect SNI or the certificate. Regression test
+  `live_connect_refuses_non_https_port`.
 - **`--isolate-net`**: empty network namespace (loopback only) — closes TCP,
   UDP, ICMP and raw, not just TCP (NET-1).
 - Per-path **AF_UNIX allow** on macOS (`allowUnixSockets`); Linux is
