@@ -18,6 +18,7 @@
 use tartaros_core::{
     Backend, Collector, EffectSink, Policy, PolicyError, RunError, RunOutcome,
 };
+use std::path::PathBuf;
 
 // Per-mechanism modules (linux-only), kept apart so each can be read and tested
 // on its own. The seccomp filters live here; cgroup/namespace/landlock helpers
@@ -283,9 +284,37 @@ fn confined_command(
             .map_err(|e| err(format!("add read rule {}: {e}", p.display())))?;
     }
 
-    // Write only under the carved allow-list.
-    for p in policy.linux_write_allowlist() {
-        let fd = match PathFd::new(&p) {
+    // Trust-handoff enforcement strategy. Landlock cannot allow "write X but deny
+    // X/y", so the carve grants each safe subtree and NEVER the parent of a deny —
+    // which blocks creating NEW entries directly at a repo root (a deny lives below
+    // in .git/hooks). When we can create a mount namespace (CAP_SYS_ADMIN, i.e.
+    // running as root / in a container), we instead grant the WHOLE workspace
+    // writable and protect each EXISTING handoff path with a read-only bind mount
+    // at the VFS layer — the bubblewrap/sandbox-runtime approach — so new files at
+    // the root work while the handoff stays unwritable. Mounts live only in the
+    // agent's private mount namespace and leave no trace in the real tree (option
+    // B: existing paths only; absent ones are not materialized). Without the
+    // privilege we fall back to the carve (same guarantees as before).
+    let can_mount = unsafe { libc::geteuid() } == 0;
+    let mut robind_paths: Vec<PathBuf> = Vec::new();
+    if can_mount {
+        for r in policy.trust_handoff_rules() {
+            robind_paths.push(r.path);
+        }
+        for r in policy.fs_rules.iter().filter(|r| r.access == tartaros_core::Access::Deny) {
+            robind_paths.push(r.path.clone());
+        }
+        robind_paths.retain(|p| p.exists()); // option B: only paths that exist
+        robind_paths.sort();
+        robind_paths.dedup();
+    }
+    let use_bind_mounts = can_mount && !robind_paths.is_empty();
+
+    // Write grant: whole roots when bind mounts protect the handoff; else the carve.
+    let write_grants: Vec<PathBuf> =
+        if use_bind_mounts { policy.writable_roots.clone() } else { policy.linux_write_allowlist() };
+    for p in &write_grants {
+        let fd = match PathFd::new(p) {
             Ok(fd) => fd,
             Err(_) => continue, // a path that vanished between carve and open: skip
         };
@@ -329,6 +358,15 @@ fn confined_command(
     let harden_syscalls = policy.harden_syscalls;
     let isolate_pids = policy.isolate_pids;
     let isolate_network = policy.isolate_network;
+    // Read-only bind-mount targets (built here in the parent; the pre_exec closure
+    // must not allocate/stat). Empty unless we chose the bind-mount strategy.
+    let robind_cstrings: Vec<std::ffi::CString> = {
+        use std::os::unix::ffi::OsStrExt;
+        robind_paths
+            .iter()
+            .filter_map(|p| std::ffi::CString::new(p.as_os_str().as_bytes()).ok())
+            .collect()
+    };
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
     unsafe {
@@ -356,6 +394,14 @@ fn confined_command(
             // and an unrestricted mount tree). Fails closed. See enter_namespaces.
             if isolate_pids || isolate_network {
                 namespace::enter_namespaces(isolate_pids, isolate_network)?;
+            }
+            // Read-only bind mounts for the trust-handoff set (so the workspace can
+            // be granted writable without the handoff being writable). Needs a
+            // mount namespace: isolate_pids already made one, otherwise create one
+            // here. Fails closed — a mount error aborts before the workspace is
+            // ever exposed writable.
+            if !robind_cstrings.is_empty() {
+                namespace::setup_ro_binds(&robind_cstrings, !isolate_pids)?;
             }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
             // SIGKILL of the supervisor that never runs destroy_cgroup.
