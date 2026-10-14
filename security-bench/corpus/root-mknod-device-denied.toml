@@ -1,0 +1,24 @@
+id = "root-mknod-device-denied"
+category = "isolation"
+severity = "critical"
+os = ["linux"]
+requires = ["landlock"]
+
+# Review #3: a root agent with a writable /dev + MakeBlock/MakeChar could mknod a
+# block device and read the raw disk, bypassing path-based secret protection. The
+# write grant no longer includes device-node creation (Landlock), mknod/mknodat are
+# denied (seccomp), and all capabilities are dropped before exec. Creating a device
+# node must fail even as root.
+[policy]
+writable_roots = ["{root}/work"]
+harden_syscalls = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'mknod {root}/work/disk b 8 0'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"

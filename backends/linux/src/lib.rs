@@ -322,7 +322,11 @@ fn confined_command(
     // write grant that included read would re-open a read-denied secret located
     // inside a writable root (external review P0). Read is governed solely by the
     // read carve; writes grant write rights only.
-    let write_only = all & !read_only;
+    // Also never grant device-node creation: with MakeBlock/MakeChar on a writable
+    // /dev a root agent could `mknod` a block device and read the raw disk,
+    // bypassing the path-based secret protection entirely (adversarial review #3).
+    // Agents never need to create device nodes; mknod is also denied via seccomp.
+    let write_only = all & !read_only & !AccessFs::MakeBlock & !AccessFs::MakeChar;
 
     // Restrict the network unless the policy explicitly opened it.
     let restrict_net = !matches!(policy.network, Some(Network::Allowed));
@@ -523,6 +527,11 @@ fn confined_command(
             if restrict_net || deny_unix || harden_syscalls {
                 seccomp::deny_io_uring()?;
             }
+            // Drop all capabilities when running as real root (review #3), after the
+            // privileged setup (cgroup join, namespaces, bind mounts) has run and
+            // before the agent execs. A uid-0 agent otherwise keeps CAP_SYS_MODULE,
+            // CAP_SYS_RAWIO, CAP_SYS_PTRACE, etc. No-op for a non-root euid.
+            namespace::drop_all_capabilities()?;
             // Landlock.
             created
                 .take()
