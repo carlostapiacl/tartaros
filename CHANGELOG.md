@@ -61,6 +61,12 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
 ### Process isolation & kernel attack surface
 - **`--isolate-pids`**: private PID + mount namespace — the agent sees only its
   own subtree, cannot enumerate/inspect/signal host processes.
+- **Unprivileged isolation.** `--isolate-pids`/`--isolate-net` and the
+  create-at-root bind mounts now enter a user namespace first for a non-root
+  caller (bubblewrap's approach), so they work without root wherever the host
+  permits unprivileged user namespaces. The userns is entered once and shared, so
+  isolation and bind mounts compose. Verified on a hardened Ubuntu host (kernel
+  6.8) as a non-root user.
 - **`--seccomp-strict`**: deny dangerous syscalls (module load, kexec, keyring,
   bpf, perf, ptrace, process_vm_*, mount/unshare/setns, reboot/time/swap).
 - Opt-in `--deny-unix` (AF_UNIX via seccomp).
@@ -74,6 +80,18 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
 - Fail-closed capability probes (Landlock fs/net; a cgroup membership probe).
 - macOS refuses Linux-only hardening instead of silently ignoring it.
 - A cgroup-less host warns that `--max-procs` degraded to RLIMIT.
+- **Namespace unavailable → named diagnostic, never a silent downgrade.** Where a
+  host forbids unprivileged user namespaces (hardened Ubuntu
+  `apparmor_restrict_unprivileged_userns=1`, Debian/Arch `unprivileged_userns_clone=0`,
+  `max_user_namespaces=0`, or a CAP_SYS_ADMIN-less container), `--isolate-pids`/
+  `--isolate-net` refuse with a message naming the exact blocking knob and its
+  remedy; the create-at-root bind mounts fall back to the Landlock carve + an
+  `explain` warning. The base sandbox needs no namespace and still runs.
+- **`explain` matches `run`'s verdict.** `explain` now exits non-zero (2) wherever
+  `run` would refuse on this host — no Landlock, Landlock net unavailable when a
+  denial is required, isolation requested without a grantable namespace, or strict
+  caps with no usable cgroup — so an audit (`seisin check`) never shows a green ✓
+  on a host that cannot actually enforce the policy.
 
 ### sandbox-runtime compatibility (seisin provider)
 - **`--settings <file>`**: maps a sandbox-runtime `settings.json`
