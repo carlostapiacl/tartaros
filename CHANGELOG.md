@@ -154,6 +154,13 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   path; any-depth globs covered by the handoff set map to it; single-`*` globs
   compile to anchored Seatbelt regexes on macOS (refused on Linux); arbitrary
   globs are refused rather than treated as never-matching literals.
+- **Headless-browser Mach rendezvous (macOS)**: `--settings` maps
+  `network.allowMachLookup` and the new `allowMachRegister` (sandbox-runtime's
+  `*`-suffix = name prefix) onto scoped Seatbelt `(allow mach-register
+  (global-name-prefix …))` rules — never a blanket `(allow mach-register)`.
+  Chromium/Chrome headless register a `MachPortRendezvousServer.*` service their
+  child processes look up; without register the browser dies at startup. Mach is a
+  Darwin primitive, so the Linux backend refuses these fields (apply-or-refuse).
 - **Attributable denials on macOS**: every deny carries `(with message
   "CMD64_…_SBX")` so a kernel denial is traceable in the unified log even after
   the process exits (matches sandbox-runtime's `generateLogTag`/`renderRule`).

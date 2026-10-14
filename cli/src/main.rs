@@ -343,6 +343,10 @@ struct SandboxNet {
     allow_unix_sockets: Vec<String>,
     #[serde(default, rename = "allowLocalBinding")]
     allow_local_binding: bool,
+    #[serde(default, rename = "allowMachLookup")]
+    allow_mach_lookup: Vec<String>,
+    #[serde(default, rename = "allowMachRegister")]
+    allow_mach_register: Vec<String>,
 }
 
 /// Apply a sandbox-runtime settings file strictly: map the fields we can enforce
@@ -492,6 +496,22 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     if s.network.allow_local_binding {
         refuse("blanket local binding (grant a concrete port with a port rule instead)");
     }
+    // Mach rendezvous (headless browsers): sandbox-runtime writes a name with a
+    // trailing `*` meaning a prefix; map it to a global-name-prefix. macOS-only —
+    // Mach is a Darwin primitive, so a non-empty list refuses on Linux.
+    #[cfg(target_os = "macos")]
+    {
+        let to_prefix = |x: &str| x.strip_suffix('*').unwrap_or(x).to_string();
+        p.allow_mach_lookup = s.network.allow_mach_lookup.iter().map(|x| to_prefix(x)).collect();
+        p.allow_mach_register = s.network.allow_mach_register.iter().map(|x| to_prefix(x)).collect();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if !s.network.allow_mach_lookup.is_empty() || !s.network.allow_mach_register.is_empty() {
+            eprintln!("tartaros: --settings: allowMachLookup/allowMachRegister are macOS-only (Mach is a Darwin IPC primitive with no Linux equivalent). Run a headless-browser role under the macOS (Seatbelt) backend. Refusing (apply-fully-or-refuse).");
+            exit(2);
+        }
+    }
     // Strict: a settings-driven run is guaranteed-or-abort.
     p.strict = true;
 }
@@ -601,6 +621,12 @@ fn explain(p: &Policy) {
         println!("egress domains (via broker, HTTPS/CONNECT + SSRF defense): {}", p.allow_domains.join(", "));
     }
     println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
+    if !p.allow_mach_register.is_empty() {
+        println!("macOS Mach register (prefix): {}", p.allow_mach_register.join(", "));
+    }
+    if !p.allow_mach_lookup.is_empty() {
+        println!("macOS Mach lookup (prefix): {}", p.allow_mach_lookup.join(", "));
+    }
     println!("isolate PID namespace: {}", p.isolate_pids);
     println!("isolate network (no egress): {}", p.isolate_network);
     println!("seccomp attack-surface reduction: {}", p.harden_syscalls);

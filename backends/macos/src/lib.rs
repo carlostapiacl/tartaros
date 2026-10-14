@@ -327,6 +327,17 @@ fn build_profile(policy: &Policy) -> String {
     p.push_str("(allow file-write* (subpath \"/dev\"))\n");
     p.push_str("(allow signal (target self))\n");
     p.push_str("(allow mach-lookup)\n");
+    // Scoped mach-REGISTER for headless browsers (Chromium/Chrome publish a
+    // rendezvous service their child processes look up). mach-register is denied by
+    // default; we open ONLY the requested name prefixes, never blanket. mach-lookup
+    // is already allowed broadly above, so allow_mach_lookup prefixes need no extra
+    // rule — they are accepted for parity with sandbox-runtime's settings schema.
+    for prefix in &policy.allow_mach_register {
+        let escaped = prefix.replace('\\', "\\\\").replace('"', "\\\"");
+        p.push_str(&format!(
+            "(allow mach-register (global-name-prefix \"{escaped}\"))\n"
+        ));
+    }
 
     // Process-info / environment isolation. We never allow `kern.proc.*`.
     // Other processes' args/env must not be reachable from inside the box.

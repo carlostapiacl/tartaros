@@ -63,6 +63,14 @@ impl Backend for LandlockBackend {
                     .into(),
             });
         }
+        if !policy.allow_mach_lookup.is_empty() || !policy.allow_mach_register.is_empty() {
+            return Err(PolicyError {
+                reason: "allow_mach_lookup/allow_mach_register are macOS-only: Mach is a Darwin \
+                         IPC primitive with no Linux equivalent. Headless browsers that need Mach \
+                         rendezvous run under the macOS (Seatbelt) backend."
+                    .into(),
+            });
+        }
         // TartarOS can always express the rest of the policy by restructuring.
         let _allow = policy.linux_write_allowlist();
         Ok(())
