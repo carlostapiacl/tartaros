@@ -77,10 +77,10 @@ The full list of what we capture, by axis, is in [`CATALOG.md`](CATALOG.md).
 ## The bridge: a complete effect log
 
 The highest-leverage piece is the log itself. TartarOS records **allowed and
-denied** events across the network, secret, process and MCP axes, per role, with
-timestamps — `core::effect` (the `EffectEvent` / `Outcome` / `RecordMode` model)
-fed by five collectors in `collect/` (network, secret, process, MCP, file-write),
-on both OS. The file-write collector observes *allowed* writes; a denied write is
+denied** events across the network, secret, process, MCP and file-write axes, per
+role, with timestamps — `core::effect` (the `EffectEvent` / `Outcome` /
+`RecordMode` model) fed by five collectors in `collect/` (network, secret,
+process, MCP, file-write), on both OS. The file-write collector observes *allowed* writes; a denied write is
 blocked by enforcement before the fd opens, so it is enforced, not logged. The log
 is what gives the intent layer its first-hand feed; the intent layer treats TartarOS as a
 replaceable source, not a hard dependency (there are adapters for other effect
