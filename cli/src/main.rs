@@ -368,13 +368,21 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
             .with_allow_internal(false) // SSRF / rebinding defense stays on
             .with_loopback_ports(loopback_ports.clone()) // declared local_ports (N1)
     };
-    let set_proxy = |ip: &str, port: u16| {
+    // `exempt_loopback`: whether to put loopback in NO_PROXY so the agent connects
+    // to a declared local_port DIRECTLY. True in the loopback-broker posture (macOS,
+    // non-root Linux): the broker and the local services share the agent's loopback,
+    // so a direct connection is correct. FALSE in the NET-01 netns posture: there the
+    // agent's loopback is its OWN (empty) netns loopback, NOT the host's where the
+    // local services live — so loopback must route THROUGH the broker, which forwards
+    // to the host loopback. Either way declared local_ports stay reachable.
+    let set_proxy = |ip: &str, port: u16, exempt_loopback: bool| {
         let proxy = format!("http://{ip}:{port}");
         for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
             std::env::set_var(k, &proxy);
         }
+        let no_proxy = if exempt_loopback { "127.0.0.1,localhost,::1" } else { "" };
         for k in ["NO_PROXY", "no_proxy"] {
-            std::env::set_var(k, "127.0.0.1,localhost,::1");
+            std::env::set_var(k, no_proxy);
         }
     };
 
@@ -401,7 +409,7 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
             Ok((ns, port)) => {
                 p.local_ports.push(port); // reach the broker inside the netns
                 p.egress_netns = Some(ns.name.clone());
-                set_proxy(&ns.host_ip, port);
+                set_proxy(&ns.host_ip, port, false); // netns: loopback via broker
                 eprintln!(
                     "tartaros: egress broker on {}:{port} in a scoped network namespace — allowed: {} (NET-01 closed: the agent has no route except to the broker)",
                     ns.host_ip,
@@ -422,7 +430,7 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
         exit(1);
     });
     p.local_ports.push(port);
-    set_proxy("127.0.0.1", port);
+    set_proxy("127.0.0.1", port, true); // loopback broker: direct loopback ok
     eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; TCP tunnel, no TLS inspection)", hosts.join(", "));
     #[cfg(target_os = "linux")]
     eprintln!("tartaros: warning: {NET01_FALLBACK}");
