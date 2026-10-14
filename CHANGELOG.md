@@ -5,6 +5,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### macOS — allow signalling same-sandbox processes (reported by seisin)
+- The Seatbelt profile allowed `signal` only to `(target self)`, so a process
+  could not signal its own children — killing a timed-out subprocess or closing a
+  headless browser (`@playwright/mcp`, and how Claude Code terminates Bash
+  commands) failed with `EPERM`. Now `(allow signal (target same-sandbox))`:
+  signals to any process in THIS sandbox are allowed, to processes outside it still
+  denied (the scope srt uses). Verified: `sh -c 'sleep 30 & kill $!; echo kill=$?'`
+  prints `kill=0`, and `kill -0 1` (outside) stays denied.
+
 ### Audit response (external review @ 3096508)
 - **POL-01 (P0, fixed):** `--settings` accepted an any-depth `denyRead` pattern
   (e.g. `**/.claude/**`) by equivalence with the trust-handoff set — but that set

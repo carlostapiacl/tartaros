@@ -358,7 +358,12 @@ fn build_profile(policy: &Policy) -> String {
     p.push_str("(allow file-read*)\n");
     p.push_str("(allow file-ioctl)\n");
     p.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    p.push_str("(allow signal (target self))\n");
+    // Signals within the sandbox: a process must be able to signal its own
+    // descendants (kill a timed-out child, close a headless browser — Claude Code
+    // and @playwright/mcp both do this). `(target self)` alone denied that, breaking
+    // those tools with EPERM; `same-sandbox` allows signalling any process in THIS
+    // sandbox but never one outside it (same scope srt uses).
+    p.push_str("(allow signal (target same-sandbox))\n");
     p.push_str("(allow mach-lookup)\n");
     // Scoped mach-REGISTER for headless browsers (Chromium/Chrome publish a
     // rendezvous service their child processes look up). mach-register is denied by
