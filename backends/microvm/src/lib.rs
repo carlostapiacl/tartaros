@@ -83,7 +83,24 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/".into());
 
-    let mut mounts = Vec::new();
+    // Standard OCI runtime-spec default mounts. A runtime (runc/runsc) does NOT add
+    // these for us: without them the guest has no /proc, /dev/null, /dev/shm, … so
+    // ordinary tools break — AND the maskedPaths/readonlyPaths below (all under
+    // /proc, /sys) would have no filesystem to apply to, making that hardening
+    // inert. They come first so the policy's path binds nest on top of a real base.
+    let mut mounts = vec![
+        json!({ "destination": "/proc", "type": "proc", "source": "proc" }),
+        json!({ "destination": "/dev", "type": "tmpfs", "source": "tmpfs",
+                "options": ["nosuid", "strictatime", "mode=755", "size=65536k"] }),
+        json!({ "destination": "/dev/pts", "type": "devpts", "source": "devpts",
+                "options": ["nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620"] }),
+        json!({ "destination": "/dev/shm", "type": "tmpfs", "source": "shm",
+                "options": ["nosuid", "noexec", "nodev", "mode=1777", "size=65536k"] }),
+        json!({ "destination": "/dev/mqueue", "type": "mqueue", "source": "mqueue",
+                "options": ["nosuid", "noexec", "nodev"] }),
+        json!({ "destination": "/sys", "type": "sysfs", "source": "sysfs",
+                "options": ["nosuid", "noexec", "nodev", "ro"] }),
+    ];
     for s in mount_plan(policy) {
         let dest = s.host_path.to_string_lossy().into_owned();
         let m = match s.mode {
@@ -344,6 +361,14 @@ mod tests {
 
         let mounts = v["mounts"].as_array().unwrap();
         let find = |dest: &str| mounts.iter().find(|m| m["destination"] == dest).cloned();
+        // standard OCI default mounts present, so the bundle runs and the /proc,/sys
+        // masked/readonly hardening actually has a filesystem to apply to.
+        assert_eq!(find("/proc").unwrap()["type"], "proc");
+        assert_eq!(find("/dev").unwrap()["type"], "tmpfs");
+        let shm = find("/dev/shm").unwrap();
+        assert!(shm["options"].as_array().unwrap().iter().any(|o| o == "nodev"));
+        assert_eq!(find("/sys").unwrap()["type"], "sysfs");
+        assert!(find("/sys").unwrap()["options"].as_array().unwrap().iter().any(|o| o == "ro"));
         // workspace root: rw bind
         let ws = find("/ws").unwrap();
         assert_eq!(ws["type"], "bind");
