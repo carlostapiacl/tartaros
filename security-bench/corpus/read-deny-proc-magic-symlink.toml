@@ -1,0 +1,27 @@
+id = "read-deny-proc-magic-symlink"
+category = "secrets"
+severity = "critical"
+os = ["linux"]
+requires = ["landlock"]
+
+# /proc magic symlinks (/proc/self/root, /proc/<pid>/cwd) are a classic way to
+# re-express a path and dodge a path-based deny. Landlock resolves them to the real
+# inode, so a read of the read-denied secret through /proc/self/root must still be
+# denied. (isolate_process_info would also remove /proc from the read grant; here
+# we prove the base read-deny holds even with /proc readable.)
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/vault"]
+
+[[fixture]]
+path = "{root}/vault/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'cat /proc/self/root{root}/vault/key'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"
