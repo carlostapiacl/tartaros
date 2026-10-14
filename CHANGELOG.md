@@ -161,6 +161,14 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   Chromium/Chrome headless register a `MachPortRendezvousServer.*` service their
   child processes look up; without register the browser dies at startup. Mach is a
   Darwin primitive, so the Linux backend refuses these fields (apply-or-refuse).
+- **`--private-tmp` for headless browsers**: creates a run-private temp dir,
+  exports it as `TMPDIR`, makes it writable, and (macOS) scopes AF_UNIX bind/connect
+  to it — `(allow network-bind/outbound (… unix-socket (subpath …)))`. Playwright
+  publishes its browser control socket under `$TMPDIR`, so it lands in the
+  run-private dir instead of the shared temp where other runs' sockets live; no
+  Playwright internals are needed (only `TMPDIR` is set). Torn down after the run.
+  Verified on Linux and macOS (a socket inside the dir works; binding outside is
+  denied on macOS).
 - **Attributable denials on macOS**: every deny carries `(with message
   "CMD64_…_SBX")` so a kernel denial is traceable in the unified log even after
   the process exits (matches sandbox-runtime's `generateLogTag`/`renderRule`).
