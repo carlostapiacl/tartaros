@@ -105,6 +105,14 @@ pub struct Broker {
     /// allowed host cannot be reached on an arbitrary TCP port — `--allow-domain`
     /// is a capability to speak HTTPS to the host, not raw TCP to any port on it.
     allowed_connect_ports: Option<Vec<u16>>,
+    /// Loopback ports the agent may reach THROUGH the broker (plain HTTP forward or
+    /// CONNECT) — the role's declared `local_ports` (e.g. a local MCP server or model
+    /// proxy on 127.0.0.1). A deliberate, operator-declared exception to the SSRF
+    /// defense: only `127.0.0.1`/`::1`/`localhost` on EXACTLY these ports is
+    /// forwarded, no secret injection, no host allow-list. Lets clients that route
+    /// everything through `HTTP_PROXY` (ignoring `NO_PROXY`) still reach a declared
+    /// loopback service, matching srt. Any other internal address stays blocked.
+    loopback_ports: Vec<u16>,
 }
 
 impl Broker {
@@ -121,7 +129,21 @@ impl Broker {
             allowed_hosts: Vec::new(),
             allow_internal: false,
             allowed_connect_ports: None,
+            loopback_ports: Vec::new(),
         }
+    }
+
+    /// Declared loopback ports the agent may reach through the broker (see field).
+    pub fn with_loopback_ports(mut self, ports: Vec<u16>) -> Self {
+        self.loopback_ports = ports;
+        self
+    }
+
+    /// Is this a plain-HTTP/CONNECT target a declared loopback service?
+    fn loopback_allowed(&self, host: &str, port: u16) -> bool {
+        let h = host.trim();
+        (h == "127.0.0.1" || h == "::1" || h == "[::1]" || h.eq_ignore_ascii_case("localhost"))
+            && self.loopback_ports.contains(&port)
     }
 
     /// Restrict CONNECT tunnels to these destination ports (ADV-03). Domain-scoped
@@ -380,9 +402,16 @@ impl Broker {
             }
         };
 
+        // Declared loopback service (local_ports): forward plain HTTP straight to
+        // 127.0.0.1:port, skipping the host allow-list, secret injection and the
+        // SSRF/internal-IP block (which exists for EXTERNAL hosts resolving inward).
+        // This is the one intentional internal destination — the operator declared
+        // it — and only on exactly the declared ports.
+        let loopback_ok = self.loopback_allowed(&host, port);
+
         // Egress allow-list (host-based mediation): a host off the list is
         // refused here, before any connection or secret injection.
-        if !self.host_allowed(&host) {
+        if !loopback_ok && !self.host_allowed(&host) {
             let _ = tx.send(EffectEvent::now(
                 self.role.clone(),
                 Axis::Network,
@@ -404,13 +433,16 @@ impl Broker {
             return Ok(());
         }
 
-        // Inject the secret(s) for this host — the agent never saw them.
+        // Inject the secret(s) for this host — the agent never saw them. Never
+        // inject toward a loopback service (the secrets are for external upstreams).
         let mut injected = false;
-        for inj in &self.injections {
-            if inj.applies_to(&host) {
-                headers.retain(|(k, _)| !k.eq_ignore_ascii_case(&inj.header));
-                headers.push((inj.header.clone(), inj.value.clone()));
-                injected = true;
+        if !loopback_ok {
+            for inj in &self.injections {
+                if inj.applies_to(&host) {
+                    headers.retain(|(k, _)| !k.eq_ignore_ascii_case(&inj.header));
+                    headers.push((inj.header.clone(), inj.value.clone()));
+                    injected = true;
+                }
             }
         }
 
@@ -430,12 +462,19 @@ impl Broker {
         // Connect to the resolved address, not the name, so there is no
         // resolve-then-reresolve rebinding window.
         use std::net::ToSocketAddrs;
-        let addrs: Vec<std::net::SocketAddr> =
-            (host.as_str(), port).to_socket_addrs().map(|i| i.collect()).unwrap_or_default();
-        let target = addrs
-            .iter()
-            .find(|a| self.allow_internal || !egress::is_internal_ip(&a.ip()))
-            .copied();
+        let target = if loopback_ok {
+            // Declared loopback service: go straight to 127.0.0.1:port (the SSRF
+            // resolve below would reject it as internal — that is the point of the
+            // exception). IPv4 loopback; a ::1 service would be reached likewise.
+            format!("127.0.0.1:{port}").parse().ok()
+        } else {
+            let addrs: Vec<std::net::SocketAddr> =
+                (host.as_str(), port).to_socket_addrs().map(|i| i.collect()).unwrap_or_default();
+            addrs
+                .iter()
+                .find(|a| self.allow_internal || !egress::is_internal_ip(&a.ip()))
+                .copied()
+        };
         let target = match target {
             Some(a) => a,
             None => {
@@ -549,8 +588,14 @@ impl Broker {
             None => return refuse(&mut client, "400 Bad Request", b"bad authority"),
         };
 
+        // Declared loopback service (local_ports): a CONNECT tunnel to
+        // 127.0.0.1:<declared port> is allowed (e.g. an HTTPS model proxy on
+        // loopback), skipping the host allow-list, the 443-only port mediation and
+        // the SSRF block — the operator declared this exact port.
+        let loopback_ok = self.loopback_allowed(&host, port);
+
         // Egress allow-list — refuse before any DNS or connection.
-        if !self.host_allowed(&host) {
+        if !loopback_ok && !self.host_allowed(&host) {
             let _ = tx.send(EffectEvent::now(
                 self.role.clone(),
                 Axis::Network,
@@ -569,7 +614,7 @@ impl Broker {
         // TCP endpoint on an arbitrary port. The broker does NOT inspect TLS/SNI or
         // the certificate — the tunnel is end-to-end by design — so this is a
         // host:port capability, not a semantic "HTTPS to domain X" guarantee.
-        if !self.connect_port_allowed(port) {
+        if !loopback_ok && !self.connect_port_allowed(port) {
             let _ = tx.send(EffectEvent::now(
                 self.role.clone(),
                 Axis::Network,
@@ -582,8 +627,15 @@ impl Broker {
             return refuse(&mut client, "403 Forbidden", b"port not allowed");
         }
 
-        // SSRF / DNS-rebinding defense: refuse internal destinations.
-        let target = match self.resolve_external(&host, port) {
+        // SSRF / DNS-rebinding defense: refuse internal destinations — except a
+        // declared loopback service, which goes straight to 127.0.0.1:port.
+        let target = if loopback_ok {
+            match format!("127.0.0.1:{port}").parse() {
+                Ok(a) => a,
+                Err(_) => return refuse(&mut client, "400 Bad Request", b"bad loopback port"),
+            }
+        } else {
+            match self.resolve_external(&host, port) {
             Some(a) => a,
             None => {
                 let _ = tx.send(EffectEvent::now(
@@ -596,6 +648,7 @@ impl Broker {
                     "broker",
                 ));
                 return refuse(&mut client, "403 Forbidden", b"internal destination blocked");
+                }
             }
         };
 
@@ -763,6 +816,25 @@ mod tests {
         );
         assert_eq!(parse_abs_uri("http://example.com/"), Some(("example.com".into(), 80, "/".into())));
         assert_eq!(parse_abs_uri("https://x/"), None);
+    }
+
+    #[test]
+    fn loopback_forward_only_for_declared_ports() {
+        // N1: a declared local_port on loopback may be reached through the broker;
+        // an undeclared port, or a non-loopback host, may not (the SSRF defense and
+        // host allow-list still apply to everything else).
+        let b = Broker::new("qa", vec![]).with_loopback_ports(vec![8768, 9000]);
+        assert!(b.loopback_allowed("127.0.0.1", 8768));
+        assert!(b.loopback_allowed("localhost", 9000));
+        assert!(b.loopback_allowed("::1", 8768));
+        // undeclared loopback port -> no
+        assert!(!b.loopback_allowed("127.0.0.1", 9999));
+        // declared port but non-loopback host -> no (cannot smuggle an external host)
+        assert!(!b.loopback_allowed("10.0.0.5", 8768));
+        assert!(!b.loopback_allowed("example.com", 8768));
+        // no declared ports at all -> nothing allowed
+        let b2 = Broker::new("qa", vec![]);
+        assert!(!b2.loopback_allowed("127.0.0.1", 8768));
     }
 
     #[test]

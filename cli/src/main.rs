@@ -355,12 +355,18 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
         exit(2);
     }
     let hosts = p.allow_domains.clone();
+    // The role's declared loopback ports (--port): the agent may reach these local
+    // services (MCP core, model proxy) THROUGH the broker too, for clients that
+    // route everything via HTTP_PROXY. Captured before the broker's own port is
+    // appended to local_ports below, so the broker never forwards to itself.
+    let loopback_ports = p.local_ports.clone();
     let make_broker = || {
         tartaros_broker::Broker::new(p.role.clone(), vec![])
             .insecure_no_auth() // the sandbox boundary is the auth; no secret to send
             .with_allowed_hosts(hosts.clone())
             .with_connect_ports(vec![443]) // HTTPS only (ADV-03)
             .with_allow_internal(false) // SSRF / rebinding defense stays on
+            .with_loopback_ports(loopback_ports.clone()) // declared local_ports (N1)
     };
     let set_proxy = |ip: &str, port: u16| {
         let proxy = format!("http://{ip}:{port}");
