@@ -6,15 +6,23 @@
 //! The agent thus *uses* a credential it never *holds* — "the capability, not
 //! the secret".
 //!
-//! Prototype scope: plain HTTP forward-proxy requests (`GET http://host/…`),
-//! one request per connection, std-only. HTTPS (`CONNECT`) would need TLS
-//! termination (a trusted CA) to inject into, or a capability-endpoint style;
-//! out of scope here. Every forwarded request is logged as an `EffectEvent`.
+//! Modes: a plain-HTTP forward proxy (`GET http://host/…`) with host-based egress
+//! mediation + secret injection; HTTPS via a blind `CONNECT` tunnel (destination
+//! policed, TLS end-to-end, no CA); and capability endpoints (plain HTTP in, real
+//! HTTPS out with the secret injected). std-only. Every request is logged as an
+//! `EffectEvent`.
+//!
+//! Availability (ADV-01): the broker runs in the TRUSTED supervisor and the agent
+//! is adversarial, so it must stay up under abuse. Connections are handled
+//! concurrently on bounded worker threads (capped, 503 beyond the cap), every
+//! client read/write is time-bounded, and CONNECT tunnels have an idle timeout —
+//! so one slow, slowloris, or idle client cannot block others or pin the broker.
 
 use tartaros_core::{Axis, Direction, EffectEvent, EffectSink, Outcome};
 use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
 /// Inject `header: value` on requests to `host` (or to any host when `host` is
@@ -54,7 +62,10 @@ pub struct Capability {
 // modules, kept apart from the credential and capability code below.
 mod egress;
 mod limits;
-use limits::{read_line_capped, MAX_HEADERS, MAX_LINE_BYTES, MAX_RESPONSE_BYTES, UPSTREAM_TIMEOUT};
+use limits::{
+    read_line_capped, CLIENT_IO_TIMEOUT, CONNECT_IDLE_TIMEOUT, MAX_CONCURRENT_SESSIONS,
+    MAX_HEADERS, MAX_LINE_BYTES, MAX_RESPONSE_BYTES, UPSTREAM_TIMEOUT,
+};
 
 pub struct Broker {
     injections: Vec<Injection>,
@@ -179,22 +190,60 @@ impl Broker {
     /// Serve forever, logging each forwarded request into `sink`. Fails closed
     /// (P0-A): refuses to start without client auth unless `insecure_no_auth()`
     /// was set explicitly.
+    ///
+    /// Availability (ADV-01): the broker runs in the TRUSTED supervisor, and the
+    /// agent is adversarial, so one client must never block another or pin the
+    /// broker. Each connection is handled on its own worker thread, capped at
+    /// `MAX_CONCURRENT_SESSIONS` (beyond it, load is shed with 503), and every
+    /// read/write is time-bounded. Workers never touch `sink`: they send owned
+    /// events over a channel that THIS thread drains into the sink, so the sink
+    /// stays single-owner (no `Send`/`Sync` bound on the trait object) and event
+    /// ordering is serialized in one place.
     pub fn serve(&self, listener: TcpListener, sink: &mut dyn EffectSink) -> Result<(), String> {
         if self.auth_token.is_none() && !self.insecure {
             return Err(
                 "broker refuses to start without client auth; call with_auth(token) or, for tests, insecure_no_auth()".into(),
             );
         }
-        for stream in listener.incoming().flatten() {
-            if let Err(e) = self.handle(stream, sink) {
-                // a logging/forward failure must not take the broker down
-                let _ = e;
+        let (tx, rx) = mpsc::channel::<EffectEvent>();
+        let sessions = AtomicU32::new(0);
+        let this = self;
+        std::thread::scope(|scope| {
+            let sref = &sessions;
+            // Acceptor: one bounded worker thread per connection. Owns the original
+            // `tx`, so `rx` stays open for the broker's life (it never returns while
+            // `incoming()` yields). If the listener closes, it drops `tx` and the
+            // drain loop below ends — a clean shutdown.
+            scope.spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    // Reserve a session slot; shed load fast when at capacity.
+                    if sref.fetch_add(1, Ordering::SeqCst) >= MAX_CONCURRENT_SESSIONS {
+                        sref.fetch_sub(1, Ordering::SeqCst);
+                        let mut s = stream;
+                        let _ = s.set_write_timeout(Some(CLIENT_IO_TIMEOUT));
+                        let _ = s.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        continue;
+                    }
+                    let wtx = tx.clone();
+                    scope.spawn(move || {
+                        // Bound every client read/write: a slowloris or idle socket
+                        // times out instead of pinning this worker.
+                        let _ = stream.set_read_timeout(Some(CLIENT_IO_TIMEOUT));
+                        let _ = stream.set_write_timeout(Some(CLIENT_IO_TIMEOUT));
+                        let _ = this.handle(stream, &wtx);
+                        sref.fetch_sub(1, Ordering::SeqCst);
+                    });
+                }
+            });
+            // Drain events into the sink on this single thread (sole sink owner).
+            while let Ok(ev) = rx.recv() {
+                sink.emit(&ev);
             }
-        }
+        });
         Ok(())
     }
 
-    fn handle(&self, client: TcpStream, sink: &mut dyn EffectSink) -> std::io::Result<()> {
+    fn handle(&self, client: TcpStream, tx: &Sender<EffectEvent>) -> std::io::Result<()> {
         let mut reader = BufReader::new(client.try_clone()?);
         let mut client = client;
 
@@ -273,12 +322,12 @@ impl Broker {
         // never sees plaintext; it mediates only the destination (allow-list +
         // SSRF), which is exactly the egress boundary we want.
         if method.eq_ignore_ascii_case("CONNECT") {
-            return self.handle_connect(abs_uri, reader, client, sink);
+            return self.handle_connect(abs_uri, reader, client, tx);
         }
 
         // Capability mode: origin-form request (/prefix/…) to an HTTPS upstream.
         if abs_uri.starts_with('/') {
-            return self.handle_capability(method, abs_uri, &mut client, sink);
+            return self.handle_capability(method, abs_uri, &mut client, tx);
         }
 
         let (host, port, path) = match parse_abs_uri(abs_uri) {
@@ -292,7 +341,7 @@ impl Broker {
         // Egress allow-list (host-based mediation): a host off the list is
         // refused here, before any connection or secret injection.
         if !self.host_allowed(&host) {
-            sink.emit(&EffectEvent::now(
+            let _ = tx.send(EffectEvent::now(
                 self.role.clone(),
                 Axis::Network,
                 "broker-egress-denied",
@@ -323,7 +372,7 @@ impl Broker {
             }
         }
 
-        sink.emit(&EffectEvent::now(
+        let _ = tx.send(EffectEvent::now(
             self.role.clone(),
             Axis::Secret,
             if injected { "broker-inject" } else { "broker-forward" },
@@ -348,7 +397,7 @@ impl Broker {
         let target = match target {
             Some(a) => a,
             None => {
-                sink.emit(&EffectEvent::now(
+                let _ = tx.send(EffectEvent::now(
                     self.role.clone(),
                     Axis::Network,
                     "broker-internal-destination-denied",
@@ -423,15 +472,16 @@ impl Broker {
     /// (allow-list + SSRF), then, if permitted, reply 200 and copy bytes blindly
     /// in both directions until either side closes. TLS is tunneled end-to-end;
     /// the broker never terminates it, so no CA and no plaintext — only the
-    /// destination is policed. The broker is per-run and dies with it, so an idle
-    /// tunnel is bounded by the run's lifetime (no per-read timeout, which would
-    /// otherwise break a legitimately long or quiet transfer).
+    /// destination is policed. An idle read timeout (`CONNECT_IDLE_TIMEOUT`) tears
+    /// down a tunnel with no bytes in either direction for too long, so a client
+    /// cannot open a tunnel and hold its worker slot indefinitely (ADV-01); the
+    /// timeout is generous enough not to kill a legitimately quiet live transfer.
     fn handle_connect(
         &self,
         authority: &str,
         client_reader: BufReader<TcpStream>,
         mut client: TcpStream,
-        sink: &mut dyn EffectSink,
+        tx: &Sender<EffectEvent>,
     ) -> std::io::Result<()> {
         let refuse = |c: &mut TcpStream, status: &str, body: &[u8]| -> std::io::Result<()> {
             let _ = c.write_all(
@@ -459,7 +509,7 @@ impl Broker {
 
         // Egress allow-list — refuse before any DNS or connection.
         if !self.host_allowed(&host) {
-            sink.emit(&EffectEvent::now(
+            let _ = tx.send(EffectEvent::now(
                 self.role.clone(),
                 Axis::Network,
                 "broker-connect-denied",
@@ -475,7 +525,7 @@ impl Broker {
         let target = match self.resolve_external(&host, port) {
             Some(a) => a,
             None => {
-                sink.emit(&EffectEvent::now(
+                let _ = tx.send(EffectEvent::now(
                     self.role.clone(),
                     Axis::Network,
                     "broker-connect-internal-denied",
@@ -494,7 +544,7 @@ impl Broker {
             Err(_) => return refuse(&mut client, "502 Bad Gateway", b"upstream connect failed"),
         };
 
-        sink.emit(&EffectEvent::now(
+        let _ = tx.send(EffectEvent::now(
             self.role.clone(),
             Axis::Network,
             "broker-connect",
@@ -505,6 +555,14 @@ impl Broker {
         ));
         client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
         client.flush()?;
+
+        // Idle timeout on the established tunnel (ADV-01): SO_RCVTIMEO is shared
+        // across the dup'd fds, so setting it on each socket bounds a tunnel that
+        // goes silent in both directions. io::copy then returns on the timeout and
+        // the tunnel is torn down, freeing the worker slot. The worker's shorter
+        // header-read timeout is widened here to the (generous) tunnel idle bound.
+        let _ = client.set_read_timeout(Some(CONNECT_IDLE_TIMEOUT));
+        let _ = upstream.set_read_timeout(Some(CONNECT_IDLE_TIMEOUT));
 
         // Blind bidirectional copy. One direction runs on a thread; the other on
         // this one. Each closes its write half on EOF so the peer sees the close.
@@ -535,7 +593,7 @@ impl Broker {
         method: &str,
         path: &str,
         client: &mut TcpStream,
-        sink: &mut dyn EffectSink,
+        tx: &Sender<EffectEvent>,
     ) -> std::io::Result<()> {
         let cap = self.capabilities.iter().find(|c| {
             path == c.prefix || path.starts_with(&format!("{}/", c.prefix))
@@ -562,7 +620,7 @@ impl Broker {
         }
         let url = format!("{}{}", cap.upstream_base.trim_end_matches('/'), rest);
 
-        sink.emit(&EffectEvent::now(
+        let _ = tx.send(EffectEvent::now(
             self.role.clone(),
             Axis::Secret,
             "broker-inject",
@@ -866,5 +924,47 @@ mod tests {
         assert!(any.applies_to("whatever"));
         assert!(one.applies_to("api.github.com"));
         assert!(!one.applies_to("evil.com"));
+    }
+
+    // ADV-01 fairness: a slow/slowloris client must NOT block another client.
+    // One connection dribbles a partial request line and never finishes it
+    // (holding a worker until the read timeout); meanwhile a second client makes
+    // a legitimate request and must get its response promptly, proving the broker
+    // handles connections concurrently rather than serially.
+    #[test]
+    fn live_slow_client_does_not_block_others() {
+        let b = Broker::new("qa", vec![]).insecure_no_auth(); // empty allow-list = allow all host names
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Slowloris: connect and send only a partial request line, then sit. The
+        // worker blocks reading the rest until CLIENT_IO_TIMEOUT (30s). We keep the
+        // socket in scope so it stays open for the duration of the test.
+        let mut slow = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        slow.write_all(b"CONNECT examp").unwrap();
+        slow.flush().unwrap();
+
+        // Fast client: a CONNECT to an internal IP is refused (403) without any
+        // network, deterministically. Time how long it takes while `slow` hangs.
+        let start = std::time::Instant::now();
+        let mut fast = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        fast.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        fast.write_all(b"CONNECT 10.0.0.1:443 HTTP/1.1\r\nHost: 10.0.0.1\r\n\r\n").unwrap();
+        let mut resp = String::new();
+        let _ = fast.read_to_string(&mut resp);
+        let elapsed = start.elapsed();
+
+        assert!(resp.contains("403"), "fast client should get 403 (internal dest), got: {resp:?}");
+        // If the broker were serial, the fast client would wait behind the slow
+        // one's full read timeout. Concurrency means it returns in well under it.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "fast client blocked {elapsed:?} behind a slow client — not concurrent"
+        );
+        drop(slow);
     }
 }

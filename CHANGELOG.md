@@ -49,6 +49,14 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   resolved address (no rebinding window).
 - **Bounded request parsing** (per-line and header-count caps) so a confined
   agent cannot OOM the supervisor.
+- **Availability under abuse (ADV-01)**: the broker runs in the trusted supervisor
+  and the agent is adversarial, so one client must never block another. Each
+  connection is handled on its own bounded worker thread (`MAX_CONCURRENT_SESSIONS`,
+  503 beyond it), every client read/write is time-bounded (`CLIENT_IO_TIMEOUT`),
+  and a CONNECT tunnel has an idle read timeout (`CONNECT_IDLE_TIMEOUT`) — so a
+  slowloris, held-open, or idle client can no longer pin the broker or starve
+  others. Workers emit events over a channel drained by a single sink owner.
+  Regression test: `live_slow_client_does_not_block_others`.
 
 ### Resource limits & lifecycle (root-proof on Linux)
 - Processes via cgroup v2 **`pids.max`** (kernel-enforced, not RLIMIT — holds
