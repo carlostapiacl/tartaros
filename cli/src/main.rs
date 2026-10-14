@@ -94,6 +94,24 @@ fn expand(s: &str) -> String {
     s.to_string()
 }
 
+/// Like [`expand`], but also resolve a relative path to absolute against the
+/// current working directory. The backends require absolute writable/deny roots
+/// (the sandbox profile must be unambiguous), and cwd is well-defined at launch —
+/// so a user's `./repo` is resolved here rather than rejected with "must be
+/// absolute". Used only for concrete path flags, never for glob patterns (which
+/// stay relative by design, e.g. `**/*.pem`).
+fn expand_path(s: &str) -> String {
+    let s = expand(s);
+    let p = std::path::Path::new(&s);
+    if p.is_absolute() {
+        return s;
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(p).to_string_lossy().into_owned(),
+        Err(_) => s,
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(|s| s.as_str()) {
@@ -498,16 +516,16 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     // the macOS regex backend, and are refused on Linux.
     // An ALLOW with any kind of glob is refused (we only re-allow concrete paths).
     for x in &s.filesystem.allow_write {
-        match classify(x) { (n, PatKind::Literal) => p.writable_roots.push(PathBuf::from(expand(&n))), _ => refuse_glob(x) }
+        match classify(x) { (n, PatKind::Literal) => p.writable_roots.push(PathBuf::from(expand_path(&n))), _ => refuse_glob(x) }
     }
     for x in &s.filesystem.allow_read {
-        match classify(x) { (n, PatKind::Literal) => p.read_allows.push(PathBuf::from(expand(&n))), _ => refuse_glob(x) }
+        match classify(x) { (n, PatKind::Literal) => p.read_allows.push(PathBuf::from(expand_path(&n))), _ => refuse_glob(x) }
     }
     let map_deny = |x: &str, write: bool, read: bool, p: &mut Policy| {
         let (n, kind) = classify(x);
         match kind {
             PatKind::Literal => {
-                let path = PathBuf::from(expand(&n));
+                let path = PathBuf::from(expand_path(&n));
                 if write { p.fs_rules.push(FsRule { path: path.clone(), access: Access::Deny, even_if_absent: true }); }
                 if read { p.read_denies.push(path); }
             }
@@ -544,7 +562,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     #[cfg(target_os = "macos")]
     {
         p.allow_unix_socket_paths =
-            s.network.allow_unix_sockets.iter().map(|x| PathBuf::from(expand(x))).collect();
+            s.network.allow_unix_sockets.iter().map(|x| PathBuf::from(expand_path(x))).collect();
     }
     #[cfg(target_os = "linux")]
     {
@@ -599,10 +617,10 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| { eprintln!("read {path}: {e}"); exit(2); });
         let pf: PolicyFile = toml::from_str(&text).unwrap_or_else(|e| { eprintln!("parse {path}: {e}"); exit(2); });
         p.role = pf.role;
-        p.writable_roots = pf.writable_roots.iter().map(|s| PathBuf::from(expand(s))).collect();
-        p.read_denies = pf.read_denies.iter().map(|s| PathBuf::from(expand(s))).collect();
-        p.read_allows = pf.read_allows.iter().map(|s| PathBuf::from(expand(s))).collect();
-        p.fs_rules.extend(pf.write_denies.iter().map(|s| FsRule { path: PathBuf::from(expand(s)), access: Access::Deny, even_if_absent: true }));
+        p.writable_roots = pf.writable_roots.iter().map(|s| PathBuf::from(expand_path(s))).collect();
+        p.read_denies = pf.read_denies.iter().map(|s| PathBuf::from(expand_path(s))).collect();
+        p.read_allows = pf.read_allows.iter().map(|s| PathBuf::from(expand_path(s))).collect();
+        p.fs_rules.extend(pf.write_denies.iter().map(|s| FsRule { path: PathBuf::from(expand_path(s)), access: Access::Deny, even_if_absent: true }));
         p.local_ports = pf.local_ports;
         p.network = Some(if pf.net { Network::Allowed } else { Network::Denied });
         p.deny_unix_sockets = pf.deny_unix_sockets;
@@ -655,10 +673,10 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             "--settings" => { let _ = val(); } // handled above
             "--profile" => { let _ = val(); } // handled in the pre-scan above
             "--role" => p.role = val(),
-            "--write" => p.writable_roots.push(PathBuf::from(expand(&val()))),
-            "--read-deny" => p.read_denies.push(PathBuf::from(expand(&val()))),
-            "--read-allow" => p.read_allows.push(PathBuf::from(expand(&val()))),
-            "--write-deny" => p.fs_rules.push(FsRule { path: PathBuf::from(expand(&val())), access: Access::Deny, even_if_absent: true }),
+            "--write" => p.writable_roots.push(PathBuf::from(expand_path(&val()))),
+            "--read-deny" => p.read_denies.push(PathBuf::from(expand_path(&val()))),
+            "--read-allow" => p.read_allows.push(PathBuf::from(expand_path(&val()))),
+            "--write-deny" => p.fs_rules.push(FsRule { path: PathBuf::from(expand_path(&val())), access: Access::Deny, even_if_absent: true }),
             "--port" => p.local_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --port"); exit(2); })),
             "--allow-domain" => p.allow_domains.push(val()),
             "--net" => p.network = Some(Network::Allowed),

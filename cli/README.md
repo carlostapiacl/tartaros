@@ -13,7 +13,7 @@ tartaros run [options] -- <command> [args...]
 
 | option | meaning |
 |---|---|
-| `--write DIR` | a writable root (repeatable) |
+| `--write DIR` | a writable root (repeatable; relative paths resolve against the cwd) |
 | `--write-deny DIR` | deny writes to this path inside a writable root (deny-inside-allow; repeatable) |
 | `--read-deny DIR` | deny reads of this path (secrets; repeatable) |
 | `--read-allow DIR` | re-allow reads of a branch inside a read-deny (deepest rule wins; repeatable) |
@@ -43,8 +43,8 @@ tartaros run [options] -- <command> [args...]
 | option | meaning |
 |---|---|
 | `--timeout SECS` | kill the process group after SECS (exit 124) |
-| `--max-mem BYTES` | memory cap — cgroup `memory.max` + `RLIMIT_AS` on Linux; falls back to `RLIMIT_AS` (address space) with a warning if no cgroup |
-| `--max-procs N` | process cap — cgroup `pids.max` on Linux (**root-proof**); falls back to `RLIMIT_NPROC` (best-effort, root-bypassable) with a warning if no cgroup |
+| `--max-mem BYTES` | memory cap — cgroup `memory.max` + `RLIMIT_AS` on Linux; falls back to `RLIMIT_AS` (address space) with a warning if no cgroup. **macOS: refused** (Darwin does not enforce `RLIMIT_AS`) — use Linux |
+| `--max-procs N` | process cap — cgroup `pids.max` on Linux (**root-proof**); falls back to `RLIMIT_NPROC` (best-effort, root-bypassable) with a warning if no cgroup. **macOS caveat:** `RLIMIT_NPROC` is **per-user**, counting all your processes — a value below the machine's current process count makes the agent fail to `fork` ("Resource temporarily unavailable"); set it high or use Linux |
 | `--max-cpu SECS` | CPU-time limit (`RLIMIT_CPU`) |
 | `--strict` | guaranteed-or-abort: refuse to run if a requested cap can't be installed as a hard guarantee |
 

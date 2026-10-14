@@ -5,6 +5,20 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### CLI fixes (found by running the README example verbatim)
+- **Relative paths now work.** `--write`/`--read-deny`/`--read-allow`/`--write-deny`
+  (and the same keys in a `--config` file) accept relative paths, resolved to
+  absolute against the current working directory at launch. Before, a `./repo`
+  was rejected with "writable root must be absolute" — so the documented CLI
+  example did not run as written. Glob patterns stay relative by design.
+- **`--max-mem` on macOS is refused cleanly instead of crashing.** The Darwin
+  kernel does not enforce `RLIMIT_AS`, so `setrlimit(RLIMIT_AS)` returns `EINVAL`
+  and every run with `--max-mem` aborted with a cryptic `spawning sandbox-exec:
+  Invalid argument`. It is now refused up front with a clear message (like the
+  other macOS-unsupported flags) and `explain` states it is not available there;
+  the memory cap remains available on Linux via cgroup. `--max-cpu`/`--max-procs`
+  were and remain enforced on macOS via RLIMIT. Regression test added.
+
 ### Secrets — environment scrubbing (F-13)
 - A launcher's environment routinely holds credentials (`AWS_SECRET_ACCESS_KEY`,
   `GITHUB_TOKEN`, …). They are inherited at `exec` and are **not** governed by

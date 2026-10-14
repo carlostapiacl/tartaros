@@ -53,10 +53,18 @@ impl Backend for SeatbeltBackend {
         if policy.deny_unix_sockets {
             unsupported.push("--deny-unix (seccomp AF_UNIX deny)");
         }
+        // --max-mem is an address-space cap (RLIMIT_AS). The Darwin kernel does not
+        // enforce RLIMIT_AS — setrlimit(RLIMIT_AS) returns EINVAL — so honouring it
+        // would either crash the run with a cryptic spawn error or (if we skipped
+        // it) silently hand back an UNcapped sandbox. Refuse up front, like the
+        // other caps we cannot provide. (--max-cpu/--max-procs DO work via RLIMIT.)
+        if policy.max_memory_bytes.is_some() {
+            unsupported.push("--max-mem (RLIMIT_AS address-space cap; Darwin does not enforce it)");
+        }
         if !unsupported.is_empty() {
             return Err(PolicyError {
                 reason: format!(
-                    "unsupported on macOS (Seatbelt cannot provide these): {}. \
+                    "unsupported on macOS (cannot be enforced here): {}. \
                      Run on Linux for this hardening, or drop the flags / use \
                      --profile local-agent.",
                     unsupported.join(", ")
@@ -289,10 +297,10 @@ pub fn enforcement_report(policy: &Policy) -> Vec<String> {
         "network (default-deny + per-port): GUARANTEED (Seatbelt)".to_string(),
     ];
     if policy.max_memory_bytes.is_some() {
-        out.push("memory cap (--max-mem): BEST-EFFORT (RLIMIT_AS)".into());
+        out.push("memory cap (--max-mem): NOT AVAILABLE on macOS — Darwin does not enforce RLIMIT_AS; the run is refused (use Linux/cgroup)".into());
     }
     if policy.max_processes.is_some() {
-        out.push("process cap (--max-procs): BEST-EFFORT (RLIMIT_NPROC — no cgroup on macOS)".into());
+        out.push("process cap (--max-procs): BEST-EFFORT (RLIMIT_NPROC — no cgroup on macOS; note RLIMIT_NPROC is PER-USER on Darwin, so a value below your machine's current process count makes the agent fail to fork — set it high, or use Linux/cgroup pids.max)".into());
     }
     if policy.max_cpu_secs.is_some() {
         out.push("cpu cap (--max-cpu): GUARANTEED (RLIMIT_CPU)".into());

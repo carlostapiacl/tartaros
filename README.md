@@ -176,7 +176,11 @@ tartaros run \
   --timeout 600 --log effects.jsonl -- <cmd>
 ```
 
-`--allow-domain HOST` scopes egress to that domain through the capability broker
+Paths may be relative (`./repo`) — they are resolved against the current working
+directory at launch; the example above targets Linux, so on macOS drop the
+Linux-only flags (`--isolate-pids`, and `--max-mem`, whose RLIMIT_AS cap the Darwin
+kernel does not enforce — both are refused with a clear message, never silently
+ignored). `--allow-domain HOST` scopes egress to that domain through the capability broker
 (HTTPS via CONNECT on port 443, SSRF-defended); the agent gets no other network —
 direct TCP is blocked by Landlock and UDP/ICMP/raw (DNS, QUIC, IPv6 datagrams) by
 the seccomp egress filter, so there is no side-channel around the broker. It is a
