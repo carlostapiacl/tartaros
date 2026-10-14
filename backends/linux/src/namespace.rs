@@ -103,6 +103,90 @@ pub(crate) unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> 
     Ok(())
 }
 
+/// Enter a new USER namespace and map the current euid/egid to themselves, which
+/// grants CAP_SYS_ADMIN *inside* the namespace — enough to create a mount
+/// namespace and bind-mount without being real root. This is how bubblewrap runs
+/// unprivileged. Fails closed: if unshare or the uid/gid maps are refused (e.g.
+/// AppArmor blocks unprivileged user namespaces on hardened Ubuntu), it returns
+/// an error and the caller aborts (the parent only picks this path after a probe
+/// said it would work, so a failure here is an unexpected-environment abort, not
+/// a silent downgrade).
+pub(crate) unsafe fn enter_user_namespace() -> std::io::Result<()> {
+    let uid = libc::geteuid();
+    let gid = libc::getegid();
+    if libc::unshare(libc::CLONE_NEWUSER) != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // setgroups must be denied before writing gid_map in an unprivileged userns.
+    write_proc_self(c"/proc/self/setgroups", b"deny\n")?;
+    let uid_map = format!("{uid} {uid} 1\n");
+    let gid_map = format!("{gid} {gid} 1\n");
+    write_proc_self(c"/proc/self/uid_map", uid_map.as_bytes())?;
+    write_proc_self(c"/proc/self/gid_map", gid_map.as_bytes())?;
+    Ok(())
+}
+
+/// Write `data` to a /proc/self control file with a single open+write (the
+/// uid_map/gid_map/setgroups files accept exactly one write). Raw libc so it is
+/// safe in the post-fork, pre-exec context.
+unsafe fn write_proc_self(path: &std::ffi::CStr, data: &[u8]) -> std::io::Result<()> {
+    let fd = libc::open(path.as_ptr(), libc::O_WRONLY);
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let n = libc::write(fd, data.as_ptr() as *const libc::c_void, data.len());
+    let err = std::io::Error::last_os_error();
+    libc::close(fd);
+    if n != data.len() as isize {
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Probe whether this process can create a usable mount namespace for the
+/// read-only bind-mount strategy. Returns true as real root (CAP_SYS_ADMIN
+/// already), otherwise forks a throwaway child that tries the unprivileged path —
+/// user namespace + uid maps + a no-op private remount of `/` — and reports
+/// success via its exit code. The probe runs in its own namespaces, so it never
+/// affects this process; a false result means we fall back to the Landlock carve.
+pub(crate) fn mount_ns_capable() -> bool {
+    if unsafe { libc::geteuid() } == 0 {
+        return true;
+    }
+    unsafe {
+        let pid = libc::fork();
+        if pid < 0 {
+            return false;
+        }
+        if pid == 0 {
+            // Child: attempt the full unprivileged setup; _exit(0) only if it works.
+            if enter_user_namespace().is_err() {
+                libc::_exit(1);
+            }
+            if libc::unshare(libc::CLONE_NEWNS) != 0 {
+                libc::_exit(1);
+            }
+            let root = c"/";
+            let rc = libc::mount(
+                std::ptr::null(),
+                root.as_ptr(),
+                std::ptr::null(),
+                libc::MS_REC | libc::MS_PRIVATE,
+                std::ptr::null(),
+            );
+            libc::_exit(if rc == 0 { 0 } else { 1 });
+        }
+        // Parent: reap the probe and read its verdict.
+        let mut status: libc::c_int = 0;
+        while libc::waitpid(pid, &mut status, 0) < 0 {
+            if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                return false;
+            }
+        }
+        (status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0
+    }
+}
+
 /// Protect the trust-handoff set with READ-ONLY bind mounts instead of carving
 /// it out of the Landlock write grant. This lets the whole workspace be granted
 /// writable (so the agent can create new files at the repo root — which the carve
@@ -120,7 +204,14 @@ pub(crate) unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> 
 pub(crate) unsafe fn setup_ro_binds(
     paths: &[std::ffi::CString],
     need_unshare: bool,
+    need_userns: bool,
 ) -> std::io::Result<()> {
+    // Unprivileged path: enter a user namespace first to gain CAP_SYS_ADMIN for
+    // the mount namespace and the binds (bubblewrap's approach). Real root skips
+    // this. The parent only sets need_userns after mount_ns_capable() confirmed it.
+    if need_userns {
+        enter_user_namespace()?;
+    }
     if need_unshare {
         if libc::unshare(libc::CLONE_NEWNS) != 0 {
             return Err(std::io::Error::last_os_error());
