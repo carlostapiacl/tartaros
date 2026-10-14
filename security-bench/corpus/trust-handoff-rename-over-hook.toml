@@ -1,0 +1,24 @@
+id = "trust-handoff-rename-over-hook"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A git hook is write-denied, but renaming a benign file ONTO it is a different
+# syscall path (renameat, governed by Landlock's Refer right / Seatbelt file-write*)
+# than open+write. Replacing or hardlinking the hook must be denied too, so the
+# handoff cannot be poisoned by a rename or a hardlink from the protected file.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.git/hooks/pre-commit"
+content = "echo original"
+[[fixture]]
+path = "{root}/work/evil.sh"
+content = "echo evil"
+
+[attack]
+cmd = "sh -c 'mv {root}/work/evil.sh {root}/work/.git/hooks/pre-commit'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/note.txt'"
