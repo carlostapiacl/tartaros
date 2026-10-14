@@ -358,6 +358,25 @@ fn build_profile(policy: &Policy) -> String {
     p.push_str("(deny sysctl-read (sysctl-name-prefix \"kern.proc\"))\n");
     p.push_str("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))\n");
 
+    // Headless browser (Chromium/Chrome): the minimal extra grants measured as
+    // required (seisin encargo 5/6), opt-in via --browser and scoped — never a
+    // blanket open. Emitted AFTER the kern.proc deny so the browser's read of its
+    // OWN process info (kern.proc.pid.) wins last-match; the rest is unaffected by
+    // any earlier deny. Without these headless Chromium SIGSEGVs at startup.
+    if policy.browser {
+        p.push_str("(allow ipc-posix-shm* (ipc-posix-name-prefix \"apple.cfprefs.\"))\n");
+        p.push_str("(allow ipc-posix-shm* (ipc-posix-name \"apple.shm.notification_center\"))\n");
+        p.push_str("(allow ipc-posix-sem)\n");
+        p.push_str(
+            "(allow iokit-open (iokit-registry-entry-class \"IOSurfaceRootUserClient\") \
+             (iokit-registry-entry-class \"RootDomainUserClient\") \
+             (iokit-user-client-class \"IOSurfaceSendRight\"))\n",
+        );
+        p.push_str("(allow iokit-get-properties)\n");
+        p.push_str("(allow sysctl-read (sysctl-name-prefix \"kern.proc.pid.\"))\n");
+        p.push_str("(allow sysctl-write (sysctl-name \"kern.tcsm_enable\"))\n");
+    }
+
     // Network.
     match policy.network.unwrap_or(Network::Denied) {
         Network::Denied => {}
@@ -459,6 +478,37 @@ fn build_profile(policy: &Policy) -> String {
         } else {
             p.push_str(&format!("(deny file-read* (subpath {}))\n", quote(real)));
             p.push_str(&format!("(deny file-read* (literal {}))\n", quote(real)));
+        }
+    }
+
+    // Ancestor metadata (seisin encargo 6): when reads are carved (a read-deny may
+    // cover an ANCESTOR of the territory, e.g. /private/tmp above the repo), a tool
+    // still needs to `lstat`/`stat` those ancestor directories to reach the paths
+    // it IS allowed — Node fails with EPERM on `lstat('/private/tmp')` otherwise.
+    // Allow read of the ancestor NODES' metadata only (not their contents), emitted
+    // after the denies so the per-node metadata allow wins last-match. Matches
+    // sandbox-runtime, which permits ancestor metadata of the paths it re-allows.
+    if !policy.read_denies.is_empty() {
+        let mut seen = std::collections::BTreeSet::new();
+        let anchors: Vec<PathBuf> = policy
+            .writable_roots
+            .iter()
+            .chain(policy.read_allows.iter())
+            .map(|p| canonical_best_effort(p))
+            .collect();
+        for a in &anchors {
+            for anc in a.ancestors().skip(1) {
+                // skip the path itself; cover its parent dirs up to /
+                if anc.as_os_str().is_empty() {
+                    continue;
+                }
+                if seen.insert(anc.to_path_buf()) {
+                    p.push_str(&format!(
+                        "(allow file-read-metadata (literal {}))\n",
+                        quote(anc)
+                    ));
+                }
+            }
         }
     }
 
