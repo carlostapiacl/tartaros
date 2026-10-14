@@ -163,6 +163,15 @@ pub struct Policy {
     /// The Linux/seccomp backend cannot filter AF_UNIX by path (it is all-or-
     /// nothing), so a non-empty list there is a policy error, surfaced by the CLI.
     pub allow_unix_socket_paths: Vec<PathBuf>,
+    /// macOS-only: Mach service name PREFIXES the agent may look up / register
+    /// (`global-name-prefix`). Headless Chromium needs to REGISTER its
+    /// `MachPortRendezvousServer.*` service at startup and its children look it up;
+    /// without register it dies, without lookup the children loop. Scoped to a
+    /// prefix — never a blanket `(allow mach-register)`. The Linux backend rejects a
+    /// non-empty list (Mach is a macOS primitive). `allow_mach_lookup` is accepted
+    /// for parity even though the base profile already allows mach-lookup broadly.
+    pub allow_mach_lookup: Vec<String>,
+    pub allow_mach_register: Vec<String>,
     /// Opt-in (Linux): run the agent in a private PID + mount namespace so it
     /// sees ONLY its own process subtree — it cannot enumerate, inspect
     /// (`/proc/<pid>/cmdline`) or signal host processes, and a fresh `/proc` is
