@@ -248,7 +248,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   refuses) and the test asserts both are non-permissive. 9/9 on Linux and macOS.
 
 ### Conformance (`tartaros-bench`)
-- 28-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
+- 29-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
   **UNSUPPORTED**; exits non-zero on any failure.
 - **Coverage gate (ADV-05)**: the scorecard prints `coverage: ran/applicable` and
   the JSON carries the host capability stamp + skipped/unsupported counts, so a

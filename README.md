@@ -75,8 +75,8 @@ do not sell a competitor's default or scope choice as a vulnerability.
 | Attributable kernel denials (unified log) | — | ✅ `(with message)` tag per deny |
 | First-hand effect log (collectors, record modes) | ✅ | ✅ |
 
-**Conformance:** 28/28 security scenarios pass on Linux (kernel 6.8), 0 violations;
-macOS (Seatbelt) passes the cross-platform subset (18/18). The suite also runs a
+**Conformance:** 29/29 security scenarios pass on Linux (kernel 6.8), 0 violations;
+macOS (Seatbelt) passes the cross-platform subset (19/19). The suite also runs a
 mutation mode (`--mutate`) that proves it would catch a removed protection, and
 marks scenarios UNSUPPORTED on a host that lacks a required capability rather than
 silently passing.
