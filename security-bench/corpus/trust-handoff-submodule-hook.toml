@@ -1,0 +1,30 @@
+id = "trust-handoff-submodule-hook"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A submodule's gitdir lives under .git/modules/<name>/, and ITS hooks are the same
+# passive-RCE surface as a top-level .git/hooks — a trusted `git` run in the
+# submodule executes them. The .git/hooks pattern does not cover this path, so it
+# was writable. The agent must NOT be able to plant a submodule hook; the
+# submodule's objects/refs stay writable so `git submodule` still works.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.git/modules/m/hooks/pre-commit"
+content = "echo original"
+[[fixture]]
+path = "{root}/work/.git/modules/m/objects/keep"
+content = "obj"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+# Planting/altering a submodule hook must be denied.
+cmd = "sh -c 'echo evil >> {root}/work/.git/modules/m/hooks/pre-commit'"
+
+[control]
+# Writing the submodule's objects (ordinary git work) and the workspace still work.
+cmd = "sh -c 'echo o > {root}/work/.git/modules/m/objects/new && echo ok > {root}/work/src/f.txt'"

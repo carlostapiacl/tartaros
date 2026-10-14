@@ -26,4 +26,4 @@ cmd = "cat {root}/vault/sec/key.txt"
 
 [control]
 # A non-denied path stays readable and the workspace writable.
-cmd = "sh -c 'cat /etc/hostname >/dev/null && echo ok > {root}/work/src/f.txt'"
+cmd = "sh -c 'cat /etc/hosts >/dev/null && echo ok > {root}/work/src/f.txt'"
