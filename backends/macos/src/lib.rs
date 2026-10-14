@@ -104,6 +104,24 @@ impl SeatbeltBackend {
                 set_rlimit(libc::RLIMIT_AS as libc::c_int, max_memory)?;
                 set_rlimit(libc::RLIMIT_NPROC as libc::c_int, max_processes)?;
                 set_rlimit(libc::RLIMIT_CPU as libc::c_int, max_cpu)?;
+                // Bound the open-fd ceiling (parity with Linux, resource campaign):
+                // cap the HARD RLIMIT_NOFILE so the agent cannot raise its soft
+                // limit to the inherited hard and exhaust fd-table memory. 65536 is
+                // generous for real toolchains.
+                {
+                    const MAX_NOFILE: libc::rlim_t = 65536;
+                    let mut rl: libc::rlimit = std::mem::zeroed();
+                    if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 {
+                        let hard = if rl.rlim_max == libc::RLIM_INFINITY {
+                            MAX_NOFILE
+                        } else {
+                            rl.rlim_max.min(MAX_NOFILE)
+                        };
+                        let soft = rl.rlim_cur.min(hard);
+                        let newrl = libc::rlimit { rlim_cur: soft, rlim_max: hard };
+                        let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &newrl);
+                    }
+                }
                 // Mark every inherited fd >= 3 close-on-exec, up to the current fd
                 // limit (not a fixed 1024). CLOEXEC, not close(): a leaked fd still
                 // does not survive into the exec'd agent (FD-1 defense), but we must
