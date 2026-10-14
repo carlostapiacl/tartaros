@@ -181,9 +181,16 @@ directory at launch; the example above targets Linux, so on macOS drop the
 Linux-only flags (`--isolate-pids`, and `--max-mem`, whose RLIMIT_AS cap the Darwin
 kernel does not enforce — both are refused with a clear message, never silently
 ignored). `--allow-domain HOST` scopes egress to that domain through the capability broker
-(HTTPS via CONNECT on port 443, SSRF-defended); the agent gets no other network —
-direct TCP is blocked by Landlock and UDP/ICMP/raw (DNS, QUIC, IPv6 datagrams) by
-the seccomp egress filter, so there is no side-channel around the broker. It is a
+(HTTPS via CONNECT on port 443, SSRF-defended); UDP/ICMP/raw (DNS, QUIC, IPv6
+datagrams) are blocked by the seccomp egress filter, and direct TCP is denied on
+every port except the broker's. **Honest limit (NET-01):** Landlock's network
+filter is port-based, not address-based, so the grant for the broker's loopback
+port cannot be pinned to loopback — a malicious agent that learns the port (it is
+in `HTTP_PROXY`) can open a direct TCP connection to an *external* host on that same
+port, bypassing the broker's domain scope. The ephemeral random port raises the bar
+but is not a guarantee, so `--allow-domain` is scoped egress for a
+**trusted-but-fallible** agent, not containment of hostile code; the full closure
+(a network-namespace-scoped broker with no external route) is tracked. It is a
 **host:port capability** — a TCP tunnel with TLS end-to-end, so the broker does
 **not** inspect SNI or the certificate; the allowed host is reachable only on 443,
 not as a raw TCP endpoint on an arbitrary port. A full

@@ -27,6 +27,14 @@ Explicitly **out of scope** (documented non-guarantees, not vulnerabilities):
 - A capability a host cannot provide. These fail closed or are reported
   `UNSUPPORTED`; they are never silently downgraded.
 - A difference in defaults or a misconfiguration.
+- **Egress scope bypass via the broker's port on Linux (NET-01, known).**
+  `--allow-domain` grants the broker's loopback port through Landlock, whose
+  network filter is port-based, not address-based — so the grant cannot be pinned
+  to loopback and a malicious agent that learns the port can open a direct TCP
+  connection to an external host on it, bypassing the domain scope. `--allow-domain`
+  is therefore scoped egress for a **trusted-but-fallible** agent, not containment
+  of hostile code. The closure (a network-namespace-scoped broker with no external
+  route) is tracked; until it lands this is a documented non-guarantee.
 
 ## Reporting a vulnerability
 
