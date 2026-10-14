@@ -516,6 +516,21 @@ fn confined_command(
             set_rlimit(libc::RLIMIT_AS as libc::c_int, max_memory)?;
             set_rlimit(libc::RLIMIT_NPROC as libc::c_int, max_processes)?;
             set_rlimit(libc::RLIMIT_CPU as libc::c_int, max_cpu)?;
+            // Bound open file descriptors: the inherited soft limit (often 1024) is
+            // raisable by the agent up to the hard limit (often ~1M), which would
+            // let it exhaust kernel fd-table memory. Cap the HARD limit so it can't
+            // be raised past a generous ceiling (65536 >> any real toolchain needs),
+            // keeping the soft limit usable. async-signal-safe (getrlimit/setrlimit).
+            {
+                const MAX_NOFILE: libc::rlim_t = 65536;
+                let mut rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 {
+                    let hard = rl.rlim_max.min(MAX_NOFILE);
+                    let soft = rl.rlim_cur.min(hard);
+                    let newrl = libc::rlimit { rlim_cur: soft, rlim_max: hard };
+                    let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &newrl);
+                }
+            }
             // Apply the seccomp filters compiled in the parent (AF_UNIX deny, the
             // syscall-hardening set, the UDP/ICMP/raw egress close, and io_uring) —
             // pre_exec only applies, never compiles (no allocation after fork,
