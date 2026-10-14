@@ -115,7 +115,14 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         `backends/microvm` implements `core::Backend`; `probe_runtime()` reports
         `runsc`/`firecracker`/`/dev/kvm`; `run` refuses (never runs under-confined)
         until guest execution exists. Builds and tests on Linux + macOS (4/4).
-  - [ ] policy→runsc OCI config + virtio-fs/9p shares; run the corpus under runsc.
+  - [x] **Backend-agnostic share mapping landed, unit-tested.** `mount_plan(policy)`
+        classifies each host path rw (writable roots) / ro (trust-handoff within
+        them) / excluded (secrets inside a root — invisible, stronger than a path
+        deny), reusing `trust_handoff_rules()` so the set is identical to the
+        shared-kernel backends; `guest_wants_egress()` captures the off-by-default
+        NIC. Pure, no runtime needed (6/6 crate tests).
+  - [ ] emit the runsc OCI config (process + the `mount_plan` shares + no-network +
+        resource limits) and run the corpus under runsc on a Linux host with runsc.
 - **M-µ2 — Firecracker**: guest kernel + rootfs build, virtio-fs shares (rw roots /
   ro handoff), vsock broker bridge, VM-size resource caps, teardown = destroy. Run
   the corpus + the multi-tenant scenarios on a KVM host. This is the tenant-isolation
