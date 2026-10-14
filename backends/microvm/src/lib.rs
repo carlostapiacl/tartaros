@@ -100,6 +100,8 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
                 "options": ["nosuid", "noexec", "nodev"] }),
         json!({ "destination": "/sys", "type": "sysfs", "source": "sysfs",
                 "options": ["nosuid", "noexec", "nodev", "ro"] }),
+        json!({ "destination": "/sys/fs/cgroup", "type": "cgroup", "source": "cgroup",
+                "options": ["nosuid", "noexec", "nodev", "relatime", "ro"] }),
     ];
     for s in mount_plan(policy) {
         let dest = s.host_path.to_string_lossy().into_owned();
@@ -369,6 +371,8 @@ mod tests {
         assert!(shm["options"].as_array().unwrap().iter().any(|o| o == "nodev"));
         assert_eq!(find("/sys").unwrap()["type"], "sysfs");
         assert!(find("/sys").unwrap()["options"].as_array().unwrap().iter().any(|o| o == "ro"));
+        let cg = find("/sys/fs/cgroup").unwrap();
+        assert!(cg["options"].as_array().unwrap().iter().any(|o| o == "ro"));
         // workspace root: rw bind
         let ws = find("/ws").unwrap();
         assert_eq!(ws["type"], "bind");
