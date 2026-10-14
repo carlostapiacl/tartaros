@@ -2,8 +2,9 @@
 //!
 //! On Linux it reads `/proc/net/tcp`(6) and attributes sockets to the watched
 //! pids via their fd socket inodes, so a burst of connects (a port scan) shows
-//! up as many outside-territory events. Pure parsing is unit-tested; the live
-//! read is Linux-only. macOS (lsof) is a planned sibling collector.
+//! up as many outside-territory events. Pure parsing is unit-tested. The live
+//! read works on both OS: `/proc/net/tcp` on Linux, `lsof -i` over the process
+//! tree on macOS.
 
 use tartaros_core::catalog::endpoint_direction;
 use tartaros_core::{Axis, Collector, EffectEvent, EffectSink, Outcome};
@@ -92,7 +93,7 @@ impl Collector for NetworkCollector {
 }
 
 /// Observe current remote endpoints for the process tree rooted at `root_pid`.
-/// Linux: real; otherwise empty (a macOS lsof collector is the planned sibling).
+/// Linux: reads `/proc/net/tcp`(6). The macOS sibling (below) uses `lsof -i`.
 #[cfg(target_os = "linux")]
 fn observe(root_pid: u32) -> Vec<Endpoint> {
     let inodes = socket_inodes(root_pid);

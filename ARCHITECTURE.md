@@ -76,14 +76,22 @@ The full list of what we capture, by axis, is in [`CATALOG.md`](CATALOG.md).
 
 ## The bridge: a complete effect log
 
-The highest-leverage piece is the log itself. Today TartarOS records denied writes;
-the full design records **allowed and denied** events across all four axes, per
-role, with timestamps. That single addition closes a sandbox gap *and* gives the
-intent layer its first-hand feed. the intent layer treats TartarOS as a replaceable source,
-not a hard dependency (there are adapters for other effect collectors).
+The highest-leverage piece is the log itself. TartarOS records **allowed and
+denied** events across the network, secret, process and MCP axes, per role, with
+timestamps — `core::effect` (the `EffectEvent` / `Outcome` / `RecordMode` model)
+fed by four collectors in `collect/`, on both OS. The **file-write axis is
+enforced today but not yet emitted as events** — that one remaining collector is
+the honest gap. The log is what gives the intent layer its first-hand feed;
+the intent layer treats TartarOS as a replaceable source, not a hard dependency (there are
+adapters for other effect collectors).
 
 ## Status
 
-See [`ROADMAP.md`](ROADMAP.md). Today: the filesystem write / trust-handoff core
-is done and measured on both OS. The effect log, ports/network, secret reads, and
-the secret broker are designed and not yet built — see the README status table.
+See [`ROADMAP.md`](ROADMAP.md). Built and measured on both OS: the filesystem
+write / trust-handoff core, read-deny of secret dirs with a specificity carve,
+per-port loopback network, domain-scoped egress through the broker, the capability
+broker (HTTP + HTTPS/CONNECT, mandatory auth, TTL, quota, SSRF defense), resource
+caps (cgroup v2 on Linux, RLIMIT on macOS), PID/mount/net isolation on Linux, and
+the effect log with its collectors. Still open: the file-write event collector, a
+microVM backend for true multi-tenant isolation, and the the intent layer intent feed. The
+per-OS matrix is the README capability table.

@@ -22,11 +22,10 @@ agrees on what counts as "outside".
 
 | axis | important attempts to capture | collector | status |
 |---|---|---|---|
-| **network** | outbound connect; port scan (many connects); loopback to a neighbour service the role wasn't granted; DNS to external resolver; bind/listen | `collect::NetworkCollector` (Linux `/proc/net/tcp`; `for_policy` wires territory) | **built + enforced**: `Policy::local_ports` opens only granted loopback ports (macOS live-verified: 8001 ✓, 8787 blocked); collector classifies via `catalog` |
-| | same on macOS | `net/lsof` (planned) | ◻️ |
-| **file (write)** | write outside the writable roots; write to a trust-handoff path (`.git/hooks`, `.vscode/tasks.json`, `.envrc`, CI config) | enforced today; event capture ◻️ | 🟡 enforced, not yet logged |
-| **secret (read)** | open fd to a secret location (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `.env`, cloud creds) | `collect::SecretCollector` (Linux `/proc/<pid>/fd`) | **built** (classification tested; live read Linux) |
-| **process** | spawning a network/exfil tool (curl, nc, ssh…); reading another process's env (`/proc/<pid>/environ` outside own tree) | `collect::ProcessCollector` | **built** (both signals tested; live read Linux) |
+| **network** | outbound connect; port scan (many connects); loopback to a neighbour service the role wasn't granted; DNS to external resolver; bind/listen | `collect::NetworkCollector` (Linux `/proc/net/tcp`, macOS `lsof -i`; `for_policy` wires territory) | **built + enforced, both OS**: `Policy::local_ports` opens only granted loopback ports (macOS live-verified: 8001 ✓, 8787 blocked); collector classifies via `catalog` |
+| **file (write)** | write outside the writable roots; write to a trust-handoff path (`.git/hooks`, `.vscode/tasks.json`, `.envrc`, CI config) | enforced today; event capture ◻️ | 🟡 enforced, not yet logged (the one remaining collector) |
+| **secret (read)** | open fd to a secret location (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `.env`, cloud creds) | `collect::SecretCollector` (Linux `/proc/<pid>/fd`, macOS `lsof`) | **built, both OS** (classification tested; live read on Linux and macOS) |
+| **process** | spawning a network/exfil tool (curl, nc, ssh…); reading another process's env (`/proc/<pid>/environ` outside own tree) | `collect::ProcessCollector` (Linux `/proc`, macOS `ps`/`lsof`) | **built, both OS** (both signals tested; live read on Linux and macOS) |
 | **mcp** | loading an MCP server not granted to the role | `collect::McpCollector` (v1, cmdline heuristic) | **built** (classification tested); precise source later |
 
 Legend: **built** · 🟡 partial · ◻️ planned (the model and catalog already accept

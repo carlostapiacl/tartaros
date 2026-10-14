@@ -3,6 +3,41 @@
 Principle: the policy is the product; backends reuse proven Apache-2.0 plumbing.
 Build only where measurement shows no existing backend can enforce the policy.
 
+## Next frontier (post-alpha, demand-driven)
+
+Prioritized against open issues in the big sandboxes (Codex CLI,
+`@anthropic-ai/sandbox-runtime`, nono, bubblewrap) and the 2026 practitioner
+discourse (Pillar "Trust Handoff Flaw", CSA, Simon Willison). The alpha already
+covers most of what those trackers ask for — carve/deny-inside-allow (srt #545,
+#193), domain egress (codex #6060, srt #65/#253), writable worktree + protected
+`.git` (codex #15505/#14338, srt #263/#171), per-path AF_UNIX (srt #343, codex
+#16910), cross-process env read (srt #160), no bind-mount residue (srt #657, bwrap
+#390), path canonicalization (srt #596), cgroup caps (bwrap #233). What is left,
+in order of value × reachability:
+
+1. **Run on hardened distros with no unprivileged userns** (Ubuntu 24.04 AppArmor,
+   Arch/Debian hardened; srt #180/#417/#498/#74/#429, bwrap #139/#801). Today we
+   fall back to the carve + a warning. Goal: a safe path that is neither a
+   vulnerable setuid helper nor a silent downgrade — detect the policy, document
+   the one honest limit, and lift it wherever a namespace *is* grantable. The
+   gap that expels whole user populations; highest reachable value.
+2. **Reliable violation observability + the file-write event collector.** Linux
+   Landlock returns EPERM without a path on older kernels and macOS drops denials
+   under log pressure (srt #696/#582); "which rule denied me and why" is a
+   top, easy-to-win ask (nono #2081). Finishing the file-write collector also
+   closes the one honest gap in the effect log and feeds the intent layer.
+3. **DNS egress parity.** Landlock mediates TCP only; `--allow-domain` resolves
+   through the broker, but a direct UDP:53 query is not cut unless `--isolate-net`.
+   Close or clearly document the UDP path so domain scoping is airtight.
+4. **Windows (native, not WSL).** A universal ecosystem hole — nono "in planning",
+   srt's `srt-win` is alpha with serious bugs (#658/#623/#559). A large bet, later.
+5. **True multi-tenant isolation (microVM / gVisor backend).** The honest "not
+   yet" we already scope out in SECURITY.md (srt #605 asks the same of srt). The
+   1.0+ moonshot; shared-kernel hardening is the ceiling until then.
+
+Cross-cutting: keep the "honest limits" contract — every capability a host cannot
+provide fails closed or reports UNSUPPORTED, never a silent downgrade.
+
 ## M0 — repo (done)
 - [x] Apache-2.0 + NOTICE + THIRD_PARTY_NOTICES
 - [x] `core`: Backend trait, Policy, trust-handoff set (design, compiles)
@@ -24,6 +59,13 @@ Build only where measurement shows no existing backend can enforce the policy.
       our profile (no `kern.proc.*`, process-info self-only) KERN_PROCARGS2 still
       reads another process's env — Seatbelt does not mediate it. Documented in
       README "Honest limits"; mitigation is per-agent macOS user (policy layer).
+      **Update (re-measured on macOS 15.7 / Darwin 24.6):** a validated direct
+      `KERN_PROCARGS2` probe returns only the executable path for another process,
+      not its environment — the leak does NOT reproduce on current macOS (see
+      README "Honest limits"). A `(deny sysctl-read (sysctl-name-prefix
+      "kern.procargs"))` is emitted anyway as defense-in-depth for older macOS.
+      The two measurements above are kept as a dated record; the current README is
+      authoritative.
 - [x] integration tests (`tests/trust_handoff.rs`, macOS): 6 live checks green,
       including git running under the profile
 - [ ] shell rc / CI-config handoff paths beyond `.github/workflows`
@@ -40,8 +82,11 @@ Build only where measurement shows no existing backend can enforce the policy.
       nested `.git/hooks` denied, `.git/objects` still writable, ancestor rename
       denied, control writes work, exit 143. The deny-in-allow that nono refuses.
       (Landlock syscalls work under Docker's default seccomp, Docker 29.)
-- [ ] bwrap fallback for paths where direct-file-creation in an on-path dir
-      matters, with Codex's flock mount registry (our report #4)
+- [x] create-at-repo-root while the handoff stays protected — solved our own way
+      (not bwrap): read-only bind mounts of the handoff set over a writable
+      workspace, root or unprivileged user namespace (`namespace.rs::setup_ro_binds`);
+      touches only existing paths (no placeholder residue). Falls back to the carve
+      + an `explain` warning where no mount namespace is available.
 - [ ] ABI probe (V1..V6 best-of) instead of fixed V1; Refer/Truncate hardening
 
 ## M3 — integration + release
@@ -70,7 +115,7 @@ Build only where measurement shows no existing backend can enforce the policy.
       effect log captured first-hand (secret read of ~/.ssh + curl exec), filtered
       by `RecordMode`. `NetworkCollector` now walks the process tree (child
       sockets attributed)
-- [ ] macOS siblings (lsof for net, fd for secret) 
+- [x] macOS siblings (lsof for net, fd for secret) — done; see M7 below
 - [x] **ports per role**: `Policy::local_ports` opens only granted loopback
       ports (macOS live-verified: 8001 reachable, 8787 blocked); unit-tested.
       `NetworkCollector::for_policy` ties observation to the same territory
@@ -80,7 +125,8 @@ Build only where measurement shows no existing backend can enforce the policy.
       (adopts nono #2080); live-verified on a Linux host: granted 8001 connects, 8787 and
       external blocked. Honest limit: port-based not host-based (loopback vs
       external same port needs the proxy); needs kernel >= 6.7
-- [ ] domain allow-list via proxy (external hosts beyond IP)
+- [x] domain allow-list via proxy (external hosts beyond IP) — `--allow-domain`
+      through the broker as a CONNECT/forward proxy (HTTPS end-to-end, SSRF-defended)
 - [x] **secret reads**: read-deny of secret dirs — see M4 above (done, both OS)
 - [x] **secret broker (the single gateway)**: `broker` crate — HTTP forward
       proxy injects the secret; agent reaches ONLY the broker port, authenticates
@@ -92,7 +138,9 @@ Build only where measurement shows no existing backend can enforce the policy.
       direct 443 blocked). The agent never does TLS nor holds the token
 - [x] fix: Linux carve only excludes denies that EXIST (Landlock is inode-based;
       absent trust-handoff files are a macOS/Seatbelt strength, not Landlock's)
-- [ ] **close the Linux env-leak**: restrict /proc or PID namespace
+- [x] **close the Linux env-leak**: `--isolate-pids` enters a private PID + mount
+      namespace (`backends/linux/src/namespace.rs`); the agent sees only its own
+      subtree and cannot read another process's `/proc/<pid>/environ`
 - [ ] **resources, not paths**: evolve `Policy` toward capabilities
 
 ## M5 — intent layer (the intent layer) on the effect log
@@ -128,8 +176,8 @@ Build only where measurement shows no existing backend can enforce the policy.
       not readable (measured: leak blocked even with no sandbox rule). Defense-in-
       depth: `isolate_process_info` excludes `/proc` from the read grant (covers
       `ptrace_scope=0`); measured that sh/cat/ls/curl/git/python3 still run and the
-      full suite (smoke/net/readdeny/P0) stays green. PID namespace stays out
-      (`unshare` not portable under Docker).
+      full suite (smoke/net/readdeny/P0) stays green. (Superseded: the PID
+      namespace is now implemented and opt-in via `--isolate-pids`; see M4 above.)
 
 ## Security findings (external review #2, 2026-10-13)
 - [x] **P0-A broker auth now mandatory by default**: `serve` fails closed without
@@ -224,5 +272,6 @@ Build only where measurement shows no existing backend can enforce the policy.
 - `--max-procs` (RLIMIT_NPROC): **best-effort only.** Measured on a Linux host: running as
   root it did NOT contain a 150-fork storm — root/CAP_SYS_RESOURCE bypasses
   RLIMIT_NPROC. Confirms the review: setrlimit is insufficient for multi-tenant.
-- [ ] **cgroups v2 (`pids.max`, `memory.max`)** for a guaranteed per-sandbox cap
-      regardless of uid/caps — the real multi-tenant fix. (next)
+- [x] **cgroups v2 (`pids.max`, `memory.max`)** for a guaranteed per-sandbox cap
+      regardless of uid/caps — implemented in `backends/linux/src/cgroup.rs`
+      (`pids.max`, `memory.max`, `cgroup.kill`); root-proof, live-verified.
