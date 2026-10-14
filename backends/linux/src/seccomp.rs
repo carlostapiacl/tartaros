@@ -11,7 +11,7 @@ use seccompiler::{
 };
 
 fn to_io(m: String) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, m)
+    std::io::Error::other(m)
 }
 
 fn finalize(filter: SeccompFilter) -> std::io::Result<BpfProgram> {
