@@ -152,6 +152,10 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         could not: `to_oci_config` emitted ro binds for trust-handoff paths that do
         not exist on disk, and a missing bind source makes runsc abort the whole
         sandbox — absent bind sources are now skipped (see `emit_oci` example).
+        A second run validated the **trust-handoff differentiator** under gVisor:
+        overwriting an EXISTING `.git/hooks/pre-commit` fails with "Read-only file
+        system" (the ro bind holds), a normal workspace write succeeds, the masked
+        secret is unreadable, and the host hook is untouched.
   - [ ] run the FULL corpus under runsc (scripted bundle per scenario) and settle
         `process.user`/uid mapping against the runtime (remaining M-µ1 polish).
 - **M-µ2 — Firecracker**: guest kernel + rootfs build, virtio-fs shares (rw roots /
