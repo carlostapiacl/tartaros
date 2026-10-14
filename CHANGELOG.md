@@ -100,6 +100,13 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
 - **`--seccomp-strict`**: deny dangerous syscalls (module load, kexec, keyring,
   bpf, perf, ptrace, process_vm_*, mount/unshare/setns, reboot/time/swap).
 - Opt-in `--deny-unix` (AF_UNIX via seccomp).
+- **Host-socket reachability is never silent (F-3)**: Linux has no per-path AF_UNIX
+  filtering (Landlock does not govern `connect()` to a pathname socket; seccomp is
+  all-or-nothing), so a confined agent can reach `docker.sock`, containerd, D-Bus
+  or systemd — a host-escape vector — unless AF_UNIX is denied. The `hostile-code`
+  / `multi-tenant` profiles and `--deny-unix` block it; the default now **warns at
+  launch** when such a socket is present (reproduced on the Linux test host: a default run reached
+  `docker.sock` and the D-Bus bus; the hardened profiles close it).
 
 ### Effect log (observability)
 - Collectors observe the process tree and emit `EffectEvent`s on five axes —

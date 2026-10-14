@@ -105,6 +105,16 @@ silently passing.
   whole-root-writable **bind-mount** strategy a not-yet-existing handoff path is
   not protected, and a newly-created nested repo's hooks are never auto-protected.
   `explain` states this for the active strategy. Measured, not hidden.
+- **AF_UNIX pathname sockets are not path-filtered on Linux.** Landlock does not
+  govern `connect()` to a unix socket by path, and the seccomp AF_UNIX deny is
+  all-or-nothing, so a confined agent can reach a host daemon's socket
+  (`docker.sock`, containerd, D-Bus, systemd) unless AF_UNIX is denied wholesale —
+  a host-escape vector. `--deny-unix` and the `hostile-code` / `multi-tenant`
+  profiles block it; the default (`local-agent`) does not, but **warns loudly** at
+  launch when such a socket is present rather than leaving it silent. macOS filters
+  AF_UNIX by path (`allowUnixSockets`) and denies it by default in the Seatbelt
+  profile, so this is Linux-only. (Reproduced: a default run reached `docker.sock`
+  and the D-Bus bus; `--deny-unix` / `hostile-code` close it.)
 - **The effect log is observed, not a guarantee.** Enforcement is guaranteed; the
   log is fed by collectors that sample the process tree (network, secret, process,
   MCP and file-write, on both OS), so a very short-lived event can be missed. The
