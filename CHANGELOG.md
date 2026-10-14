@@ -5,6 +5,19 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### N1 — reach declared loopback ports through the broker
+- A role's declared `local_ports` (e.g. a local MCP server on `127.0.0.1:8768` or a
+  model proxy) are now reachable THROUGH the broker, not just by a direct loopback
+  connection. Clients that route everything via `HTTP_PROXY` (ignoring `NO_PROXY`,
+  which is how srt is used) previously failed, because the broker only did HTTPS
+  CONNECT to allowed domains and its SSRF defense blocked plain-HTTP-to-loopback.
+  The broker now forwards plain HTTP and CONNECT to `127.0.0.1`/`::1`/`localhost` on
+  EXACTLY the declared `local_ports` — an operator-declared exception to SSRF, with
+  no secret injection and no host allow-list. An undeclared loopback port through
+  the broker is still refused (403), and a non-loopback host on a declared port is
+  not (cannot smuggle an external host). `Broker::with_loopback_ports`; the CLI
+  passes the role's `local_ports`. Verified on macOS; broker unit test added.
+
 ### NET-01 closed on Linux-root — network-namespace-scoped egress broker
 - `--allow-domain` now (Linux, as root) runs the agent in a network namespace whose
   only route is a veth to the broker's host-side address, with **no default route**.
