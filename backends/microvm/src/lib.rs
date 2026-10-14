@@ -143,18 +143,22 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
         resources.insert("pids".into(), json!({ "limit": n }));
     }
 
-    // Namespaces: a fresh pid/mount/ipc/uts, and — when egress is NOT wanted — a
-    // fresh empty network namespace (no `path`, so the runtime creates it). An
-    // egress policy would instead bridge to a host-side broker (design, not here).
-    let mut namespaces = vec![
+    // Namespaces: a fresh pid/mount/ipc/uts, and ALWAYS a fresh empty network
+    // namespace (no `path`, so the runtime creates an isolated one with loopback
+    // only). This is fail-closed: omitting the netns when egress is wanted would
+    // make an OCI runtime share the HOST network — full, unbrokered egress, the
+    // opposite of what a domain-scoped policy promises. The scoped-egress path (a
+    // host-side broker bridged into this netns) is not built yet, so until it is,
+    // an egress policy under the microVM backend simply gets no network rather than
+    // the host's. `guest_wants_egress` is still exposed so the eventual bridge knows
+    // whether to wire one in.
+    let namespaces = vec![
         json!({"type": "pid"}),
         json!({"type": "mount"}),
         json!({"type": "ipc"}),
         json!({"type": "uts"}),
+        json!({"type": "network"}),
     ];
-    if !guest_wants_egress(policy) {
-        namespaces.push(json!({"type": "network"}));
-    }
 
     // Drop ALL capabilities (every OCI set empty). Without this the runtime applies
     // its DEFAULT capability set — which still includes CAP_NET_RAW, CAP_MKNOD,
@@ -420,14 +424,21 @@ mod tests {
     }
 
     #[test]
-    fn oci_config_bridges_network_when_egress_wanted() {
+    fn oci_config_always_isolates_network_even_when_egress_wanted() {
+        // Fail-closed: even when the policy wants egress, the generated config MUST
+        // still isolate the network namespace. Omitting it would make an OCI runtime
+        // share the HOST network (unbrokered egress) — the opposite of the scoping
+        // promise. The scoped-egress bridge is future work; until then, no network.
         let mut p = Policy::default();
         p.writable_roots = vec![PathBuf::from("/ws")];
         p.allow_domains = vec!["example.com".into()];
+        assert!(guest_wants_egress(&p));
         let v: serde_json::Value =
             serde_json::from_str(&to_oci_config(&p, &["true".into()], "/rootfs")).unwrap();
-        // egress wanted -> do NOT isolate the network namespace here (bridged host-side)
         let ns = v["linux"]["namespaces"].as_array().unwrap();
-        assert!(!ns.iter().any(|n| n["type"] == "network"));
+        assert!(
+            ns.iter().any(|n| n["type"] == "network"),
+            "network namespace must always be isolated (never share host net)"
+        );
     }
 }

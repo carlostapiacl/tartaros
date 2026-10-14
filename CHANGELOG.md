@@ -5,6 +5,29 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Audit response (external review @ 3096508)
+- **POL-01 (P0, fixed):** `--settings` accepted an any-depth `denyRead` pattern
+  (e.g. `**/.claude/**`) by equivalence with the trust-handoff set — but that set
+  protects WRITES, not reads, so the read-deny was silently not applied, breaking
+  the apply-fully-or-refuse contract. Any-depth read-denies are now **refused**
+  (no any-depth read engine exists); any-depth write-denies still map to the
+  handoff set. Verified on macOS + Linux.
+- **`explain` secret redaction (P1, fixed):** `explain` printed `--env KEY=VALUE`
+  values verbatim (a secret could land in logs/CI). It now shows only names:
+  `KEY=<redacted>` for an explicit set, `KEY (inherited)` for a passthrough.
+- **microVM OCI egress (P1, fixed):** the config omitted the network namespace when
+  egress was wanted, which under an OCI runtime means sharing the HOST network
+  (unbrokered egress). The network namespace is now **always** isolated (fail-closed);
+  the scoped-egress bridge is tracked future work.
+- **NET-01 (P0, confirmed + documented, closure tracked):** reproduced on a Linux
+  host — `--allow-domain` grants the broker's loopback port via Landlock, whose
+  filter is port-based not address-based, so a malicious agent that learns the port
+  can connect directly to an external host on it, bypassing the broker. Corrected
+  the overclaims (README/SECURITY/code no longer call the broker airtight), added a
+  loud runtime warning, and documented it as a non-guarantee: `--allow-domain` is
+  scoped egress for a trusted-but-fallible agent, not hostile-code containment. The
+  real closure is a network-namespace-scoped broker (no external route) — tracked.
+
 ### microVM (M-µ1) — validated against a real runtime (runsc/gVisor)
 - Ran the generated OCI `config.json` + a busybox rootfs under `runsc run`
   (systrap platform, no KVM). Confirmed by the runtime, not just unit tests:

@@ -319,7 +319,8 @@ fn warn_reachable_host_sockets(p: &Policy) {
 /// host loopback as a CONNECT/forward proxy scoped to those hosts (with SSRF
 /// defense), point the agent's HTTP(S)_PROXY at it, and grant ONLY that loopback
 /// port. The agent reaches the allowed domains through the broker and nothing
-/// else — the broker is the one door out of the box.
+/// else via the proxy env — though see NET-01 below: on Linux the port grant is not
+/// loopback-pinned, so the broker is the intended door, not an airtight one.
 fn start_egress_broker(p: &mut Policy) {
     if p.allow_domains.is_empty() {
         return;
@@ -345,7 +346,16 @@ fn start_egress_broker(p: &mut Policy) {
         eprintln!("tartaros: cannot start egress broker: {e}");
         exit(1);
     });
-    // Grant exactly this one loopback port; all other egress remains denied.
+    // Grant this one port so the agent can reach the broker. HONEST LIMIT (NET-01):
+    // Landlock's network filter is PORT-based, not address-based — it cannot pin the
+    // grant to loopback. So granting the broker's port also permits a DIRECT TCP
+    // connection to any *external* host on that same port, bypassing the broker's
+    // domain scope and SSRF defense. A cooperating-malicious agent that learns the
+    // port (it is in HTTP_PROXY) can exfiltrate this way. The ephemeral random port
+    // raises the bar but is not a guarantee. The real closure is a network namespace
+    // with the broker bridged in (loopback-only, no external route) — tracked, not
+    // yet built. Until then, treat --allow-domain as "scoped egress for a
+    // trusted-but-fallible agent", NOT containment of hostile code.
     p.local_ports.push(port);
     // Route the agent through it. Set upper- and lower-case forms (tools differ),
     // and exempt loopback so the agent's own localhost traffic is not proxied.
@@ -357,6 +367,17 @@ fn start_egress_broker(p: &mut Policy) {
         std::env::set_var(k, "127.0.0.1,localhost,::1");
     }
     eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; TCP tunnel, no TLS inspection)", hosts.join(", "));
+    // NET-01: be loud about the port-based Landlock limit on Linux (macOS Seatbelt
+    // filters by remote address, so this does not apply there).
+    if cfg!(target_os = "linux") {
+        eprintln!(
+            "tartaros: warning: egress scoping relies on a port grant that Landlock \
+             cannot pin to loopback (NET-01) — a malicious agent that learns this port \
+             could connect directly to an external host on it, bypassing the broker. \
+             Safe for a trusted-but-fallible agent; do NOT rely on it to contain \
+             hostile code until the network-namespace-scoped broker lands."
+        );
+    }
     std::thread::spawn(move || {
         let mut sink = tartaros_core::VecSink::default();
         let _ = broker.serve(listener, &mut sink);
@@ -530,9 +551,23 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
                 if read { p.read_denies.push(path); }
             }
             PatKind::AnyDepth => {
+                // The built-in trust-handoff set provides any-depth WRITE protection,
+                // so it can satisfy a denyWrite. It does NOT provide read-deny, and
+                // TartarOS has no any-depth read engine — so a denyRead (or a combined
+                // read+write deny) with a `**` pattern cannot be fully enforced here.
+                // Accepting it by equivalence with the handoff (write) set would leave
+                // the path READABLE while the settings file asked to deny reads: a
+                // silent under-enforcement (POL-01). Refuse instead (apply-fully-or-refuse).
+                if read {
+                    refuse(&format!(
+                        "an any-depth read-deny pattern '{x}' (the trust-handoff set \
+                         protects writes, not reads, and there is no any-depth read \
+                         rule); use a concrete path under denyRead"
+                    ));
+                }
                 if handoff_covers(&n) {
                     if verbose {
-                        eprintln!("tartaros: --settings: '{x}' is covered by the built-in trust-handoff set at any depth; applying that.");
+                        eprintln!("tartaros: --settings: '{x}' is covered by the built-in trust-handoff set (write protection) at any depth; applying that.");
                     }
                 } else {
                     refuse_glob(x);
@@ -736,8 +771,19 @@ fn explain(p: &Policy) {
     } else {
         println!("environment: scrubbed to safe allowlist ({})", tartaros_core::ENV_ALLOWLIST.join(", "));
         println!("  + LC_* (locale)");
+        // Show only NAMES, never values: a `--env KEY=VALUE` carries a literal secret,
+        // and explain output lands in logs/CI. Distinguish inherited (KEY) from
+        // explicitly-set (KEY=…, value redacted).
         if !p.env_passthrough.is_empty() {
-            println!("  + explicit --env: {}", p.env_passthrough.join(", "));
+            let shown: Vec<String> = p
+                .env_passthrough
+                .iter()
+                .map(|e| match e.split_once('=') {
+                    Some((k, _)) => format!("{k}=<redacted>"),
+                    None => format!("{e} (inherited)"),
+                })
+                .collect();
+            println!("  + explicit --env: {}", shown.join(", "));
         }
     }
     if let Some(t) = p.timeout { println!("timeout: {}s", t.as_secs()); }
