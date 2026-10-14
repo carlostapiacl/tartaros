@@ -126,6 +126,33 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
         namespaces.push(json!({"type": "network"}));
     }
 
+    // Drop ALL capabilities (every OCI set empty). Without this the runtime applies
+    // its DEFAULT capability set — which still includes CAP_NET_RAW, CAP_MKNOD,
+    // CAP_SETUID/SETGID, CAP_CHOWN, CAP_DAC_OVERRIDE, … — leaving the guest process
+    // more privileged than our Landlock backend, which drops the bounding set to
+    // empty (namespace::drop_all_capabilities). A confined agent needs none of them.
+    let no_caps = json!({
+        "bounding": [], "effective": [], "inheritable": [], "permitted": [], "ambient": []
+    });
+
+    // Standard OCI masked/readonly paths: hide host-info leak channels under /proc
+    // and /sys and freeze the sensitive /proc control files. Same intent as the
+    // Linux backend's /proc isolation, expressed in the config the runtime enforces.
+    let masked_paths = json!([
+        "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list",
+        "/proc/timer_stats", "/proc/sched_debug", "/proc/scsi", "/sys/firmware"
+    ]);
+    let readonly_paths = json!([
+        "/proc/asound", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys",
+        "/proc/sysrq-trigger"
+    ]);
+
+    // Cap the open-file ceiling, matching the Linux backend's hard RLIMIT_NOFILE
+    // (an unbounded fd table is a cheap local-DoS lever).
+    let rlimits = json!([
+        { "type": "RLIMIT_NOFILE", "hard": 65536u64, "soft": 65536u64 }
+    ]);
+
     let config = json!({
         "ociVersion": "1.0.2",
         "process": {
@@ -134,12 +161,16 @@ pub fn to_oci_config(policy: &Policy, command: &[String], rootfs: &str) -> Strin
             "args": command,
             "env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
             "noNewPrivileges": true,
+            "capabilities": no_caps,
+            "rlimits": rlimits,
         },
         "root": { "path": rootfs, "readonly": true },
         "mounts": mounts,
         "linux": {
             "resources": resources,
             "namespaces": namespaces,
+            "maskedPaths": masked_paths,
+            "readonlyPaths": readonly_paths,
         },
     });
     serde_json::to_string_pretty(&config).unwrap_or_default()
@@ -291,6 +322,25 @@ mod tests {
         assert_eq!(v["process"]["args"], serde_json::json!(cmd));
         assert_eq!(v["process"]["cwd"], "/ws");
         assert_eq!(v["process"]["noNewPrivileges"], true);
+
+        // hardening: every capability set is empty (drop all caps), rlimit set, and
+        // the standard /proc masked/readonly paths are present — so the guest is no
+        // more privileged than the Landlock backend.
+        for set in ["bounding", "effective", "inheritable", "permitted", "ambient"] {
+            assert_eq!(
+                v["process"]["capabilities"][set].as_array().unwrap().len(),
+                0,
+                "capability set {set} must be empty"
+            );
+        }
+        let rl = v["process"]["rlimits"].as_array().unwrap();
+        assert!(rl.iter().any(|r| r["type"] == "RLIMIT_NOFILE" && r["hard"] == 65536));
+        let masked = v["linux"]["maskedPaths"].as_array().unwrap();
+        assert!(masked.iter().any(|p| p == "/proc/kcore"));
+        assert!(masked.iter().any(|p| p == "/sys/firmware"));
+        let ro = v["linux"]["readonlyPaths"].as_array().unwrap();
+        assert!(ro.iter().any(|p| p == "/proc/sys"));
+        assert!(ro.iter().any(|p| p == "/proc/sysrq-trigger"));
 
         let mounts = v["mounts"].as_array().unwrap();
         let find = |dest: &str| mounts.iter().find(|m| m["destination"] == dest).cloned();
