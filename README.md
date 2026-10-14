@@ -183,14 +183,18 @@ kernel does not enforce — both are refused with a clear message, never silentl
 ignored). `--allow-domain HOST` scopes egress to that domain through the capability broker
 (HTTPS via CONNECT on port 443, SSRF-defended); UDP/ICMP/raw (DNS, QUIC, IPv6
 datagrams) are blocked by the seccomp egress filter, and direct TCP is denied on
-every port except the broker's. **Honest limit (NET-01):** Landlock's network
-filter is port-based, not address-based, so the grant for the broker's loopback
-port cannot be pinned to loopback — a malicious agent that learns the port (it is
-in `HTTP_PROXY`) can open a direct TCP connection to an *external* host on that same
-port, bypassing the broker's domain scope. The ephemeral random port raises the bar
-but is not a guarantee, so `--allow-domain` is scoped egress for a
-**trusted-but-fallible** agent, not containment of hostile code; the full closure
-(a network-namespace-scoped broker with no external route) is tracked. It is a
+every port except the broker's. **NET-01 closure:** Landlock's network filter is
+port-based, not address-based, so a port grant alone cannot stop a malicious agent
+from reaching an external host on the broker's port. On **Linux as root** TartarOS
+now closes this: the agent runs in a network namespace whose only route is a veth to
+the broker — no default route — so it reaches the broker and nothing else
+(verified: an external host and the host's own public IP on the broker port are both
+unreachable, while the allowed domain works through the broker). It is **fail-closed**
+(if the namespace can't be built and verified isolating, it tears down and falls
+back). On **macOS** the Seatbelt profile filters egress by remote address, so the
+gap never applied. The fallback — **non-root Linux**, where the scoped namespace
+can't be created — is the port grant with a loud warning, scoped egress for a
+*trusted-but-fallible* agent, not hostile-code containment. It is a
 **host:port capability** — a TCP tunnel with TLS end-to-end, so the broker does
 **not** inspect SNI or the certificate; the allowed host is reachable only on 443,
 not as a raw TCP endpoint on an arbitrary port. A full

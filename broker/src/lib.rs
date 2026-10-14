@@ -216,7 +216,15 @@ impl Broker {
 
     /// Bind to a loopback port (0 = any free port). Returns the broker's port.
     pub fn bind(&self, port: u16) -> std::io::Result<(TcpListener, u16)> {
-        let l = TcpListener::bind(("127.0.0.1", port))?;
+        self.bind_addr("127.0.0.1", port)
+    }
+
+    /// Bind to a specific address and port (0 = any free port). Used by the
+    /// network-namespace egress scoping (NET-01): the broker binds on the host end
+    /// of a veth so the agent, which has no route except to that address, can reach
+    /// only the broker — not the open internet on the same port.
+    pub fn bind_addr(&self, ip: &str, port: u16) -> std::io::Result<(TcpListener, u16)> {
+        let l = TcpListener::bind((ip, port))?;
         let p = l.local_addr()?.port();
         Ok((l, p))
     }

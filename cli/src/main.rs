@@ -35,6 +35,16 @@
 
 use tartaros_core::{Access, FsRule, Network, Policy, Profile};
 use serde::Deserialize;
+
+#[cfg(target_os = "linux")]
+mod egress_ns;
+
+/// Teardown guard for scoped-egress state held across the run. On Linux it owns the
+/// network namespace (NET-01); elsewhere there is nothing to tear down.
+#[cfg(target_os = "linux")]
+type EgressGuard = Option<egress_ns::EgressNs>;
+#[cfg(not(target_os = "linux"))]
+type EgressGuard = ();
 use std::path::PathBuf;
 use std::process::exit;
 use std::time::Duration;
@@ -221,8 +231,9 @@ fn cmd_run(rest: &[String]) -> ! {
     // and --private-tmp set their vars (proxy, TMPDIR) in this process's env below;
     // those names are in the allowlist, so they survive into the child.
     // Domain-scoped egress: start the capability broker and route the agent
-    // through it (sets proxy env, grants the one loopback port). Mutates p.
-    start_egress_broker(&mut p);
+    // through it. On Linux-as-root this builds a scoped network namespace (NET-01);
+    // the returned guard tears it (netns + veth + firewall rule) down after the run.
+    let egress_guard = start_egress_broker(&mut p);
     // Print the profile's honest caveat before running — a tier must never
     // silently overclaim (esp. multi-tenant on a shared kernel).
     if let Some(pr) = profile {
@@ -237,6 +248,13 @@ fn cmd_run(rest: &[String]) -> ! {
     if let Some(dir) = private_tmp {
         let _ = std::fs::remove_dir_all(&dir);
     }
+    // Drop the egress guard here: `process::exit` below skips destructors, so the
+    // scoped network namespace (+ veth + firewall rule) would otherwise leak. The
+    // `let _ =` binding drops it immediately (a no-op on non-Linux, where it is ()).
+    #[cfg(target_os = "linux")]
+    std::mem::drop(egress_guard);
+    #[cfg(not(target_os = "linux"))]
+    let _ = egress_guard;
     exit(code);
 }
 
@@ -316,73 +334,101 @@ fn warn_reachable_host_sockets(p: &Policy) {
 }
 
 /// If the policy names allowed egress domains, start the capability broker on
-/// host loopback as a CONNECT/forward proxy scoped to those hosts (with SSRF
-/// defense), point the agent's HTTP(S)_PROXY at it, and grant ONLY that loopback
-/// port. The agent reaches the allowed domains through the broker and nothing
-/// else via the proxy env — though see NET-01 below: on Linux the port grant is not
-/// loopback-pinned, so the broker is the intended door, not an airtight one.
-fn start_egress_broker(p: &mut Policy) {
+/// host side as a CONNECT/forward proxy scoped to those hosts (with SSRF defense)
+/// and point the agent's HTTP(S)_PROXY at it. NET-01: a Landlock port grant alone
+/// cannot stop the agent reaching an external host on the broker's port, so on
+/// Linux-as-root we instead run the agent in a network namespace whose only route
+/// is a veth to the broker (no default route) — the broker becomes the one door out
+/// at the network layer, fail-closed. macOS filters egress by address (no gap). The
+/// non-root fallback is the bare port grant with a loud NET-01 warning.
+fn start_egress_broker(p: &mut Policy) -> EgressGuard {
     if p.allow_domains.is_empty() {
-        return;
+        return Default::default();
     }
     // `--net` opens all egress, which would make the domain scope meaningless.
     if p.network == Some(Network::Allowed) {
         eprintln!("tartaros: --allow-domain scopes egress; it contradicts --net (allow all). Pick one.");
         exit(2);
     }
-    // A fully isolated network namespace has only loopback *inside* it and cannot
-    // reach the broker on the host's loopback, so the two are mutually exclusive.
     if p.isolate_network {
-        eprintln!("tartaros: --allow-domain needs the host-loopback broker, which an isolated network namespace blocks. Drop one.");
+        eprintln!("tartaros: --allow-domain runs the broker and bridges it into the agent's network namespace; it contradicts --isolate-net (no egress at all). Drop one.");
         exit(2);
     }
     let hosts = p.allow_domains.clone();
-    let broker = tartaros_broker::Broker::new(p.role.clone(), vec![])
-        .insecure_no_auth() // loopback + the sandbox is the boundary; no secret to send
-        .with_allowed_hosts(hosts.clone())
-        .with_connect_ports(vec![443]) // HTTPS only: an allowed host is not a raw TCP endpoint (ADV-03)
-        .with_allow_internal(false); // SSRF / rebinding defense stays on
+    let make_broker = || {
+        tartaros_broker::Broker::new(p.role.clone(), vec![])
+            .insecure_no_auth() // the sandbox boundary is the auth; no secret to send
+            .with_allowed_hosts(hosts.clone())
+            .with_connect_ports(vec![443]) // HTTPS only (ADV-03)
+            .with_allow_internal(false) // SSRF / rebinding defense stays on
+    };
+    let set_proxy = |ip: &str, port: u16| {
+        let proxy = format!("http://{ip}:{port}");
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
+            std::env::set_var(k, &proxy);
+        }
+        for k in ["NO_PROXY", "no_proxy"] {
+            std::env::set_var(k, "127.0.0.1,localhost,::1");
+        }
+    };
+
+    // NET-01 closure (Linux, root): run the agent in a network namespace whose only
+    // route is a veth to the broker's host IP — no default route — so it reaches the
+    // broker and nothing else. Fail-closed: if the namespace cannot be built AND
+    // verified isolating, tear down and fall back to the loopback broker with the
+    // documented NET-01 warning (a known, honest non-guarantee), never a silent
+    // weaker mode.
+    #[cfg(target_os = "linux")]
+    if !p.isolate_network && egress_ns::available() {
+        let broker = make_broker();
+        let hosts_for_log = hosts.clone();
+        let bind_on = move |ip: &str| -> std::io::Result<u16> {
+            let (listener, port) = broker.bind_addr(ip, 0)?;
+            std::thread::spawn(move || {
+                let mut sink = tartaros_core::VecSink::default();
+                let _ = broker.serve(listener, &mut sink);
+            });
+            let _ = &hosts_for_log;
+            Ok(port)
+        };
+        match egress_ns::setup(bind_on) {
+            Ok((ns, port)) => {
+                p.local_ports.push(port); // reach the broker inside the netns
+                p.egress_netns = Some(ns.name.clone());
+                set_proxy(&ns.host_ip, port);
+                eprintln!(
+                    "tartaros: egress broker on {}:{port} in a scoped network namespace — allowed: {} (NET-01 closed: the agent has no route except to the broker)",
+                    ns.host_ip,
+                    hosts.join(", ")
+                );
+                return Some(ns);
+            }
+            Err(reason) => {
+                eprintln!("tartaros: warning: could not build the scoped egress namespace ({reason}); falling back to the loopback broker. {}", NET01_FALLBACK);
+            }
+        }
+    }
+
+    // Fallback (macOS, non-root Linux, or netns setup failed): loopback broker.
+    let broker = make_broker();
     let (listener, port) = broker.bind(0).unwrap_or_else(|e| {
         eprintln!("tartaros: cannot start egress broker: {e}");
         exit(1);
     });
-    // Grant this one port so the agent can reach the broker. HONEST LIMIT (NET-01):
-    // Landlock's network filter is PORT-based, not address-based — it cannot pin the
-    // grant to loopback. So granting the broker's port also permits a DIRECT TCP
-    // connection to any *external* host on that same port, bypassing the broker's
-    // domain scope and SSRF defense. A cooperating-malicious agent that learns the
-    // port (it is in HTTP_PROXY) can exfiltrate this way. The ephemeral random port
-    // raises the bar but is not a guarantee. The real closure is a network namespace
-    // with the broker bridged in (loopback-only, no external route) — tracked, not
-    // yet built. Until then, treat --allow-domain as "scoped egress for a
-    // trusted-but-fallible agent", NOT containment of hostile code.
     p.local_ports.push(port);
-    // Route the agent through it. Set upper- and lower-case forms (tools differ),
-    // and exempt loopback so the agent's own localhost traffic is not proxied.
-    let proxy = format!("http://127.0.0.1:{port}");
-    for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
-        std::env::set_var(k, &proxy);
-    }
-    for k in ["NO_PROXY", "no_proxy"] {
-        std::env::set_var(k, "127.0.0.1,localhost,::1");
-    }
+    set_proxy("127.0.0.1", port);
     eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; TCP tunnel, no TLS inspection)", hosts.join(", "));
-    // NET-01: be loud about the port-based Landlock limit on Linux (macOS Seatbelt
-    // filters by remote address, so this does not apply there).
-    if cfg!(target_os = "linux") {
-        eprintln!(
-            "tartaros: warning: egress scoping relies on a port grant that Landlock \
-             cannot pin to loopback (NET-01) — a malicious agent that learns this port \
-             could connect directly to an external host on it, bypassing the broker. \
-             Safe for a trusted-but-fallible agent; do NOT rely on it to contain \
-             hostile code until the network-namespace-scoped broker lands."
-        );
-    }
+    #[cfg(target_os = "linux")]
+    eprintln!("tartaros: warning: {NET01_FALLBACK}");
     std::thread::spawn(move || {
         let mut sink = tartaros_core::VecSink::default();
         let _ = broker.serve(listener, &mut sink);
     });
+    Default::default()
 }
+
+#[cfg(target_os = "linux")]
+const NET01_FALLBACK: &str = "egress scoping now relies on a port grant that Landlock cannot pin to loopback (NET-01) — a malicious agent that learns the port could reach an external host on it, bypassing the broker. Safe for a trusted-but-fallible agent; for hostile code run as root so the scoped network namespace can be used.";
 
 fn cmd_explain(opts: &[String]) -> ! {
     let (p, _, profile) = build_policy(opts, true); // explain: verbose

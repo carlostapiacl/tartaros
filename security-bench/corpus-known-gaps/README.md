@@ -6,9 +6,21 @@ verified) and tracked here with a fix plan.
 Resolved: ipc-unix-socket via opt-in seccomp `deny_unix_sockets` (2026-10-13 —
 moved back to `corpus/`).
 
+Resolved: **NET-01** via a network-namespace-scoped egress broker (2026-10-14).
+On Linux as root, `--allow-domain` runs the agent in a netns whose only route is a
+veth to the broker (no default route), fail-closed; verified on a Linux host that
+the broker port on an external IP, and any external host, are unreachable while the
+allowed domain works through the broker. macOS was never affected (Seatbelt filters
+by address). The non-root Linux fallback (port grant + warning) remains a documented
+non-guarantee. Details below.
+
 ## Open
 
-### NET-01 — egress scope bypass via the broker's port (Linux, P0)
+_None open._
+
+## Resolved detail
+
+### NET-01 — egress scope bypass via the broker's port (Linux, P0) — CLOSED
 
 **Reproduced** on a Linux lab host (2026-10-14). `--allow-domain` starts the broker
 on a loopback ephemeral port and grants it through Landlock
