@@ -180,9 +180,9 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
 /// existing paths only — the working tree is never materialized/touched).
 #[cfg(target_os = "linux")]
 fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
-    if unsafe { libc::geteuid() } != 0 {
-        return Vec::new(); // need CAP_SYS_ADMIN for a mount namespace
-    }
+    // Need a mount namespace: real root has it; otherwise a user namespace can
+    // grant it (unless the host blocks unprivileged userns, e.g. AppArmor). The
+    // probe forks, so only call it when there is actually something to protect.
     let mut paths: Vec<PathBuf> = Vec::new();
     for r in policy.trust_handoff_rules() {
         paths.push(r.path);
@@ -193,6 +193,11 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
     paths.retain(|p| p.exists());
     paths.sort();
     paths.dedup();
+    // Nothing to protect, or no way to create a mount namespace on this host: fall
+    // back to the Landlock carve (the probe forks, so gate it on paths first).
+    if paths.is_empty() || !namespace::mount_ns_capable() {
+        return Vec::new();
+    }
     paths
 }
 
@@ -421,7 +426,11 @@ fn confined_command(
             // here. Fails closed — a mount error aborts before the workspace is
             // ever exposed writable.
             if !robind_cstrings.is_empty() {
-                namespace::setup_ro_binds(&robind_cstrings, !isolate_pids)?;
+                // need_unshare: isolate_pids already made a mount namespace.
+                // need_userns: not real root, so gain CAP_SYS_ADMIN via a user
+                // namespace first (the parent probe confirmed this works).
+                let need_userns = libc::geteuid() != 0;
+                namespace::setup_ro_binds(&robind_cstrings, !isolate_pids, need_userns)?;
             }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
             // SIGKILL of the supervisor that never runs destroy_cgroup.
