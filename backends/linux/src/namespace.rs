@@ -187,6 +187,43 @@ pub(crate) fn mount_ns_capable() -> bool {
     }
 }
 
+/// Best-effort explanation of WHY unprivileged user namespaces are unavailable,
+/// with the concrete remedy. Used for a fail-closed message when `--isolate-pids`,
+/// `--isolate-net`, or the bind-mount strategy is requested by a non-root user on
+/// a host that forbids them. Reads the kernel knobs the hardened distros use, so
+/// the message names the actual blocker instead of a bare EPERM.
+pub(crate) fn userns_blocker_hint() -> String {
+    let knob = |p: &str| std::fs::read_to_string(p).ok().map(|s| s.trim().to_string());
+    if knob("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").as_deref() == Some("1") {
+        return "unprivileged user namespaces are restricted by AppArmor \
+            (kernel.apparmor_restrict_unprivileged_userns=1, the Ubuntu 23.10+ default). \
+            Run tartaros as root, or allow it with `sudo sysctl -w \
+            kernel.apparmor_restrict_unprivileged_userns=0`, or install an AppArmor \
+            profile granting userns to this binary, or run inside a container that \
+            provides CAP_SYS_ADMIN."
+            .into();
+    }
+    if knob("/proc/sys/kernel/unprivileged_userns_clone").as_deref() == Some("0") {
+        return "unprivileged user namespaces are disabled \
+            (kernel.unprivileged_userns_clone=0, common on hardened Debian/Arch). \
+            Run as root, or `sudo sysctl -w kernel.unprivileged_userns_clone=1`, or \
+            run inside a container that provides CAP_SYS_ADMIN."
+            .into();
+    }
+    if knob("/proc/sys/user/max_user_namespaces").as_deref() == Some("0") {
+        return "user namespaces are capped at zero (user.max_user_namespaces=0). \
+            Run as root, raise the cap with `sudo sysctl -w \
+            user.max_user_namespaces=<N>`, or run inside a container that provides \
+            CAP_SYS_ADMIN."
+            .into();
+    }
+    "this host denies unprivileged user namespaces (no CAP_SYS_ADMIN, and the \
+        unshare(CLONE_NEWUSER) was refused — e.g. a container started without \
+        CAP_SYS_ADMIN or with a seccomp/AppArmor profile that blocks it). Run \
+        tartaros as root, or in a container that grants CAP_SYS_ADMIN."
+        .into()
+}
+
 /// Protect the trust-handoff set with READ-ONLY bind mounts instead of carving
 /// it out of the Landlock write grant. This lets the whole workspace be granted
 /// writable (so the agent can create new files at the repo root — which the carve
@@ -201,17 +238,14 @@ pub(crate) fn mount_ns_capable() -> bool {
 /// `need_unshare` is true when no mount namespace exists yet (no `--isolate-pids`);
 /// we create a private one here. Fails closed: any mount error aborts the launch,
 /// so the workspace is never left writable with the handoff unprotected.
+///
+/// The caller must already hold CAP_SYS_ADMIN — real root, or a user namespace
+/// entered up front (see `enter_user_namespace`). Entering the user namespace is
+/// done once by the caller, not here, so it is shared with `--isolate-pids`.
 pub(crate) unsafe fn setup_ro_binds(
     paths: &[std::ffi::CString],
     need_unshare: bool,
-    need_userns: bool,
 ) -> std::io::Result<()> {
-    // Unprivileged path: enter a user namespace first to gain CAP_SYS_ADMIN for
-    // the mount namespace and the binds (bubblewrap's approach). Real root skips
-    // this. The parent only sets need_userns after mount_ns_capable() confirmed it.
-    if need_userns {
-        enter_user_namespace()?;
-    }
     if need_unshare {
         if libc::unshare(libc::CLONE_NEWNS) != 0 {
             return Err(std::io::Error::last_os_error());

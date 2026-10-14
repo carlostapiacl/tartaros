@@ -255,6 +255,20 @@ fn cmd_explain(opts: &[String]) -> ! {
         println!();
     }
     explain(&p);
+    // Exit non-zero wherever `run` would refuse on THIS host, so an audit
+    // (`seisin check`) never shows a green ✓ for a policy this host cannot enforce
+    // (e.g. no Landlock on Docker Desktop's linuxkit kernel). Same fail-closed
+    // contract as `run`, just without spawning anything.
+    #[cfg(target_os = "linux")]
+    let blocked = tartaros_linux::host_blocks_run(&p);
+    #[cfg(target_os = "macos")]
+    let blocked = tartaros_macos::host_blocks_run(&p);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let blocked: Option<String> = None;
+    if let Some(reason) = blocked {
+        eprintln!("\ntartaros: this host cannot enforce this policy: {reason}");
+        exit(2);
+    }
     exit(0);
 }
 

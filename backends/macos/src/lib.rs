@@ -225,6 +225,35 @@ fn supervise(
     }
 }
 
+/// macOS analogue of the Linux `host_blocks_run`: why `run` would refuse this
+/// policy on macOS (Seatbelt cannot provide the Linux-only hardening knobs), or
+/// None. `explain` exits non-zero when this is Some, matching `run` — so an audit
+/// never shows a green ✓ for a policy this host cannot enforce.
+pub fn host_blocks_run(policy: &Policy) -> Option<String> {
+    let mut unsupported = Vec::new();
+    if policy.isolate_pids {
+        unsupported.push("--isolate-pids (PID namespace)");
+    }
+    if policy.isolate_network {
+        unsupported.push("--isolate-net (network namespace)");
+    }
+    if policy.harden_syscalls {
+        unsupported.push("--seccomp-strict (seccomp syscall filter)");
+    }
+    if policy.deny_unix_sockets {
+        unsupported.push("--deny-unix (seccomp AF_UNIX deny)");
+    }
+    if unsupported.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "unsupported on macOS (Seatbelt cannot provide these): {}. Run on Linux \
+             for this hardening, or drop the flags / use --profile local-agent.",
+            unsupported.join(", ")
+        ))
+    }
+}
+
 /// Build the Seatbelt SBPL profile. In SBPL the LAST matching rule wins, so
 /// Resolve what this policy actually enforces on macOS (Seatbelt + RLIMIT), so a
 /// user can verify guarantees before running. The Linux-only hardening knobs are

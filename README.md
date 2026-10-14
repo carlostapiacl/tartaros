@@ -68,7 +68,7 @@ do not sell a competitor's default or scope choice as a vulnerability.
 | Secret broker (capability, not raw token) | ✅ HTTP+HTTPS (CONNECT), client auth, TTL+quota, host allow-list | ✅ |
 | Resource: memory / processes / CPU | ✅ RLIMIT + cgroup (`memory.max`, `pids.max`), root-proof | 🟡 RLIMIT only |
 | Lifecycle: timeout + reliable teardown | ✅ `cgroup.kill` (reaps escaped daemons) | 🟡 `kill(-pgid)` best-effort |
-| Process isolation (`--isolate-pids`) | ✅ PID + mount namespace | ❌ (no primitive) |
+| Process isolation (`--isolate-pids`/`--isolate-net`) | ✅ PID + mount + net namespace (root **or** unprivileged user namespace) | ❌ (no primitive) |
 | Attributable kernel denials (unified log) | — | ✅ `(with message)` tag per deny |
 | First-hand effect log (collectors, record modes) | ✅ | ✅ |
 
@@ -97,13 +97,25 @@ silently passing.
   as events (the one remaining collector). The network, secret, process and MCP
   axes are logged on both OS. Use the log for visibility and intent, never as the
   enforcement boundary — that is the kernel policy.
-- **Creating new entries at a repo root needs a mount namespace on Linux.**
-  Landlock cannot express "allow write to X but deny X/y", so without a mount
-  namespace (no root and unprivileged user namespaces disabled, e.g. hardened
-  Ubuntu with AppArmor) the carve cannot grant creation at a root that has a
-  handoff below it. Existing files and subdirectories stay writable; `explain`
-  prints a one-line warning. With a mount namespace the read-only bind mounts
-  lift the limit entirely. macOS has no such limit.
+- **Namespaces need root or an unprivileged user namespace on Linux.** The mount
+  namespace (for the create-at-root bind mounts) and the PID/net namespaces
+  (`--isolate-pids`/`--isolate-net`) require CAP_SYS_ADMIN; a non-root user gets it
+  by entering a user namespace first (as bubblewrap does). Where a host forbids
+  unprivileged user namespaces (hardened Ubuntu with
+  `apparmor_restrict_unprivileged_userns=1`, Debian/Arch with
+  `unprivileged_userns_clone=0`, or a container without CAP_SYS_ADMIN) the two
+  behaviours differ **by design, never silently**:
+  - `--isolate-pids`/`--isolate-net` **refuse to start** with a one-line diagnostic
+    that names the exact blocking knob and its remedy — fail-closed, because the
+    caller asked for isolation we cannot provide.
+  - the create-at-root bind mounts **fall back to the Landlock carve**: existing
+    files and subdirectories stay writable, only *new* entries directly at a root
+    that has a handoff below it are blocked, and `explain` prints a one-line
+    warning. (Landlock cannot express "allow write to X but deny X/y".)
+
+  The base sandbox — FS carve + trust-handoff, read-deny, per-port network,
+  resource caps, the broker — needs **no** namespace and runs unprivileged on
+  these hardened hosts. macOS has none of these limits.
 
 ## CLI
 

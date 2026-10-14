@@ -225,6 +225,24 @@ fn confined_command(
 
     let err = |m: String| RunError { reason: m };
 
+    // Fail closed with an actionable diagnostic. --isolate-pids / --isolate-net
+    // need a private PID/mount/net namespace, which a non-root user can only create
+    // inside a user namespace. If the host forbids unprivileged user namespaces
+    // (hardened Ubuntu/Debian/Arch, or a container without CAP_SYS_ADMIN) we REFUSE
+    // rather than run without the isolation the caller asked for — never a silent
+    // downgrade. Root never hits this. (The bind-mount strategy degrades to the
+    // Landlock carve in the same case, by design — option B — so it is not refused.)
+    if (policy.isolate_pids || policy.isolate_network)
+        && unsafe { libc::geteuid() } != 0
+        && !namespace::mount_ns_capable()
+    {
+        return Err(err(format!(
+            "refusing to run: --isolate-{} needs a private namespace, but {}",
+            if policy.isolate_pids { "pids" } else { "net" },
+            namespace::userns_blocker_hint()
+        )));
+    }
+
     // P1-2 mitigation (opt-in), hardened per review P1-A: materialize absent
     // trust-handoff placeholders so Landlock (inode-based) can carve them. This
     // FAILS CLOSED (never runs with partial protection), refuses to act through a
@@ -414,23 +432,33 @@ fn confined_command(
                     libc::close(fd);
                 }
             }
-            // Private namespaces (opt-in). Must happen before the Landlock
-            // lockdown (mounting /proc / bringing up loopback need CAP_SYS_ADMIN
-            // and an unrestricted mount tree). Fails closed. See enter_namespaces.
+            // Private namespaces and bind mounts (all opt-in) need CAP_SYS_ADMIN.
+            // A non-root user gains it by entering a USER namespace first — the
+            // bubblewrap approach — which then lets the PID/mount/net unshares and
+            // the bind-mount remounts all succeed unprivileged wherever the host
+            // permits it. We enter it ONCE here so --isolate-pids and the bind
+            // mounts share the same userns (entering it twice would nest and break
+            // the uid maps). Real root already has CAP_SYS_ADMIN and skips it. The
+            // parent refused up front if isolation was requested on a host that
+            // forbids the userns, so reaching here means these steps will work.
+            // Must precede the Landlock lockdown (mounting /proc, loopback, and the
+            // binds need CAP_SYS_ADMIN and an unrestricted mount tree). Fails closed.
+            let not_root = libc::geteuid() != 0;
+            let need_userns =
+                not_root && (isolate_pids || isolate_network || !robind_cstrings.is_empty());
+            if need_userns {
+                namespace::enter_user_namespace()?;
+            }
             if isolate_pids || isolate_network {
                 namespace::enter_namespaces(isolate_pids, isolate_network)?;
             }
             // Read-only bind mounts for the trust-handoff set (so the workspace can
-            // be granted writable without the handoff being writable). Needs a
-            // mount namespace: isolate_pids already made one, otherwise create one
-            // here. Fails closed — a mount error aborts before the workspace is
-            // ever exposed writable.
+            // be granted writable without the handoff being writable). need_unshare:
+            // isolate_pids already made a mount namespace; otherwise create one here
+            // (we hold CAP_SYS_ADMIN now, root or via the userns above). Fails closed
+            // — a mount error aborts before the workspace is ever exposed writable.
             if !robind_cstrings.is_empty() {
-                // need_unshare: isolate_pids already made a mount namespace.
-                // need_userns: not real root, so gain CAP_SYS_ADMIN via a user
-                // namespace first (the parent probe confirmed this works).
-                let need_userns = libc::geteuid() != 0;
-                namespace::setup_ro_binds(&robind_cstrings, !isolate_pids, need_userns)?;
+                namespace::setup_ro_binds(&robind_cstrings, !isolate_pids)?;
             }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
             // SIGKILL of the supervisor that never runs destroy_cgroup.
@@ -581,6 +609,39 @@ fn has_symlink_component(p: &std::path::Path) -> bool {
         }
     }
     false
+}
+
+/// Does THIS host block `run` for this policy? Returns the reason `run` would
+/// refuse (fail-closed), or None if it would proceed. `explain` calls this and
+/// exits non-zero wherever `run` would refuse, so an audit (e.g. `seisin check`)
+/// never shows a green ✓ on a host that cannot actually enforce the policy.
+#[cfg(target_os = "linux")]
+pub fn host_blocks_run(policy: &Policy) -> Option<String> {
+    use tartaros_core::Network;
+    if !landlock_probe::landlock_fs_supported() {
+        return Some("Landlock filesystem confinement unavailable (needs Linux >= 5.13); run refuses to run unconfined".into());
+    }
+    let restrict_net = !matches!(policy.network, Some(Network::Allowed));
+    if restrict_net && !landlock_probe::landlock_net_supported() {
+        return Some("network confinement requested but Landlock network rules unavailable (needs Linux >= 6.7); run refuses".into());
+    }
+    if (policy.isolate_pids || policy.isolate_network)
+        && unsafe { libc::geteuid() } != 0
+        && !namespace::mount_ns_capable()
+    {
+        let which = if policy.isolate_pids { "pids" } else { "net" };
+        return Some(format!(
+            "--isolate-{which} needs a private namespace, but {}",
+            namespace::userns_blocker_hint()
+        ));
+    }
+    if policy.strict
+        && !cgroup::cgroup_usable()
+        && (policy.max_processes.is_some() || policy.max_memory_bytes.is_some())
+    {
+        return Some("strict mode: requested resource caps cannot be guaranteed on this host (no usable cgroup v2); run refuses".into());
+    }
+    None
 }
 
 /// Resolve what this policy will ACTUALLY enforce on THIS host, so a user can

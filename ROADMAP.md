@@ -16,11 +16,23 @@ covers most of what those trackers ask for — carve/deny-inside-allow (srt #545
 in order of value × reachability:
 
 1. **Run on hardened distros with no unprivileged userns** (Ubuntu 24.04 AppArmor,
-   Arch/Debian hardened; srt #180/#417/#498/#74/#429, bwrap #139/#801). Today we
-   fall back to the carve + a warning. Goal: a safe path that is neither a
-   vulnerable setuid helper nor a silent downgrade — detect the policy, document
-   the one honest limit, and lift it wherever a namespace *is* grantable. The
-   gap that expels whole user populations; highest reachable value.
+   Arch/Debian hardened; srt #180/#417/#498/#74/#429, bwrap #139/#801).
+   - [x] **Unprivileged isolation.** `--isolate-pids`/`--isolate-net` and the
+         create-at-root bind mounts now enter a user namespace first for a non-root
+         caller (bubblewrap's approach), so they work unprivileged wherever the host
+         permits it. Verified on a hardened Ubuntu host (kernel 6.8) as a non-root
+         user with `apparmor_restrict_unprivileged_userns` toggled: with it off,
+         `--isolate-pids` gives the agent its own PID namespace (3 PIDs vs 285) and
+         create-at-root works with no working-tree residue; the base sandbox needs
+         no namespace and runs regardless. Bench 24/24 unchanged (root path).
+   - [x] **No silent downgrade.** Where the userns is forbidden, `--isolate-pids`/
+         `--isolate-net` **refuse** with a diagnostic that names the exact blocking
+         knob (`apparmor_restrict_unprivileged_userns`, `unprivileged_userns_clone`,
+         `max_user_namespaces`, or a CAP_SYS_ADMIN-less container) and its remedy;
+         the bind mounts fall back to the carve + an `explain` warning. Never a
+         vulnerable setuid helper. Verified (both refuse messages) on the same host.
+   - [ ] lift create-at-root where no userns is grantable at all (needs an
+         install-time AppArmor profile or a packaged helper; design TBD).
 2. **Reliable violation observability + the file-write event collector.** Linux
    Landlock returns EPERM without a path on older kernels and macOS drops denials
    under log pressure (srt #696/#582); "which rule denied me and why" is a
