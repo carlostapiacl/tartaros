@@ -565,6 +565,7 @@ dependencies = [
 name = "tartaros-microvm"
 version = "0.1.0-alpha"
 dependencies = [
+ "serde_json",
  "tartaros-core",
 ]
 

@@ -121,8 +121,13 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         deny), reusing `trust_handoff_rules()` so the set is identical to the
         shared-kernel backends; `guest_wants_egress()` captures the off-by-default
         NIC. Pure, no runtime needed (6/6 crate tests).
-  - [ ] emit the runsc OCI config (process + the `mount_plan` shares + no-network +
-        resource limits) and run the corpus under runsc on a Linux host with runsc.
+  - [x] **OCI `config.json` emission landed, unit-tested.** `to_oci_config(policy,
+        command, rootfs)` emits a standard opencontainers/runtime-spec bundle: the
+        command, the `mount_plan` shares (rw bind / ro bind / ro-tmpfs mask for a
+        secret), resource limits, and a fresh network namespace when egress is off.
+        Pure, no runtime (8/8 crate tests). M-µ1 pure logic is COMPLETE.
+  - [ ] invoke `runsc run` with this bundle + a guest rootfs and run the corpus
+        under it on a Linux host that has runsc (the only remaining M-µ1 step).
 - **M-µ2 — Firecracker**: guest kernel + rootfs build, virtio-fs shares (rw roots /
   ro handoff), vsock broker bridge, VM-size resource caps, teardown = destroy. Run
   the corpus + the multi-tenant scenarios on a KVM host. This is the tenant-isolation
