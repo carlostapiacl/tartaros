@@ -454,6 +454,13 @@ fn confined_command(
     let (userns_uid_map, userns_gid_map) = namespace::uid_gid_maps();
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
+    // Scrub the inherited environment to the policy's allowlist (F-13): a secret in
+    // the launcher's env (AWS_*, *_TOKEN) is inherited at exec and is NOT governed
+    // by Landlock/seccomp, so by default we hand the child only the safe allowlist.
+    if let Some(env) = policy.child_env() {
+        cmd.env_clear();
+        cmd.envs(env);
+    }
     unsafe {
         cmd.pre_exec(move || {
             // Own process group so the supervisor can signal the whole tree.

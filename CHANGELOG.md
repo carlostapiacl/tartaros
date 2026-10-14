@@ -3,6 +3,23 @@
 All notable changes to TartarOS. This project is pre-1.0; the format is
 loosely [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Secrets — environment scrubbing (F-13)
+- A launcher's environment routinely holds credentials (`AWS_SECRET_ACCESS_KEY`,
+  `GITHUB_TOKEN`, …). They are inherited at `exec` and are **not** governed by
+  Landlock/Seatbelt, so a confined agent could read them from its own environment
+  or `/proc/self/environ` — a real secret-leak vector (F-13, confirmed on macOS).
+  The backend now **scrubs the child's environment to a safe allowlist by default**
+  (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ`, `PWD`,
+  `TMPDIR`/`TMP`/`TEMP`, and the proxy vars the egress broker sets) before spawning.
+- `--env KEY` carries one launcher variable through; `--env KEY=VALUE` sets one
+  explicitly; `--inherit-env` opts back into full passthrough for trusted local use.
+- Enforced at the **spawn layer** (`Policy::child_env`, applied by both backends via
+  `env_clear`), so the guarantee holds for any embedder, not just the CLI; `explain`
+  prints the exact env policy. Regression `env-secret-scrub` + mutation
+  `drop-env-scrub` (0 blind spots).
+
 ## [0.1.0-alpha] — 2026-10-13
 
 First consolidated alpha: the open enforcement layer (policy model + macOS

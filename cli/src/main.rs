@@ -21,6 +21,8 @@
 //!   --strict               a requested guarantee that cannot be installed aborts the run
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
 //!   --private-tmp          run-private TMPDIR, AF_UNIX scoped to it (headless browsers)
+//!   --env KEY[=VALUE]      carry one launcher var through, or set it (default: env is scrubbed)
+//!   --inherit-env          inherit the full launcher env (opt into leaking secrets)
 //!   --timeout SECS         kill the process group after SECS (exit 124)
 //!   --max-mem BYTES        address-space limit
 //!   --max-procs N          process limit
@@ -160,6 +162,12 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --private-tmp          run-private TMPDIR; AF_UNIX scoped to it (headless browsers)
   --browser              macOS: minimal extra Seatbelt grants for headless Chromium/Chrome
 
+ENVIRONMENT (secrets in the launcher's env are NOT governed by Landlock/Seatbelt):
+  (default)              scrub env to a safe allowlist (PATH/HOME/LANG/... + LC_*)
+  --env KEY              carry one var through from the launcher's environment
+  --env KEY=VALUE        set one var explicitly for the agent
+  --inherit-env          FULL passthrough: inherit the launcher env, secrets and all
+
 LIMITS:
   --timeout SECS         kill the run after SECS (exit 124)
   --max-mem BYTES        address-space / cgroup memory cap
@@ -189,6 +197,11 @@ fn cmd_run(rest: &[String]) -> ! {
     if p.writable_roots.is_empty() {
         eprintln!("warning: no --write roots; the command cannot write anywhere");
     }
+    // Note: the environment is scrubbed to a safe allowlist by the BACKEND at spawn
+    // (F-13, `Policy::child_env`), so secrets in the launcher's env never reach the
+    // agent and the guarantee holds for any embedder, not just this CLI. The broker
+    // and --private-tmp set their vars (proxy, TMPDIR) in this process's env below;
+    // those names are in the allowlist, so they survive into the child.
     // Domain-scoped egress: start the capability broker and route the agent
     // through it (sets proxy env, grants the one loopback port). Mutates p.
     start_egress_broker(&mut p);
@@ -657,6 +670,8 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             "--materialize" => p.materialize_absent_handoff = true,
             "--private-tmp" => p.private_tmp = true,
             "--browser" => p.browser = true,
+            "--inherit-env" => p.inherit_env = true,
+            "--env" => p.env_passthrough.push(val()),
             "--timeout" => p.timeout = Some(Duration::from_secs(parse_num_or_exit(&val(), "--timeout (seconds)"))),
             "--max-mem" => p.max_memory_bytes = Some(parse_num_or_exit(&val(), "--max-mem (bytes)")),
             "--max-procs" => p.max_processes = Some(parse_num_or_exit(&val(), "--max-procs")),
@@ -698,6 +713,15 @@ fn explain(p: &Policy) {
     println!("seccomp attack-surface reduction: {}", p.harden_syscalls);
     println!("strict (guaranteed-or-abort): {}", p.strict);
     println!("isolate /proc (env reads): {}", p.isolate_process_info);
+    if p.inherit_env {
+        println!("environment: FULL passthrough (--inherit-env) — launcher env, incl. any secrets, is inherited");
+    } else {
+        println!("environment: scrubbed to safe allowlist ({})", tartaros_core::ENV_ALLOWLIST.join(", "));
+        println!("  + LC_* (locale)");
+        if !p.env_passthrough.is_empty() {
+            println!("  + explicit --env: {}", p.env_passthrough.join(", "));
+        }
+    }
     if let Some(t) = p.timeout { println!("timeout: {}s", t.as_secs()); }
     if let Some(m) = p.max_memory_bytes { println!("max memory: {m} bytes"); }
     if let Some(n) = p.max_processes { println!("max processes: {n}"); }

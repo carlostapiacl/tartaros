@@ -47,6 +47,10 @@ struct Contract {
     unix_server: Vec<UnixServerSpec>,
     #[serde(default)]
     broker: Option<BrokerSpec>,
+    /// Env vars (`KEY=VALUE`) set in the LAUNCHER's process before the attack/control
+    /// run — to test that the backend scrubs secrets from the inherited env (F-13).
+    #[serde(default)]
+    launcher_env: Vec<String>,
     attack: Op,
     control: Op,
     #[serde(default)]
@@ -87,6 +91,14 @@ struct PolicySpec {
     harden_syscalls: bool,
     #[serde(default)]
     strict: bool,
+    /// Full env passthrough (opt into inheriting the launcher's secrets). Default
+    /// (false) = the backend scrubs the env to the safe allowlist (F-13).
+    #[serde(default)]
+    inherit_env: bool,
+    /// Env vars to carry through/set for the agent despite the scrub: `KEY` (inherit
+    /// the launcher's value) or `KEY=VALUE` (set explicitly).
+    #[serde(default)]
+    env_passthrough: Vec<String>,
     /// "allowed" opts into full egress (so the UDP/raw seccomp filter is OFF and a
     /// scenario can test what ONLY the network namespace blocks). Default/omitted =
     /// denied, the normal confined posture.
@@ -370,16 +382,18 @@ enum Mutation {
     DropIsolatePids,
     RaiseProcLimit,
     RaiseMemLimit,
+    DropEnvScrub,
 }
 
 impl Mutation {
-    const ALL: [Mutation; 6] = [
+    const ALL: [Mutation; 7] = [
         Mutation::DropReadDenies,
         Mutation::GrantNetwork,
         Mutation::DropIsolateNet,
         Mutation::DropIsolatePids,
         Mutation::RaiseProcLimit,
         Mutation::RaiseMemLimit,
+        Mutation::DropEnvScrub,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -389,6 +403,7 @@ impl Mutation {
             Mutation::DropIsolatePids => "drop-isolate-pids",
             Mutation::RaiseProcLimit => "raise-proc-limit",
             Mutation::RaiseMemLimit => "raise-mem-limit",
+            Mutation::DropEnvScrub => "drop-env-scrub",
         }
     }
     /// Does the scenario rely on the protection this mutation removes?
@@ -400,6 +415,7 @@ impl Mutation {
             Mutation::DropIsolatePids => c.policy.isolate_pids,
             Mutation::RaiseProcLimit => c.policy.max_processes.is_some(),
             Mutation::RaiseMemLimit => c.policy.max_memory_bytes.is_some(),
+            Mutation::DropEnvScrub => !c.launcher_env.is_empty(),
         }
     }
     fn weaken(self, p: &mut Policy) {
@@ -410,6 +426,8 @@ impl Mutation {
             Mutation::DropIsolatePids => p.isolate_pids = false,
             Mutation::RaiseProcLimit => p.max_processes = None,
             Mutation::RaiseMemLimit => p.max_memory_bytes = None,
+            // Opt into full env passthrough: the secret in launcher_env now leaks.
+            Mutation::DropEnvScrub => p.inherit_env = true,
         }
     }
 }
@@ -706,8 +724,17 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         isolate_network: c.policy.isolate_network,
         harden_syscalls: c.policy.harden_syscalls,
         strict: c.policy.strict,
+        inherit_env: c.policy.inherit_env,
+        env_passthrough: c.policy.env_passthrough.clone(),
         ..Default::default()
     };
+    // Set the launcher-side env the scenario wants visible to the backend's snapshot
+    // (F-13). Sequential execution makes this safe; we clear them after the run.
+    for kv in &c.launcher_env {
+        if let Some((k, v)) = kv.split_once('=') {
+            std::env::set_var(k, v);
+        }
+    }
     // --mutate: deliberately weaken the policy so a corpus blind spot shows up.
     if let Some(m) = mutate {
         m.weaken(&mut policy);
@@ -754,6 +781,9 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         for p in &unix_paths {
             let _ = std::fs::remove_file(p);
         }
+        for kv in &c.launcher_env {
+            if let Some((k, _)) = kv.split_once('=') { std::env::remove_var(k); }
+        }
         let _ = std::fs::remove_dir_all(&root);
         return Outcome {
             id: c.id, category: c.category, severity: c.severity,
@@ -781,6 +811,10 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         Some(code) => control_rc == code,
         None => control_rc == 0,
     };
+    // Clear the scenario's launcher-side canaries now that both ops have run.
+    for kv in &c.launcher_env {
+        if let Some((k, _)) = kv.split_once('=') { std::env::remove_var(k); }
+    }
 
     drop(servers);
     for p in &unix_paths {
