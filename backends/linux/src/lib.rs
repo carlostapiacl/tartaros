@@ -18,6 +18,7 @@
 use tartaros_core::{
     Backend, Collector, EffectSink, Policy, PolicyError, RunError, RunOutcome,
 };
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
 // Per-mechanism modules (linux-only), kept apart so each can be read and tested
@@ -234,6 +235,7 @@ pub fn uses_bind_mounts(policy: &Policy) -> bool {
     !robind_targets(policy).is_empty()
 }
 
+#[cfg(target_os = "linux")]
 fn confined_command(
     policy: &Policy,
     command: &[String],
