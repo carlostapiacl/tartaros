@@ -153,6 +153,18 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   each with an honest caveat printed on run and in `explain`. `multi-tenant`
   states plainly it does **not** provide kernel isolation.
 
+### Post-fork safety (adversarial review #7)
+- **No allocation in `pre_exec`.** Building a seccomp BPF program, or any
+  `format!`, after `fork()` in a child of a multithreaded parent (the broker and
+  effect-log collectors run on their own threads) can deadlock on the glibc malloc
+  lock — the agent then never execs and the supervisor's timeout never starts. The
+  child's `pre_exec` now only makes async-signal-safe syscalls: the seccomp filters
+  are **compiled in the parent** (`seccomp::compile_all`) and merely applied in the
+  child (`apply_all` = `prctl` + `apply_filter`); the cgroup pid is written with a
+  stack buffer (`fmt_pid`, no `format!`); and the user-namespace uid/gid maps are
+  pre-built in the parent (`uid_gid_maps`). Verified: seccomp still denies UDP/
+  AF_UNIX/io_uring, caps still drop, bench 28/28.
+
 ### Honesty / fail-closed
 - Fail-closed capability probes (Landlock fs/net; a cgroup membership probe).
 - macOS refuses Linux-only hardening instead of silently ignoring it.

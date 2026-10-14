@@ -1,21 +1,67 @@
-//! seccomp filters applied in the child just before exec, kept apart from the
-//! Landlock / namespace / cgroup mechanisms so each can be read and tested on its
-//! own. Both require no_new_privs (set here) and default-allow, denying only the
-//! listed syscalls.
+//! seccomp filters, split into a COMPILE step (runs in the parent, allocates) and
+//! an APPLY step (runs in the child's `pre_exec`, after fork, where allocation is
+//! unsafe — a multithreaded parent could hold the malloc lock at fork and deadlock
+//! the child, review #7). The parent builds the BPF programs with `compile_all`;
+//! the child only does `prctl` + `apply_filter` via `apply_all`, which do not
+//! allocate. All filters are default-allow, denying only the listed syscalls/args.
 
-/// Install a seccomp filter that denies a curated set of dangerous, rarely-needed
-/// syscalls, shrinking the kernel attack surface (the surface a multi-tenant
-/// escape would exploit). Default-allow; listed syscalls return EPERM. Ordinary
-/// agent tools (sh, cat, ls, git, python3, curl, compilers) do not use these.
-pub(crate) fn harden_syscalls() -> std::io::Result<()> {
-    use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter};
-    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
+use seccompiler::{
+    apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
+    SeccompFilter, SeccompRule,
+};
+
+fn to_io(m: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, m)
+}
+
+fn finalize(filter: SeccompFilter) -> std::io::Result<BpfProgram> {
+    filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))
+}
+
+/// Compile every seccomp filter the policy needs, in the PARENT. Returns the BPF
+/// programs in apply order. The child applies them with [`apply_all`] — no
+/// allocation after the fork.
+pub(crate) fn compile_all(
+    deny_unix: bool,
+    harden: bool,
+    restrict_net: bool,
+) -> std::io::Result<Vec<BpfProgram>> {
+    let mut progs = Vec::new();
+    if deny_unix {
+        progs.push(compile_deny_af_unix()?);
+    }
+    if harden {
+        progs.push(compile_harden_syscalls()?);
+    }
+    if restrict_net {
+        progs.push(compile_deny_inet_dgram_raw()?);
+    }
+    // io_uring can create/connect sockets bypassing the socket() filters above, so
+    // deny it whenever any socket filter is active (review #4).
+    if restrict_net || deny_unix || harden {
+        progs.push(compile_deny_io_uring()?);
+    }
+    Ok(progs)
+}
+
+/// Apply pre-compiled filters in the CHILD. Async-signal-safe: sets no-new-privs
+/// (required to load a filter unprivileged) and calls `apply_filter` per program —
+/// both are `prctl`-family syscalls that do not allocate.
+pub(crate) fn apply_all(progs: &[BpfProgram]) -> std::io::Result<()> {
     if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
+    for prog in progs {
+        apply_filter(prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
+    }
+    Ok(())
+}
 
-    // Portable across x86_64 and aarch64. Each entry is matched unconditionally
-    // (empty rule list) and denied.
+/// Deny a curated set of dangerous, rarely-needed syscalls (default-allow; listed
+/// return EPERM). Shrinks the kernel attack surface a multi-tenant escape exploits.
+/// Ordinary agent tools (sh, cat, ls, git, python3, curl, compilers) do not use
+/// these. Includes device-node creation (`mknod`/`mknodat`, review #3).
+fn compile_harden_syscalls() -> std::io::Result<BpfProgram> {
     let mut deny: Vec<libc::c_long> = vec![
         // load/unload kernel code
         libc::SYS_init_module, libc::SYS_finit_module, libc::SYS_delete_module,
@@ -51,29 +97,18 @@ pub(crate) fn harden_syscalls() -> std::io::Result<()> {
     }
     let filter = SeccompFilter::new(
         map,
-        SeccompAction::Allow,                      // default: allow
-        SeccompAction::Errno(libc::EPERM as u32),  // denied syscalls
+        SeccompAction::Allow,                     // default: allow
+        SeccompAction::Errno(libc::EPERM as u32), // denied syscalls
         std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
     )
     .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
-    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
-    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
-    Ok(())
+    finalize(filter)
 }
 
-/// Deny io_uring (adversarial review #4 / F-#1 bypass): io_uring can create and
-/// connect sockets via `IORING_OP_SOCKET` / `IORING_OP_CONNECT` WITHOUT the
-/// `socket()`/`connect()` syscalls, so it bypasses the seccomp socket filters
-/// (`deny_af_unix`, `deny_inet_dgram_raw`). Denying `io_uring_setup` means no ring
-/// can be created; `enter`/`register` are denied too. Applied whenever any socket
-/// filter is active. Ordinary agent tools use the plain syscalls; libraries that
-/// probe io_uring (e.g. libuv) fall back when setup fails.
-pub(crate) fn deny_io_uring() -> std::io::Result<()> {
-    use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter};
-    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
-    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
+/// Deny io_uring (review #4 / F-1 bypass): `IORING_OP_SOCKET`/`CONNECT` create and
+/// connect sockets WITHOUT `socket()`/`connect()`, bypassing the socket filters.
+/// Denying `io_uring_setup`/`enter`/`register` means no ring can be created.
+fn compile_deny_io_uring() -> std::io::Result<BpfProgram> {
     let mut map = std::collections::BTreeMap::new();
     for nr in [libc::SYS_io_uring_setup, libc::SYS_io_uring_enter, libc::SYS_io_uring_register] {
         map.insert(nr, Vec::new()); // match unconditionally
@@ -85,35 +120,17 @@ pub(crate) fn deny_io_uring() -> std::io::Result<()> {
         std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
     )
     .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
-    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
-    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
-    Ok(())
+    finalize(filter)
 }
 
-/// Close the UDP/ICMP/raw egress gap (F-1). Landlock mediates **TCP only**, so a
-/// network-restricted policy (default-deny, or `--allow-domain` which scopes TCP
-/// through the broker) still left the agent able to exfiltrate over UDP (DNS,
-/// QUIC/HTTP3), ICMP, raw sockets, and IPv6 datagrams. This denies `socket()` for
-/// `AF_INET`/`AF_INET6` with `SOCK_DGRAM` or `SOCK_RAW`, so only TCP streams can be
-/// created — which Landlock still restricts to the granted ports / broker. Local
-/// `AF_UNIX` sockets (any type) and TCP are untouched. Requires no-new-privs.
-///
-/// The type argument carries flags (`SOCK_CLOEXEC`, `SOCK_NONBLOCK`) ORed in, so we
-/// match on the low bits (`SOCK_TYPE_MASK`), not an exact value.
-pub(crate) fn deny_inet_dgram_raw() -> std::io::Result<()> {
-    use seccompiler::{
-        apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
-        SeccompFilter, SeccompRule,
-    };
-    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
-    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    const SOCK_TYPE_MASK: u64 = 0xf; // low bits of `type`, excluding SOCK_CLOEXEC/NONBLOCK
-    let dom = |af: i32| {
-        SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, af as u64)
-    };
+/// Close the UDP/ICMP/raw egress gap (F-1): deny `socket(AF_INET|AF_INET6,
+/// SOCK_DGRAM|SOCK_RAW)`, so only TCP streams can be created (Landlock still
+/// restricts those to the granted ports / broker). `AF_UNIX` (any type) and TCP are
+/// untouched. The `type` arg carries flags (`SOCK_CLOEXEC`/`NONBLOCK`), so we match
+/// the low bits (`SOCK_TYPE_MASK`), not an exact value.
+fn compile_deny_inet_dgram_raw() -> std::io::Result<BpfProgram> {
+    const SOCK_TYPE_MASK: u64 = 0xf;
+    let dom = |af: i32| SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, af as u64);
     let typ = |t: i32| {
         SeccompCondition::new(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(SOCK_TYPE_MASK), t as u64)
     };
@@ -132,50 +149,27 @@ pub(crate) fn deny_inet_dgram_raw() -> std::io::Result<()> {
     map.insert(libc::SYS_socket, rules);
     let filter = SeccompFilter::new(
         map,
-        SeccompAction::Allow,                     // default: allow
-        SeccompAction::Errno(libc::EPERM as u32), // AF_INET/INET6 DGRAM|RAW: deny
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::EPERM as u32),
         std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
     )
     .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
-    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
-    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
-    Ok(())
+    finalize(filter)
 }
 
-/// Deny creating `AF_UNIX` sockets via seccomp (IPC-1). Everything else is
-/// allowed, so TCP (AF_INET), files, etc. keep working. Requires no-new-privs,
-/// which we set here (Landlock sets it too, but seccomp is applied first).
-pub(crate) fn deny_af_unix() -> std::io::Result<()> {
-    use seccompiler::{
-        apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
-        SeccompFilter, SeccompRule,
-    };
-    let to_io = |m: String| std::io::Error::new(std::io::ErrorKind::Other, m);
-
-    // no_new_privs is required to install a seccomp filter unprivileged.
-    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    // Match socket(domain == AF_UNIX, ..) and return EACCES; allow all else.
-    let cond = SeccompCondition::new(
-        0,
-        SeccompCmpArgLen::Dword,
-        SeccompCmpOp::Eq,
-        libc::AF_UNIX as u64,
-    )
-    .map_err(|e| to_io(format!("seccomp cond: {e}")))?;
+/// Deny creating `AF_UNIX` sockets (IPC-1). TCP (AF_INET), files, etc. keep working.
+fn compile_deny_af_unix() -> std::io::Result<BpfProgram> {
+    let cond = SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, libc::AF_UNIX as u64)
+        .map_err(|e| to_io(format!("seccomp cond: {e}")))?;
     let rule = SeccompRule::new(vec![cond]).map_err(|e| to_io(format!("seccomp rule: {e}")))?;
     let mut map = std::collections::BTreeMap::new();
     map.insert(libc::SYS_socket, vec![rule]);
     let filter = SeccompFilter::new(
         map,
-        SeccompAction::Allow,                            // default: allow
-        SeccompAction::Errno(libc::EACCES as u32),       // matched: deny
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::EACCES as u32),
         std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
     )
     .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
-    let prog: BpfProgram = filter.try_into().map_err(|e| to_io(format!("seccomp compile: {e}")))?;
-    apply_filter(&prog).map_err(|e| to_io(format!("seccomp apply: {e}")))?;
-    Ok(())
+    finalize(filter)
 }

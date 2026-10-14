@@ -429,6 +429,12 @@ fn confined_command(
     let harden_syscalls = policy.harden_syscalls;
     let isolate_pids = policy.isolate_pids;
     let isolate_network = policy.isolate_network;
+    // Compile the seccomp BPF programs HERE in the parent (allocation is fine),
+    // not in pre_exec — building a BPF program after fork could deadlock a child of
+    // a multithreaded parent (broker/collector threads) on the malloc lock (review
+    // #7). The child only applies them (prctl + apply_filter, no allocation).
+    let seccomp_progs = seccomp::compile_all(deny_unix, harden_syscalls, restrict_net)
+        .map_err(|e| err(format!("seccomp compile: {e}")))?;
     // Read-only bind-mount targets (built here in the parent; the pre_exec closure
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
     let robind_cstrings: Vec<std::ffi::CString> = {
@@ -438,6 +444,12 @@ fn confined_command(
             .filter_map(|p| std::ffi::CString::new(p.as_os_str().as_bytes()).ok())
             .collect()
     };
+    // Pre-build (in the parent) everything pre_exec would otherwise allocate after
+    // the fork (review #7): the cgroup.procs path as a CString, and the user-ns
+    // uid/gid maps (euid/egid are preserved across fork).
+    let cgroup_procs_c: Option<std::ffi::CString> =
+        cgroup_procs.as_ref().and_then(|p| std::ffi::CString::new(p.as_str()).ok());
+    let (userns_uid_map, userns_gid_map) = namespace::uid_gid_maps();
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
     unsafe {
@@ -451,9 +463,9 @@ fn confined_command(
             // cgroup.procs expects. Joining here (host pid) and letting the agent
             // inherit membership keeps the cgroup caps and cgroup.kill teardown
             // working across the namespace boundary.
-            if let Some(path) = &cgroup_procs {
-                let pid = format!("{}\n", libc::getpid());
-                let cpath = std::ffi::CString::new(path.as_str()).unwrap();
+            if let Some(cpath) = &cgroup_procs_c {
+                let mut buf = [0u8; 16];
+                let pid = namespace::fmt_pid(&mut buf, libc::getpid());
                 let fd = libc::open(cpath.as_ptr(), libc::O_WRONLY);
                 if fd >= 0 {
                     let _ = libc::write(fd, pid.as_ptr() as *const _, pid.len());
@@ -475,7 +487,7 @@ fn confined_command(
             let need_userns =
                 not_root && (isolate_pids || isolate_network || !robind_cstrings.is_empty());
             if need_userns {
-                namespace::enter_user_namespace()?;
+                namespace::enter_user_namespace(&userns_uid_map, &userns_gid_map)?;
             }
             if isolate_pids || isolate_network {
                 namespace::enter_namespaces(isolate_pids, isolate_network)?;
@@ -504,29 +516,11 @@ fn confined_command(
             set_rlimit(libc::RLIMIT_AS as libc::c_int, max_memory)?;
             set_rlimit(libc::RLIMIT_NPROC as libc::c_int, max_processes)?;
             set_rlimit(libc::RLIMIT_CPU as libc::c_int, max_cpu)?;
-            // Deny AF_UNIX sockets (IPC-1) via seccomp, if the policy asked.
-            if deny_unix {
-                seccomp::deny_af_unix()?;
-            }
-            // Reduce the kernel attack surface: deny dangerous, rarely-needed
-            // syscalls. Applied before Landlock; both seccomp filters stack.
-            if harden_syscalls {
-                seccomp::harden_syscalls()?;
-            }
-            // Close the UDP/ICMP/raw egress gap (F-1): Landlock mediates TCP only,
-            // so a network-restricted policy (default-deny or --allow-domain) must
-            // also deny AF_INET/AF_INET6 datagram/raw sockets, or the agent could
-            // exfiltrate over UDP/DNS/QUIC, ICMP, or IPv6 while only TCP was scoped.
-            // TCP (to the broker / granted ports) and AF_UNIX stay available.
-            if restrict_net {
-                seccomp::deny_inet_dgram_raw()?;
-            }
-            // io_uring can create/connect sockets via its own ops, bypassing the
-            // socket() seccomp filters above — so deny it whenever any socket
-            // filter is active (adversarial review #4).
-            if restrict_net || deny_unix || harden_syscalls {
-                seccomp::deny_io_uring()?;
-            }
+            // Apply the seccomp filters compiled in the parent (AF_UNIX deny, the
+            // syscall-hardening set, the UDP/ICMP/raw egress close, and io_uring) —
+            // pre_exec only applies, never compiles (no allocation after fork,
+            // review #7). The filters stack; all were selected by compile_all.
+            seccomp::apply_all(&seccomp_progs)?;
             // Drop all capabilities when running as real root (review #3), after the
             // privileged setup (cgroup join, namespaces, bind mounts) has run and
             // before the agent execs. A uid-0 agent otherwise keeps CAP_SYS_MODULE,
