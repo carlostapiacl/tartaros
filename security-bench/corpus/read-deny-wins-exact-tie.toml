@@ -1,0 +1,29 @@
+id = "read-deny-wins-exact-tie"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# F-4: an EXACT contradiction — the SAME path is both read-denied and re-allowed.
+# Equal depth is a tie, and the policy compiler must resolve a tie to the more
+# restrictive rule (deny wins), fail-safe, rather than re-open the secret. A naive
+# "re-allow always wins" / "allow emitted last" would leak it. Here vault/sec is in
+# both read_denies and read_allows; the agent must NOT be able to read it.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/vault/sec"]
+read_allows = ["{root}/vault/sec"]
+
+[[fixture]]
+path = "{root}/vault/sec/key.txt"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+# The exact deny must win over the exact re-allow.
+cmd = "cat {root}/vault/sec/key.txt"
+
+[control]
+# A non-denied path stays readable and the workspace writable.
+cmd = "sh -c 'cat /etc/hostname >/dev/null && echo ok > {root}/work/src/f.txt'"

@@ -21,7 +21,10 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   nono cannot express). Ancestor-rename and symlink-escape safe.
 - `read_denies` carves secret dirs out of the read grant; **`read_allows`**
   re-open a branch inside a deny, with **specificity precedence** (the deepest
-  rule wins, so a deny nested inside a re-allow is not re-opened).
+  rule wins, so a deny nested inside a re-allow is not re-opened). On an EXACT tie
+  (the same path both denied and re-allowed) the **deny wins, fail-safe** (F-4),
+  on both OS — a tie never resolves to the permissive rule. Regression
+  `read-deny-wins-exact-tie`.
 - **Create new entries at a writable repo root** on Linux via read-only **bind
   mounts** of the handoff set (root or an unprivileged user namespace), instead
   of the carve — which cannot grant creation at a root with a deny below. Touches
@@ -163,7 +166,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   refuses) and the test asserts both are non-permissive. 9/9 on Linux and macOS.
 
 ### Conformance (`tartaros-bench`)
-- 25-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
+- 26-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
   **UNSUPPORTED**; exits non-zero on any failure.
 - **Coverage gate (ADV-05)**: the scorecard prints `coverage: ran/applicable` and
   the JSON carries the host capability stamp + skipped/unsupported counts, so a

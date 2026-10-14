@@ -286,6 +286,13 @@ impl Policy {
             if !a.exists() {
                 continue;
             }
+            // Exact contradiction (the SAME path is both read-denied and
+            // re-allowed): the deny wins, fail-safe. Equal depth is a tie, and a
+            // security tool must resolve a tie to the more restrictive rule rather
+            // than re-open the secret. Skip re-allowing it.
+            if denied.iter().any(|d| d.as_path() == a.as_path()) {
+                continue;
+            }
             let inner: Vec<PathBuf> =
                 denied.iter().filter(|d| d.starts_with(a) && d.as_path() != a.as_path()).cloned().collect();
             if inner.is_empty() {
