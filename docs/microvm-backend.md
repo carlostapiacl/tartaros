@@ -129,10 +129,23 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         privileged than it: `noNewPrivileges`, **all capability sets empty**
         (drop-all, else the runtime grants its default caps incl. NET_RAW/MKNOD/
         SETUID), read-only root, `RLIMIT_NOFILE` ceiling, and the standard
-        `maskedPaths`/`readonlyPaths` for the /proc and /sys leak channels.
-        Pure, no runtime (8/8 crate tests). M-µ1 pure logic is COMPLETE.
+        `maskedPaths`/`readonlyPaths` for the /proc and /sys leak channels, plus the
+        standard default mounts (/proc, /dev, /dev/pts, /dev/shm, /dev/mqueue, /sys
+        ro, /sys/fs/cgroup ro) so the bundle is runnable and that hardening has a
+        filesystem to apply to. Pure, no runtime (8/8 crate tests).
+  - [ ] **`process.user` + uid/gid mapping (honest gap, not yet emitted).** The
+        bundle sets no `process.user`, so the guest process runs as **uid 0 inside
+        the guest**. The guest kernel is isolated, so this is weaker than the host
+        uid-0 case (no host devices/caps — caps are all dropped, `/dev` is a tmpfs),
+        but it is still not least-privilege. The correct fix is a non-root
+        `process.user` plus `linux.uidMappings`/`gidMappings` that map the guest uid
+        to the launcher's host uid — otherwise the rw workspace binds (owned by the
+        host uid) become unwritable to the guest. That mapping must be *validated
+        against the runtime* (runc vs gVisor handle bind ownership differently), so
+        it is deferred to the runsc step below rather than guessed blind.
   - [ ] invoke `runsc run` with this bundle + a guest rootfs and run the corpus
-        under it on a Linux host that has runsc (the only remaining M-µ1 step).
+        under it on a Linux host that has runsc; settle `process.user`/uid mapping
+        against the real runtime (the remaining M-µ1 steps).
 - **M-µ2 — Firecracker**: guest kernel + rootfs build, virtio-fs shares (rw roots /
   ro handoff), vsock broker bridge, VM-size resource caps, teardown = destroy. Run
   the corpus + the multi-tenant scenarios on a KVM host. This is the tenant-isolation
