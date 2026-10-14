@@ -1029,6 +1029,93 @@ mod tests {
         assert!(!ct_eq("", "x"));
     }
 
+    // F-12: fuzz the trusted broker's untrusted-input parser. The broker parses
+    // HTTP from the (adversarial) agent, so its parser must never panic and must
+    // respect the byte caps on ANY input.
+    #[test]
+    fn fuzz_read_line_capped_is_bounded_and_panic_free() {
+        use std::io::Cursor;
+        let mut state: u64 = 0x9e3779b97f4a7c15;
+        let mut rng = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..5000 {
+            let len = (rng() % (MAX_LINE_BYTES as u64 * 2 + 8)) as usize;
+            let mut buf = vec![0u8; len];
+            for b in buf.iter_mut() {
+                // mostly bytes, with newlines sprinkled in so lines sometimes end
+                *b = if rng() % 16 == 0 { b'\n' } else { (rng() & 0xff) as u8 };
+            }
+            let mut cur = Cursor::new(buf);
+            // Must not panic, and any returned line is within the cap.
+            if let Ok(Some(line)) = read_line_capped(&mut cur, MAX_LINE_BYTES) {
+                assert!(line.len() <= MAX_LINE_BYTES, "line {} > cap {}", line.len(), MAX_LINE_BYTES);
+            }
+        }
+    }
+
+    #[test]
+    fn fuzz_parse_abs_uri_panic_free() {
+        let mut state: u64 = 0xdeadbeefcafef00d;
+        let mut rng = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"htp:/.0123456789abcABC[]%@?#- \t\x00";
+        for _ in 0..5000 {
+            let len = (rng() % 64) as usize;
+            let s: String = (0..len)
+                .map(|_| alphabet[(rng() as usize) % alphabet.len()] as char)
+                .collect();
+            let _ = parse_abs_uri(&s); // must not panic
+        }
+        // a few fixed adversarial shapes
+        for s in ["http://", "http://:", "http://[::1]:", "http://h:999999/", "://", "http://h/%2e%2e"] {
+            let _ = parse_abs_uri(s);
+        }
+    }
+
+    // The broker must SURVIVE garbage input: each malformed connection gets a
+    // response or clean close, and a legitimate request afterwards still works.
+    #[test]
+    fn live_broker_survives_garbage_input() {
+        let b = Broker::new("qa", vec![]).insecure_no_auth();
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let garbage: [&[u8]; 5] = [
+            b"\x00\x01\x02\x03 not http\r\n\r\n",
+            b"GET",                                   // partial, then close
+            b"\xff\xfe\xfd\xfc",                       // binary, no newline
+            b"CONNECT \r\n\r\n",                        // empty authority
+            b"GET http://[::1]:/ HTTP/1.1\r\nHost: x\r\n\r\n", // malformed authority
+        ];
+        for g in garbage {
+            if let Ok(mut c) = TcpStream::connect(("127.0.0.1", port)) {
+                c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let _ = c.write_all(g);
+                let _ = c.shutdown(std::net::Shutdown::Write);
+                let mut resp = Vec::new();
+                let _ = c.read_to_end(&mut resp); // must return (response or close), not hang
+            }
+        }
+        // The broker survived: a legitimate request still gets served.
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        c.write_all(b"GET http://127.0.0.1:9/x HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        let mut resp = String::new();
+        let _ = c.read_to_string(&mut resp);
+        assert!(resp.contains("403") || resp.contains("400"), "broker should still respond, got: {resp:?}");
+    }
+
     #[test]
     fn injection_host_scope() {
         let any = Injection { host: None, header: "A".into(), value: "x".into() };
