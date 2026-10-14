@@ -343,7 +343,7 @@ fn cmd_explain(opts: &[String]) -> ! {
     }
     explain(&p);
     // Exit non-zero wherever `run` would refuse on THIS host, so an audit
-    // (`seisin check`) never shows a green ✓ for a policy this host cannot enforce
+    // (an external audit) never shows a green ✓ for a policy this host cannot enforce
     // (e.g. no Landlock on Docker Desktop's linuxkit kernel). Same fail-closed
     // contract as `run`, just without spawning anything.
     #[cfg(target_os = "linux")]
@@ -411,7 +411,7 @@ enum PatKind {
     SingleGlob,
 }
 
-/// Unwrap single-character classes `[x]` → `x`. sandbox-runtime callers (seisin)
+/// Unwrap single-character classes `[x]` → `x`. sandbox-runtime callers
 /// write `.vscod[e]` so a literal path is treated as a pattern (one class costs
 /// fewer rules than a per-parent escape); such a pattern IS the literal path.
 /// A multi-char class `[abc]` or a range is left intact (a real glob).
@@ -479,7 +479,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
         exit(2);
     };
     // Filesystem. Each pattern is classified after unwrapping single-char classes
-    // (seisin's `.vscod[e]` is really a literal path). Literals map to the generic
+    // (a caller.s `.vscod[e]` is really a literal path). Literals map to the generic
     // carve; any-depth patterns must be covered by the trust-handoff set (else
     // refused — a `**` taken literally would protect nothing); single-* globs go to
     // the macOS regex backend, and are refused on Linux.
@@ -761,7 +761,7 @@ fn explain(p: &Policy) {
             println!("note: writes grant write-only; reads are governed by the read carve.");
             // Warn where the carve cannot allow creating NEW entries directly at a
             // writable root (a trust-handoff/explicit deny sits below). This is LESS
-            // permission, not a contract break — seisin surfaces it as a notice.
+            // permission, not a contract break — a consumer surfaces it as a notice.
             // Running with mount privileges (root/container) lifts it via bind mounts.
             for root in &p.writable_roots {
                 let deny_below = p.trust_handoff_rules().iter().any(|r| r.path.starts_with(root) && r.path.exists())

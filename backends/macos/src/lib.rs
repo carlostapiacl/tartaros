@@ -293,7 +293,7 @@ pub fn compile_profile(policy: &Policy) -> String {
 
 /// Like [`compile_profile`], but tag every `deny` rule with `(with message
 /// "<tag>")` so each kernel sandbox denial is attributable in the macOS unified
-/// log. Consumers (e.g. seisin) filter with `eventMessage ENDSWITH "_SBX"` and
+/// log. Consumers filter with `eventMessage ENDSWITH "_SBX"` and
 /// match the embedded command, so a denial is attributable even after the denied
 /// process has exited. `None` = no tags (identical to `compile_profile`).
 pub fn compile_profile_tagged(policy: &Policy, log_tag: Option<&str>) -> String {
@@ -359,7 +359,7 @@ fn build_profile(policy: &Policy) -> String {
     p.push_str("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))\n");
 
     // Headless browser (Chromium/Chrome): the minimal extra grants measured as
-    // required (seisin encargo 5/6), opt-in via --browser and scoped — never a
+    // required (measured against a headless browser), opt-in via --browser and scoped — never a
     // blanket open. Emitted AFTER the kern.proc deny so the browser's read of its
     // OWN process info (kern.proc.pid.) wins last-match; the rest is unaffected by
     // any earlier deny. Without these headless Chromium SIGSEGVs at startup.
@@ -481,7 +481,7 @@ fn build_profile(policy: &Policy) -> String {
         }
     }
 
-    // Ancestor metadata (seisin encargo 6): when reads are carved (a read-deny may
+    // Ancestor metadata: when reads are carved (a read-deny may
     // cover an ANCESTOR of the territory, e.g. /private/tmp above the repo), a tool
     // still needs to `lstat`/`stat` those ancestor directories to reach the paths
     // it IS allowed — Node fails with EPERM on `lstat('/private/tmp')` otherwise.

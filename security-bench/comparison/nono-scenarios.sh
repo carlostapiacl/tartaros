@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reproduce the nono side of the comparison on a Landlock host (not the dev Mac).
-# Downloads nono 0.79, runs the 3 scenarios with idiomatic configs. seisin side
+# Downloads nono 0.79, runs the 3 scenarios with idiomatic configs. the harness side
 # is the security-bench corpus (all PASS). Keep "outside" paths OUT of /tmp (nono
 # allows /tmp by default) so the comparison is fair.
 set -e

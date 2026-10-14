@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Automated fair comparison: run the same scenarios under seisin-sandbox (CLI),
+# Automated fair comparison: run the same scenarios under tartaros (CLI),
 # nono, and (if present) Anthropic sandbox-runtime (srt). Print who blocks what.
 # Run on a Landlock host (NOT the dev Mac). Uses /root paths (not /tmp — nono/srt
 # allow /tmp by default) so the comparison is fair.
@@ -14,7 +14,7 @@ srt_settings() { # $1=work  $2=extra denyRead (optional)
   printf '{ "filesystem": {"allowWrite":["%s"],"denyWrite":[],"allowRead":[],"denyRead":[%s]}, "network":{"allowedDomains":[],"deniedDomains":[],"allowUnixSockets":[],"allowLocalBinding":false} }' "$1" "$2"
 }
 
-hdr="scenario                        | seisin   | nono 0.79"
+hdr="scenario                        | tartaros | nono 0.79"
 [ $HAVE_SRT -eq 1 ] && hdr="$hdr   | srt 0.0.78"
 echo "$hdr"
 echo "--------------------------------+----------+--------------+-------------"
