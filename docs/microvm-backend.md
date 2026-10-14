@@ -125,6 +125,11 @@ Both behind the same `Backend` impl, selected by capability probe + policy.
         command, rootfs)` emits a standard opencontainers/runtime-spec bundle: the
         command, the `mount_plan` shares (rw bind / ro bind / ro-tmpfs mask for a
         secret), resource limits, and a fresh network namespace when egress is off.
+        Hardened to match the Landlock backend so the guest is never *more*
+        privileged than it: `noNewPrivileges`, **all capability sets empty**
+        (drop-all, else the runtime grants its default caps incl. NET_RAW/MKNOD/
+        SETUID), read-only root, `RLIMIT_NOFILE` ceiling, and the standard
+        `maskedPaths`/`readonlyPaths` for the /proc and /sys leak channels.
         Pure, no runtime (8/8 crate tests). M-µ1 pure logic is COMPLETE.
   - [ ] invoke `runsc run` with this bundle + a guest rootfs and run the corpus
         under it on a Linux host that has runsc (the only remaining M-µ1 step).
