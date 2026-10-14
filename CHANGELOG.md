@@ -71,6 +71,12 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   double-forked and `setsid`'d out of the process group.
 - **Kill-switch** (`PR_SET_PDEATHSIG`): the agent dies with its supervisor;
   with `--isolate-pids` the whole PID-namespace tree collapses.
+- **Strict caps are guaranteed-or-abort, with a precise cause (ADV-04)**: in
+  `--strict` a requested cap that a partially-delegated cgroup cannot install
+  (`pids.max`/`memory.max` write refused, or cgroup membership that does not take
+  effect) now aborts naming the exact failure, instead of a generic "no cgroup"
+  message or a silent degrade. Non-strict degradation to RLIMIT is warned for
+  **every** affected cap (`--max-procs` and `--max-mem`), not just processes.
 
 ### Process isolation & kernel attack surface
 - **`--isolate-pids`**: private PID + mount namespace — the agent sees only its
@@ -135,6 +141,11 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
 ### Conformance (`tartaros-bench`)
 - 24-scenario corpus; PASS / VIOLATION / CONTROL_BROKE / INFRA_ERROR / SKIPPED /
   **UNSUPPORTED**; exits non-zero on any failure.
+- **Coverage gate (ADV-05)**: the scorecard prints `coverage: ran/applicable` and
+  the JSON carries the host capability stamp + skipped/unsupported counts, so a
+  green exit is never misread as a full certification. `--require-caps
+  landlock,cgroup,userns` makes a release run FAIL on a host missing any demanded
+  capability, instead of passing with scenarios silently UNSUPPORTED.
 - **Mutation testing** (`--mutate`): removing a protection must flip ≥1 scenario.
 - Self-describing **environment + host-capability stamp** in the report.
 - **`--perf`** startup-overhead benchmark.

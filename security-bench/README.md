@@ -52,6 +52,25 @@ backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind
 macOS runs the cross-platform subset (scenarios whose `os` includes macOS).
 Targets: violations 0, blind spots 0, legitimate ops ≥ 99%.
 
+## Coverage, not just green (what a PASS does and does not certify)
+
+A scenario whose host lacks a required capability is reported **UNSUPPORTED**, not
+PASS — so a run on a capability-poor host does not silently certify guarantees it
+never tested. The scorecard prints a `coverage: ran/applicable` line, and the JSON
+records the host capability stamp (`landlock`, `cgroup_v2`, `userns`) plus the
+skipped/unsupported counts, so a green exit can always be read against what
+actually ran.
+
+For a release-gating run that must certify the **full** corpus, pass
+`--require-caps landlock,cgroup,userns`: the run FAILS (non-zero) if the host is
+missing any demanded capability, instead of passing with scenarios UNSUPPORTED.
+A best-effort dev run omits the flag and tests whatever the host supports.
+
+```
+cargo run -p tartaros-bench -- corpus                                   # best-effort
+cargo run -p tartaros-bench -- corpus --require-caps landlock,cgroup,userns  # full cert
+```
+
 ## A contract
 
 ```toml

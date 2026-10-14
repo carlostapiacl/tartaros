@@ -121,7 +121,12 @@ impl LandlockBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
-        let cg = cgroup::create_cgroup(policy);
+        let cg = match cgroup::create_cgroup(policy) {
+            Ok(c) => c,
+            // Strict + a cgroup present but a requested cap could not be installed
+            // (partial delegation): abort with the precise cause (ADV-04).
+            Err(reason) => return Err(RunError { reason: format!("strict mode: {reason}; refusing to run") }),
+        };
         if policy.strict && cg.is_none() && (policy.max_processes.is_some() || policy.max_memory_bytes.is_some()) {
             return Err(RunError { reason: "strict mode: requested resource caps cannot be guaranteed on this host (no usable cgroup v2); refusing to run".into() });
         }
@@ -158,7 +163,10 @@ fn run_impl(_policy: &Policy, _command: &[String]) -> Result<RunOutcome, RunErro
 #[cfg(target_os = "linux")]
 fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
     use tartaros_core::VecSink;
-    let cg = cgroup::create_cgroup(policy);
+    let cg = match cgroup::create_cgroup(policy) {
+        Ok(c) => c,
+        Err(reason) => return Err(RunError { reason: format!("strict mode: {reason}; refusing to run") }),
+    };
     if policy.strict && cg.is_none() && (policy.max_processes.is_some() || policy.max_memory_bytes.is_some()) {
         return Err(RunError { reason: "strict mode: requested resource caps cannot be guaranteed on this host (no usable cgroup v2); refusing to run".into() });
     }

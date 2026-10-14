@@ -27,28 +27,43 @@ impl Drop for Cgroup {
     }
 }
 
-/// Create a cgroup v2 with the policy's pid/memory caps, if the cgroup fs is
-/// writable (needs a delegated/privileged cgroup). Returns the cgroup dir, whose
-/// `cgroup.procs` the child writes its pid into. Guaranteed regardless of uid/caps
-/// — unlike RLIMIT_NPROC, which root bypasses (finding RES-1). Best-effort: on a
-/// read-only cgroup fs it returns None and we fall back to setrlimit.
-/// Warn (once per run) that a requested resource limit could not be enforced via
-/// cgroups and has degraded to RLIMIT. `--max-procs` without a cgroup falls back
-/// to RLIMIT_NPROC, which a process running as root (CAP_SYS_RESOURCE) can raise
-/// and thus bypass (RES-1). Fail-loud, not fail-silent.
+/// Warn (fail-loud, not fail-silent) that a requested resource cap could not be
+/// enforced via cgroups and has degraded to RLIMIT — which a root process
+/// (CAP_SYS_RESOURCE) can raise. Suppressed in strict mode, where the caller
+/// aborts instead, so the warning would mislead.
 fn warn_cgroup_degraded(policy: &Policy) {
-    if policy.max_processes.is_some() && !policy.strict {
-        // In strict mode the caller aborts with a clear message, so the
-        // "degraded" warning would be misleading — suppress it there.
+    // In strict mode the caller aborts with a clear message, so a "degraded"
+    // warning would mislead — suppress it there. Otherwise warn (fail-loud) for
+    // EVERY requested cap that fell back to RLIMIT, not just --max-procs.
+    if policy.strict {
+        return;
+    }
+    if policy.max_processes.is_some() {
         eprintln!(
             "tartaros: warning: cgroup v2 unavailable; --max-procs degraded to \
              RLIMIT_NPROC (best-effort, bypassable by root). Run on a cgroup-v2 host \
              with write access to /sys/fs/cgroup for a hard process cap."
         );
     }
+    if policy.max_memory_bytes.is_some() {
+        eprintln!(
+            "tartaros: warning: cgroup v2 unavailable; --max-mem degraded to \
+             RLIMIT_AS only (address space capped, no cgroup RSS cap). Run on a \
+             cgroup-v2 host with the memory controller delegated for the hard cap."
+        );
+    }
 }
 
-pub(crate) fn create_cgroup(policy: &Policy) -> Option<Cgroup> {
+/// Create a per-run cgroup and install the policy's caps. Returns:
+/// - `Ok(Some(cg))` — cgroup created; every REQUESTED cap verified installed
+///   (or a tracking-only cgroup when no cap was requested, for reliable teardown).
+/// - `Ok(None)` — no usable cgroup fs; fall back to RLIMIT + process-group
+///   teardown (a non-strict best-effort run, or a run with no caps requested).
+/// - `Err(reason)` — a cgroup fs exists but a REQUESTED cap could not be installed
+///   (partial delegation: controller not delegated, membership did not take
+///   effect). Only returned in strict mode, so the caller aborts with the precise
+///   cause instead of silently enforcing nothing (ADV-04 guaranteed-or-abort).
+pub(crate) fn create_cgroup(policy: &Policy) -> Result<Option<Cgroup>, String> {
     // Always build a per-run cgroup when the cgroup fs is usable — not only to
     // enforce pid/memory caps but for reliable teardown. On exit/timeout the
     // caller runs `cgroup.kill`, which reaps EVERY member, including a process
@@ -61,14 +76,19 @@ pub(crate) fn create_cgroup(policy: &Policy) -> Option<Cgroup> {
     let _ = std::fs::write(format!("{base}/cgroup.subtree_control"), "+pids +memory");
     let dir = format!("{base}/tartaros-{}-{}", std::process::id(), now_nanos());
     if std::fs::create_dir(&dir).is_err() {
+        // No writable cgroup fs. Not fatal here — the strict caller treats
+        // "caps requested but no cgroup at all" as fatal with its own message.
         warn_cgroup_degraded(policy);
-        return None;
+        return Ok(None);
     }
     if let Some(n) = policy.max_processes {
         if std::fs::write(format!("{dir}/pids.max"), n.to_string()).is_err() {
             let _ = std::fs::remove_dir(&dir);
+            if policy.strict {
+                return Err("cgroup pids.max could not be written (pids controller not delegated to this cgroup?)".into());
+            }
             warn_cgroup_degraded(policy);
-            return None;
+            return Ok(None);
         }
     }
     if let Some(m) = policy.max_memory_bytes {
@@ -78,10 +98,10 @@ pub(crate) fn create_cgroup(policy: &Policy) -> Option<Cgroup> {
         // memory is not unbounded, but the stricter cgroup RSS cap did not apply.
         if std::fs::write(format!("{dir}/memory.max"), m.to_string()).is_err() {
             if policy.strict {
-                // Strict: a requested cap that can't be installed aborts, rather
-                // than silently degrading to RLIMIT_AS only.
+                // Strict: a requested cap that can't be installed aborts (with the
+                // precise cause), rather than silently degrading to RLIMIT_AS only.
                 let _ = std::fs::remove_dir(&dir);
-                return None;
+                return Err("cgroup memory.max could not be written (memory controller not delegated to this cgroup?)".into());
             }
             eprintln!(
                 "tartaros: warning: could not set cgroup memory.max; --max-mem falls \
@@ -103,10 +123,13 @@ pub(crate) fn create_cgroup(policy: &Policy) -> Option<Cgroup> {
     let has_cap = policy.max_processes.is_some() || policy.max_memory_bytes.is_some();
     if has_cap && !cgroup_membership_works(&dir) {
         let _ = std::fs::remove_dir(&dir);
+        if policy.strict {
+            return Err("cgroup membership did not take effect (a process moved into the cgroup is not accounted — no cgroup delegation in this container?)".into());
+        }
         warn_cgroup_degraded(policy);
-        return None;
+        return Ok(None);
     }
-    Some(Cgroup { dir })
+    Ok(Some(Cgroup { dir }))
 }
 
 /// Fork a child that does nothing but park briefly, move it into `dir`, and check
