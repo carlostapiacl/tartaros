@@ -191,6 +191,18 @@ them). For headless-browser roles, `--browser` adds the minimal Chromium/Chrome
 Seatbelt grants (macOS) and `--private-tmp` gives the run a private, AF_UNIX-scoped
 `TMPDIR` for the browser's control socket.
 
+**Environment scrubbing (secrets):** a launcher's environment routinely holds
+credentials (`AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, …), and those are inherited
+at `exec` and are **not** governed by Landlock or Seatbelt — a confined agent could
+read them straight out of its own environment (or `/proc/self/environ`). So by
+**default** the backend scrubs the child's environment down to a safe allowlist
+(`PATH`, `HOME`, `LANG`/`LC_*`, `TERM`, `TMPDIR`, the proxy vars the egress broker
+sets, …) before spawning. `--env KEY` carries one launcher variable through, `--env
+KEY=VALUE` sets one explicitly, and `--inherit-env` opts back into full passthrough
+(secrets and all) for trusted local use. Enforced at the spawn layer, so the
+guarantee holds for any embedder, not just the CLI; `explain` prints the exact env
+policy.
+
 ### Threat-model profiles
 
 `--profile` selects a named tier instead of hand-picking flags — and states

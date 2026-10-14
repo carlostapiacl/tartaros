@@ -194,6 +194,16 @@ pub struct Policy {
     /// a blanket open. Without these the browser SIGSEGVs at startup. No effect on
     /// Linux.
     pub browser: bool,
+    /// Environment the agent inherits. By DEFAULT the launcher's environment is
+    /// scrubbed to a minimal safe allowlist (PATH/HOME/…): secrets commonly held
+    /// in a launcher's env (AWS_*, *_TOKEN, …) are inherited at `exec` and are NOT
+    /// governed by Landlock/Seatbelt, so passing them through would leak them to a
+    /// possibly-compromised agent (and via `/proc/self/environ`). `env_passthrough`
+    /// names vars to carry through (`KEY`) or set (`KEY=VALUE`); `inherit_env`
+    /// restores full passthrough (opt into the leak, for trusted local use). The
+    /// CLI applies this to the process environment before spawning.
+    pub inherit_env: bool,
+    pub env_passthrough: Vec<String>,
     /// Opt-in (Linux): run the agent in a private PID + mount namespace so it
     /// sees ONLY its own process subtree — it cannot enumerate, inspect
     /// (`/proc/<pid>/cmdline`) or signal host processes, and a fresh `/proc` is
@@ -238,6 +248,63 @@ impl Policy {
             }
         }
         out
+    }
+}
+
+/// Env vars kept by default (F-13). Everything else in the launcher's environment
+/// is dropped before the agent is spawned, because `exec` inheritance is NOT
+/// governed by Landlock/Seatbelt and a launcher's env routinely holds secrets
+/// (AWS_*, GITHUB_TOKEN, …) that would otherwise leak to the agent and via
+/// `/proc/self/environ`. These are the vars ordinary tools need to run at all and
+/// that carry no credential: path, home, identity, locale, shell, terminal, temp,
+/// and the proxy vars the egress broker sets (proxy config is not a secret and the
+/// agent needs it to reach the broker). `LC_*` is matched by prefix, not listed.
+pub const ENV_ALLOWLIST: &[&str] = &[
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ", "PWD",
+    "TMPDIR", "TMP", "TEMP",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+];
+
+impl Policy {
+    /// Compute the exact environment the agent should be spawned with (F-13).
+    ///
+    /// Returns `None` when `inherit_env` is set — the caller opts into full
+    /// passthrough (secrets and all), so the backend should leave the inherited
+    /// environment untouched. Otherwise returns `Some(env)`: the current process
+    /// environment filtered to [`ENV_ALLOWLIST`] (plus `LC_*`), then with
+    /// `env_passthrough` applied — `KEY` carries the launcher's value through,
+    /// `KEY=VALUE` sets it explicitly (overrides win over the allowlist). The
+    /// backend applies this with `env_clear()` + `envs(..)`, so enforcement does
+    /// not depend on the CLI pre-scrubbing its own process env.
+    pub fn child_env(&self) -> Option<Vec<(String, String)>> {
+        if self.inherit_env {
+            return None;
+        }
+        let original: Vec<(String, String)> = std::env::vars().collect();
+        let mut out: Vec<(String, String)> = original
+            .iter()
+            .filter(|(k, _)| ENV_ALLOWLIST.contains(&k.as_str()) || k.starts_with("LC_"))
+            .cloned()
+            .collect();
+        let set = |out: &mut Vec<(String, String)>, k: &str, v: String| {
+            if let Some(e) = out.iter_mut().find(|(ek, _)| ek == k) {
+                e.1 = v;
+            } else {
+                out.push((k.to_string(), v));
+            }
+        };
+        for entry in &self.env_passthrough {
+            match entry.split_once('=') {
+                Some((k, v)) => set(&mut out, k, v.to_string()),
+                None => {
+                    if let Some((_, v)) = original.iter().find(|(k, _)| k == entry) {
+                        set(&mut out, entry, v.clone());
+                    }
+                }
+            }
+        }
+        Some(out)
     }
 }
 

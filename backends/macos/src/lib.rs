@@ -91,6 +91,13 @@ impl SeatbeltBackend {
         let profile = compile_profile_tagged(policy, Some(&tag));
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
         cmd.arg("-p").arg(&profile).arg("--").args(command);
+        // Scrub the inherited environment to the policy's allowlist (F-13): a secret
+        // in the launcher's env is inherited at exec and is NOT governed by the
+        // Seatbelt profile, so by default we hand the child only the safe allowlist.
+        if let Some(env) = policy.child_env() {
+            cmd.env_clear();
+            cmd.envs(env);
+        }
         let max_memory = policy.max_memory_bytes;
         let max_processes = policy.max_processes;
         let max_cpu = policy.max_cpu_secs;
