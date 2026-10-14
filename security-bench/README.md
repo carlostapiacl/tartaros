@@ -42,15 +42,15 @@ backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind
 
 ## Scorecard (measured 2026-10-13, a Linux host Linux 6.8)
 
-| | Linux (Linux) |
-|---|---|
-| scenarios | 18/18 pass |
-| security violations (critical) | 0 |
-| legitimate ops broken | 0 |
-| mutation blind spots | 0 |
+| | Linux (Linux 6.8) | macOS 15.7 (cross-platform subset) |
+|---|---|---|
+| scenarios | 24/24 pass | 16/16 pass |
+| security violations (critical) | 0 | 0 |
+| legitimate ops broken | 0 | 0 |
+| mutation blind spots | 0 | 0 |
 
-macOS runs the cross-platform subset. Targets: violations 0, blind spots 0,
-legitimate ops ≥ 99%.
+macOS runs the cross-platform subset (scenarios whose `os` includes macOS).
+Targets: violations 0, blind spots 0, legitimate ops ≥ 99%.
 
 ## A contract
 

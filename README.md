@@ -91,6 +91,12 @@ silently passing.
   "kern.procargs2"))` remains available as defense-in-depth for older macOS.
 - **Resource caps on a cgroup-less host degrade to RLIMIT** (bypassable by root)
   and TartarOS warns on stderr rather than pretending to confine.
+- **The effect log is observed, not a guarantee.** Enforcement is guaranteed; the
+  log is fed by collectors that sample the process tree, so a very short-lived
+  event can be missed, and the **file-write axis is enforced but not yet emitted**
+  as events (the one remaining collector). The network, secret, process and MCP
+  axes are logged on both OS. Use the log for visibility and intent, never as the
+  enforcement boundary — that is the kernel policy.
 - **Creating new entries at a repo root needs a mount namespace on Linux.**
   Landlock cannot express "allow write to X but deny X/y", so without a mount
   namespace (no root and unprivileged user namespaces disabled, e.g. hardened
