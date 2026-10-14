@@ -81,6 +81,13 @@ mutation mode (`--mutate`) that proves it would catch a removed protection, and
 marks scenarios UNSUPPORTED on a host that lacks a required capability rather than
 silently passing.
 
+Reproduce the whole scorecard on your own machine in one command —
+[`./scripts/verify.sh`](scripts/verify.sh) — which builds the workspace, runs the
+tests, the conformance corpus against the real OS backend, and the mutation check,
+and prints the host-capability stamp (exits non-zero on any failure). Add
+`--require-caps landlock,cgroup,userns` for a release-gating run that must certify
+the full Linux corpus.
+
 ## Honest limits
 
 - **macOS teardown is best-effort.** A daemon that calls `setsid()` leaves the
