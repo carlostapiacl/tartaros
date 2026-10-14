@@ -24,7 +24,7 @@ in order of value × reachability:
          user with `apparmor_restrict_unprivileged_userns` toggled: with it off,
          `--isolate-pids` gives the agent its own PID namespace (3 PIDs vs 285) and
          create-at-root works with no working-tree residue; the base sandbox needs
-         no namespace and runs regardless. Bench 24/24 unchanged (root path).
+         no namespace and runs regardless. Bench green unchanged (now 28/28).
    - [x] **No silent downgrade.** Where the userns is forbidden, `--isolate-pids`/
          `--isolate-net` **refuse** with a diagnostic that names the exact blocking
          knob (`apparmor_restrict_unprivileged_userns`, `unprivileged_userns_clone`,
@@ -41,9 +41,12 @@ in order of value × reachability:
    "which rule denied me and why" is a top, easy-to-win ask (nono #2081). On macOS
    the `(with message)` deny tags already make this traceable; Linux needs a
    denial path (Landlock audit on new kernels, or an EPERM-correlating probe).
-3. **DNS egress parity.** Landlock mediates TCP only; `--allow-domain` resolves
-   through the broker, but a direct UDP:53 query is not cut unless `--isolate-net`.
-   Close or clearly document the UDP path so domain scoping is airtight.
+3. **DNS egress parity — DONE.** Landlock mediates TCP only, so a direct UDP:53 /
+   QUIC / ICMP / IPv6 datagram used to leave under `--allow-domain`. A seccomp
+   filter now denies `socket(AF_INET|AF_INET6, SOCK_DGRAM|SOCK_RAW)` whenever the
+   network is restricted, cutting that egress WITHOUT a network namespace (TCP to
+   the broker and `AF_UNIX` stay; `--net` keeps UDP). `--isolate-net` remains
+   belt-and-suspenders. Reproduced and closed; regression `egress-udp-raw-denied`.
 4. **Windows (native, not WSL).** A universal ecosystem hole — nono "in planning",
    srt's `srt-win` is alpha with serious bugs (#658/#623/#559). A large bet, later.
 5. **True multi-tenant isolation (microVM / gVisor backend).** The honest "not
@@ -52,6 +55,36 @@ in order of value × reachability:
 
 Cross-cutting: keep the "honest limits" contract — every capability a host cannot
 provide fails closed or reports UNSUPPORTED, never a silent downgrade.
+
+## Adversarial falsification campaign (2026-10-13/14) — closed
+
+A multi-report adversarial pass (boundary-falsification, an internal audit #2,
+three external reviews, and a static review of an older commit) plus seven
+self-run falsification campaigns. Every actionable finding was reproduced and
+closed with measurement on macOS + a Linux host and a regression (unit, corpus, or
+example). Highlights:
+
+- **Egress is complete** (F-1): seccomp cuts UDP/DNS/QUIC/ICMP/raw/IPv6 under a
+  restricted network, not just TCP. io_uring is denied so it cannot create sockets
+  around the filter.
+- **Inherited capabilities don't leak** (F-2): read/write/dir fds and procfs reopen
+  are all revoked before exec (harness `p1c_fd_leak`).
+- **Host-daemon sockets are never silent** (F-3): `docker.sock`/D-Bus reachability
+  warns loudly; `--deny-unix`/hardened profiles close it.
+- **Policy-compiler ties fail safe** (F-4): an exact read allow/deny tie resolves
+  to deny.
+- **Root is hardened**: all capabilities dropped before exec, no device-node
+  creation (`mknod` + Landlock MakeBlock/MakeChar denied).
+- **Trust-handoff set completed**: submodule gitdirs, worktree `.git` pointer,
+  `.claude/hooks`, `.husky`, `.vscode/settings.json`.
+- **Config is fail-closed**: unknown keys and non-numeric flags error, never
+  silently drop a rule.
+- **`pre_exec` allocation-free**: seccomp compiled in the parent (no post-fork
+  malloc deadlock); the secret is redacted in `Debug`; the auth token is compared
+  in constant time.
+
+Still open: `multi-tenant` kernel isolation (microVM, below) and scoping
+`mach-lookup` on macOS (pending a validated service list from a browser workload).
 
 ## M0 — repo (done)
 - [x] Apache-2.0 + NOTICE + THIRD_PARTY_NOTICES
