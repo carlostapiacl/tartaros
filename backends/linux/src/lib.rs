@@ -548,7 +548,7 @@ fn confined_command(
                 .take()
                 .expect("restrict_self called once")
                 .restrict_self()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             // Close inherited non-stdio fds just before exec (defense-in-depth):
             // an fd opened by the parent bypasses path-based confinement because
             // the open already happened. Done last so the ruleset fd was still live.
