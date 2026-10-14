@@ -13,11 +13,13 @@
 
 mod proc;
 
+pub mod file;
 pub mod mcp;
 pub mod net;
 pub mod process;
 pub mod secret;
 
+pub use file::FileCollector;
 pub use mcp::McpCollector;
 pub use net::NetworkCollector;
 pub use process::ProcessCollector;

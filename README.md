@@ -92,11 +92,12 @@ silently passing.
 - **Resource caps on a cgroup-less host degrade to RLIMIT** (bypassable by root)
   and TartarOS warns on stderr rather than pretending to confine.
 - **The effect log is observed, not a guarantee.** Enforcement is guaranteed; the
-  log is fed by collectors that sample the process tree, so a very short-lived
-  event can be missed, and the **file-write axis is enforced but not yet emitted**
-  as events (the one remaining collector). The network, secret, process and MCP
-  axes are logged on both OS. Use the log for visibility and intent, never as the
-  enforcement boundary — that is the kernel policy.
+  log is fed by collectors that sample the process tree (network, secret, process,
+  MCP and file-write, on both OS), so a very short-lived event can be missed. The
+  file-write collector observes *allowed* writes — a denied write (outside the
+  roots or to a handoff path) is blocked before the fd opens, so it is enforced,
+  not logged. Use the log for visibility and intent, never as the enforcement
+  boundary — that is the kernel policy.
 - **Namespaces need root or an unprivileged user namespace on Linux.** The mount
   namespace (for the create-at-root bind mounts) and the PID/net namespaces
   (`--isolate-pids`/`--isolate-net`) require CAP_SYS_ADMIN; a non-root user gets it
