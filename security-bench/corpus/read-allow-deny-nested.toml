@@ -1,0 +1,33 @@
+id = "read-allow-deny-nested"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# Specificity precedence (the reported security bug): deny a dir, RE-ALLOW a
+# branch within it, then deny a DEEPER path inside that branch. The most specific
+# rule must win — a naive "all denies then all allows" would re-open the deeper
+# secret through the branch re-allow. Here: deny vault/, allow vault/mine/, deny
+# vault/mine/settings.json. The agent may read vault/mine/ok.txt but NOT
+# vault/mine/settings.json (the deeper deny wins).
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/vault", "{root}/vault/mine/settings.json"]
+read_allows = ["{root}/vault/mine"]
+
+[[fixture]]
+path = "{root}/vault/mine/settings.json"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/vault/mine/ok.txt"
+content = "ok"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+# The deeper deny must win over the enclosing re-allow.
+cmd = "cat {root}/vault/mine/settings.json"
+
+[control]
+# The re-allowed branch is readable, and the workspace is writable.
+cmd = "cat {root}/vault/mine/ok.txt >/dev/null && echo ok > {root}/work/src/f.txt"

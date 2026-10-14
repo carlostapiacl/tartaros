@@ -181,7 +181,7 @@ fn cmd_run(rest: &[String]) -> ! {
         eprintln!("error: no command after `--`");
         exit(2);
     }
-    let (mut p, log, profile) = build_policy(opts);
+    let (mut p, log, profile) = build_policy(opts, false); // run: quiet
     if p.writable_roots.is_empty() {
         eprintln!("warning: no --write roots; the command cannot write anywhere");
     }
@@ -246,7 +246,7 @@ fn start_egress_broker(p: &mut Policy) {
 }
 
 fn cmd_explain(opts: &[String]) -> ! {
-    let (p, _, profile) = build_policy(opts);
+    let (p, _, profile) = build_policy(opts, true); // explain: verbose
     if let Some(pr) = profile {
         println!("profile: {} — {}", pr.name(), pr.tier());
         if let Some(c) = pr.caveat() {
@@ -293,64 +293,123 @@ struct SandboxNet {
 /// Apply a sandbox-runtime settings file strictly: map the fields we can enforce
 /// onto the generic policy, and REFUSE (exit) on any field we cannot guarantee,
 /// rather than running under-enforced. "Apply fully or do not start."
-/// Does the string use shell-glob metacharacters (so it is a pattern, not a path)?
-fn is_glob(s: &str) -> bool {
-    s.contains('*') || s.contains('?') || s.contains('[')
+/// How a settings path pattern resolves after unwrapping single-char classes.
+enum PatKind {
+    /// A concrete path (no remaining metacharacters).
+    Literal,
+    /// Any-depth pattern (contains `**`).
+    AnyDepth,
+    /// Single-segment glob (`*`/`?`/a real class, no `**`).
+    SingleGlob,
 }
 
-/// Is this glob pattern already covered by the built-in trust-handoff set (which
-/// protects these surfaces at ANY depth under every writable root)? We match on
-/// the config/git handoff names, and on the config DIRECTORIES they live in
-/// (.claude, .vscode, .github, .git) so a `**/.claude` style pattern is accepted:
-/// the dangerous surfaces inside are already denied at any depth.
+/// Unwrap single-character classes `[x]` → `x`. sandbox-runtime callers (seisin)
+/// write `.vscod[e]` so a literal path is treated as a pattern (one class costs
+/// fewer rules than a per-parent escape); such a pattern IS the literal path.
+/// A multi-char class `[abc]` or a range is left intact (a real glob).
+fn unwrap_char_classes(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '[' {
+            let mut cls = String::new();
+            let mut closed = false;
+            while let Some(&n) = chars.peek() {
+                chars.next();
+                if n == ']' { closed = true; break; }
+                cls.push(n);
+            }
+            if closed && cls.chars().count() == 1 {
+                out.push_str(&cls); // single-char class == that literal char
+            } else {
+                out.push('['); out.push_str(&cls); if closed { out.push(']'); }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Classify a pattern (after unwrapping single-char classes). Returns the
+/// normalized string and its kind.
+fn classify(pattern: &str) -> (String, PatKind) {
+    let s = unwrap_char_classes(pattern);
+    let kind = if s.contains("**") {
+        PatKind::AnyDepth
+    } else if s.contains('*') || s.contains('?') || s.contains('[') {
+        PatKind::SingleGlob
+    } else {
+        PatKind::Literal
+    };
+    (s, kind)
+}
+
+/// Is this any-depth pattern already covered by the built-in trust-handoff set
+/// (which protects these surfaces at ANY depth under every writable root)? Match
+/// on the config/git handoff names and on the config DIRECTORIES they live in, so
+/// a `**/.claude` or `**/.codex` pattern is accepted — the dangerous surfaces
+/// inside are already denied at any depth.
 fn handoff_covers(pattern: &str) -> bool {
     use tartaros_core::{HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES};
     HANDOFF_CONFIG_NAMES
         .iter()
         .chain(HANDOFF_GIT_NAMES.iter())
         .any(|name| pattern.contains(name))
-        || [".claude", ".vscode", ".github", ".git"].iter().any(|d| pattern.contains(d))
+        || [".claude", ".codex", ".vscode", ".github", ".git"].iter().any(|d| pattern.contains(d))
 }
 
-fn apply_settings_file(p: &mut Policy, path: &str) {
+fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| { eprintln!("read {path}: {e}"); exit(2); });
     let s: SandboxSettings = serde_json::from_str(&text).unwrap_or_else(|e| { eprintln!("parse {path}: {e}"); exit(2); });
     let refuse = |what: &str| -> ! {
         eprintln!("tartaros: --settings: cannot guarantee {what} on this backend; refusing to run (apply-fully-or-refuse).");
         exit(2);
     };
-    // Glob handling (honesty): TartarOS has no arbitrary-glob engine — Landlock
-    // matches by inode and Seatbelt by path/regex, neither expands a `**` path. A
-    // glob taken as a literal path would NEVER match a real inode, so the deny
-    // would protect nothing while LOOKING enforced. So: a glob that targets the
-    // built-in trust-handoff surfaces (.git/hooks, .claude/*, .mcp.json, …) is
-    // already covered at ANY depth and maps to that; any OTHER glob is refused
-    // rather than silently ignored.
-    let check_glob = |x: &str, is_deny: bool| {
-        if !is_glob(x) {
-            return;
-        }
-        if is_deny && handoff_covers(x) {
-            eprintln!("tartaros: --settings: '{x}' is covered by the built-in trust-handoff set at any depth; applying that instead of the glob.");
-            return;
-        }
-        eprintln!("tartaros: --settings: cannot enforce the glob pattern '{x}' — TartarOS has no glob engine (Landlock matches by inode, Seatbelt by path), so a '**' taken literally would protect nothing. Use concrete paths, or rely on the built-in trust-handoff set (.git/.claude/.mcp.json/…). Refusing (apply-fully-or-refuse).");
+    let refuse_glob = |x: &str| -> ! {
+        eprintln!("tartaros: --settings: cannot enforce the glob pattern '{x}' on this backend — TartarOS has no general glob engine (Landlock matches by inode). Use a concrete path, the built-in trust-handoff set (.git/.claude/.codex/.mcp.json/…), or the macOS backend for single-* globs. Refusing (apply-fully-or-refuse).");
         exit(2);
     };
-    // Filesystem: concrete paths map to the generic carve; globs are gated above.
-    for x in &s.filesystem.allow_write { check_glob(x, false); }
-    for x in &s.filesystem.allow_read { check_glob(x, false); }
-    for x in &s.filesystem.deny_read { check_glob(x, false); }
-    for x in &s.filesystem.deny_write { check_glob(x, true); }
-    p.writable_roots = s.filesystem.allow_write.iter().filter(|x| !is_glob(x)).map(|x| PathBuf::from(expand(x))).collect();
-    p.read_denies = s.filesystem.deny_read.iter().filter(|x| !is_glob(x)).map(|x| PathBuf::from(expand(x))).collect();
-    p.read_allows = s.filesystem.allow_read.iter().filter(|x| !is_glob(x)).map(|x| PathBuf::from(expand(x))).collect();
-    // Concrete deny-writes become carve rules; trust-handoff globs are already
-    // enforced by the built-in set, so they drop out here (no literal rule).
-    p.fs_rules.extend(
-        s.filesystem.deny_write.iter().filter(|x| !is_glob(x))
-            .map(|x| FsRule { path: PathBuf::from(expand(x)), access: Access::Deny, even_if_absent: true }),
-    );
+    // Filesystem. Each pattern is classified after unwrapping single-char classes
+    // (seisin's `.vscod[e]` is really a literal path). Literals map to the generic
+    // carve; any-depth patterns must be covered by the trust-handoff set (else
+    // refused — a `**` taken literally would protect nothing); single-* globs go to
+    // the macOS regex backend, and are refused on Linux.
+    // An ALLOW with any kind of glob is refused (we only re-allow concrete paths).
+    for x in &s.filesystem.allow_write {
+        match classify(x) { (n, PatKind::Literal) => p.writable_roots.push(PathBuf::from(expand(&n))), _ => refuse_glob(x) }
+    }
+    for x in &s.filesystem.allow_read {
+        match classify(x) { (n, PatKind::Literal) => p.read_allows.push(PathBuf::from(expand(&n))), _ => refuse_glob(x) }
+    }
+    let map_deny = |x: &str, write: bool, read: bool, p: &mut Policy| {
+        let (n, kind) = classify(x);
+        match kind {
+            PatKind::Literal => {
+                let path = PathBuf::from(expand(&n));
+                if write { p.fs_rules.push(FsRule { path: path.clone(), access: Access::Deny, even_if_absent: true }); }
+                if read { p.read_denies.push(path); }
+            }
+            PatKind::AnyDepth => {
+                if handoff_covers(&n) {
+                    if verbose {
+                        eprintln!("tartaros: --settings: '{x}' is covered by the built-in trust-handoff set at any depth; applying that.");
+                    }
+                } else {
+                    refuse_glob(x);
+                }
+            }
+            PatKind::SingleGlob => {
+                // macOS compiles single-* globs to anchored regexes; Linux cannot.
+                #[cfg(target_os = "macos")]
+                { p.glob_denies.push(tartaros_core::GlobDeny { pattern: expand(&n), read, write }); }
+                #[cfg(not(target_os = "macos"))]
+                { let _ = (read, write); refuse_glob(x); }
+            }
+        }
+    };
+    for x in &s.filesystem.deny_read.clone() { map_deny(x, false, true, p); }
+    for x in &s.filesystem.deny_write.clone() { map_deny(x, true, false, p); }
     // Network: we default-deny. Anything we cannot enforce in-sandbox is refused.
     p.network = Some(Network::Denied);
     // Per-domain egress IS enforceable: the broker runs as a CONNECT/forward proxy
@@ -384,7 +443,7 @@ fn apply_settings_file(p: &mut Policy, path: &str) {
 
 /// Build the Policy from --config (if any) + --profile + flags. Returns the
 /// policy, the optional --log path, and the selected profile (for its caveat).
-fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
+fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Option<Profile>) {
     let mut p = Policy { network: Some(Network::Denied), ..Default::default() };
     let mut profile: Option<Profile> = None;
 
@@ -424,7 +483,7 @@ fn build_policy(opts: &[String]) -> (Policy, Option<String>, Option<Profile>) {
     // flags; the capabilities live in the sandbox, not in this shortcut.
     if let Some(i) = opts.iter().position(|a| a == "--settings") {
         let path = opts.get(i + 1).unwrap_or_else(|| { eprintln!("--settings needs a path"); exit(2); });
-        apply_settings_file(&mut p, path);
+        apply_settings_file(&mut p, path, verbose);
     }
 
     // --profile on the command line overrides a config profile.

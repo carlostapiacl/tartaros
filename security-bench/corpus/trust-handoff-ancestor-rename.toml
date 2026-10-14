@@ -3,6 +3,13 @@ category = "trust-handoff"
 severity = "critical"
 os = ["linux", "macos"]
 
+# The guarantee is "no writable trust-handoff path", not "no directory renames".
+# An attacker may try to relocate a benign ancestor of a protected .git/hooks to
+# move it out from under its deny. The protection is any-depth, so wherever the
+# hooks dir lands under the writable root it stays unwritable (and outside the
+# root is not writable either). Backends differ in HOW: Linux (Landlock) cannot
+# rename the ancestor at all; macOS (Seatbelt regex) allows the rename but still
+# denies the relocated hook. Either way, planting the hook must fail.
 [policy]
 writable_roots = ["{root}/work"]
 
@@ -14,10 +21,12 @@ path = "{root}/work/src"
 dir = true
 
 [attack]
-cmd = "mv {root}/work/a/nested {root}/work/a/n2"
+# Relocate the ancestor (may succeed), then try to plant a hook at the new path.
+# The whole command fails because the hook write is denied wherever it lands.
+cmd = "mv {root}/work/a/nested {root}/work/a/n2 2>/dev/null; echo x > {root}/work/a/n2/.git/hooks/pre-commit"
 
 [control]
 cmd = "echo ok > {root}/work/src/f.txt"
 
 [assert]
-absent = "{root}/work/a/n2"
+absent = "{root}/work/a/n2/.git/hooks/pre-commit"

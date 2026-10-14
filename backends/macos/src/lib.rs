@@ -364,10 +364,10 @@ pub fn compile_profile(policy: &Policy) -> String {
     // Canonicalize first (Seatbelt matches the real path, e.g. /tmp -> /private/tmp).
     let mut read_rules: Vec<(PathBuf, bool)> = Vec::new(); // (path, is_allow)
     for path in &policy.read_denies {
-        read_rules.push((path.canonicalize().unwrap_or_else(|_| path.clone()), false));
+        read_rules.push((canonical_best_effort(path), false));
     }
     for path in &policy.read_allows {
-        read_rules.push((path.canonicalize().unwrap_or_else(|_| path.clone()), true));
+        read_rules.push((canonical_best_effort(path), true));
     }
     // Specificity = number of path components, then string length as a tiebreak.
     read_rules.sort_by_key(|(path, _)| (path.components().count(), path.as_os_str().len()));
@@ -380,7 +380,42 @@ pub fn compile_profile(policy: &Policy) -> String {
         }
     }
 
+    // Single-segment glob denies (e.g. ~/.codex/*.config.toml) as anchored
+    // regexes. Emitted LAST so a glob read-deny wins over the broad file-read*
+    // allow. `*`/`?` match within one segment only (they never cross `/`).
+    for g in &policy.glob_denies {
+        let re = glob_to_anchored_regex(&g.pattern);
+        if g.write {
+            p.push_str(&format!("(deny file-write* (regex #\"{re}\"))\n"));
+        }
+        if g.read {
+            p.push_str(&format!("(deny file-read* (regex #\"{re}\"))\n"));
+        }
+    }
+
     p
+}
+
+/// Translate a single-segment glob (absolute path with `*`/`?`, no `**`) into an
+/// anchored Seatbelt regex. `*` → `[^/]*`, `?` → `[^/]`; every other character is
+/// escaped as a literal. (The CLI unwraps single-char classes `[x]` before this,
+/// so brackets arriving here are treated literally.)
+fn glob_to_anchored_regex(pattern: &str) -> String {
+    let mut out = String::from("^");
+    for c in pattern.chars() {
+        match c {
+            '*' => out.push_str("[^/]*"),
+            '?' => out.push_str("[^/]"),
+            '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '"' => out.push_str("\\\""),
+            _ => out.push(c),
+        }
+    }
+    out.push('$');
+    out
 }
 
 /// Deny write to a protected path, plus ancestor move-blocking: renaming any
@@ -388,6 +423,12 @@ pub fn compile_profile(policy: &Policy) -> String {
 /// protected path out from under its deny, so unlink/rename is denied on each
 /// ancestor and on the path itself. `file-write-unlink` is what rename/delete use.
 fn emit_deny(p: &mut String, path: &Path, roots: &[PathBuf]) {
+    // Canonicalize so the deny matches the real path Seatbelt sees — the writable
+    // roots are already canonical, so a deny under /tmp/... must become
+    // /private/tmp/... or it would not match (and the write would leak). The path
+    // may not exist yet (deny-even-if-absent), so resolve the nearest existing
+    // ancestor and reattach the rest.
+    let path = &canonical_best_effort(path);
     p.push_str(&format!("(deny file-write* (subpath {}))\n", quote(path)));
     p.push_str(&format!("(deny file-write* (literal {}))\n", quote(path)));
 
@@ -453,6 +494,33 @@ fn regex_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// Canonicalize a path, resolving symlinks, even when the path does not exist
+/// yet: walk up to the nearest existing ancestor, canonicalize that, and reattach
+/// the remaining components. Seatbelt matches real paths, so a rule under a
+/// symlinked root (e.g. /tmp -> /private/tmp) must be resolved or it will not
+/// match. Falls back to the original path if nothing resolves.
+fn canonical_best_effort(path: &Path) -> PathBuf {
+    if let Ok(c) = path.canonicalize() {
+        return c;
+    }
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path;
+    while let Some(parent) = cur.parent() {
+        if let Some(name) = cur.file_name() {
+            suffix.push(name.to_owned());
+        }
+        if let Ok(c) = parent.canonicalize() {
+            let mut out = c;
+            for s in suffix.iter().rev() {
+                out.push(s);
+            }
+            return out;
+        }
+        cur = parent;
+    }
+    path.to_path_buf()
 }
 
 /// Quote a path as an SBPL string literal.
