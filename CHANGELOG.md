@@ -57,7 +57,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   side-channel around the broker. A seccomp filter now denies
   `socket(AF_INET|AF_INET6, SOCK_DGRAM|SOCK_RAW)` whenever the network is
   restricted; TCP (to the broker / granted ports) and `AF_UNIX` are untouched, and
-  `--net` (opt-in full egress) leaves UDP available. Reproduced and closed on the Linux test host
+  `--net` (opt-in full egress) leaves UDP available. Reproduced and closed on a Linux host
   (UDP/DNS, ICMP, IPv6-UDP all `EPERM`; broker HTTPS still 200). Regression
   `egress-udp-raw-denied`; needs no namespace (unlike `--isolate-net`).
 - **`--isolate-net`**: empty network namespace (loopback only) — belt-and-suspenders
@@ -75,6 +75,10 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   resolved address (no rebinding window).
 - **Bounded request parsing** (per-line and header-count caps) so a confined
   agent cannot OOM the supervisor.
+- **Secret never printed; token compared in constant time (review)**: `Injection`
+  has a manual `Debug` that redacts its value (a derived `Debug` would print the
+  injected secret if a broker/capability were ever logged), and the client-auth
+  token is checked with a constant-time comparison instead of `==`.
 - **Availability under abuse (ADV-01)**: the broker runs in the trusted supervisor
   and the agent is adversarial, so one client must never block another. Each
   connection is handled on its own bounded worker thread (`MAX_CONCURRENT_SESSIONS`,
@@ -132,7 +136,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   all-or-nothing), so a confined agent can reach `docker.sock`, containerd, D-Bus
   or systemd — a host-escape vector — unless AF_UNIX is denied. The `hostile-code`
   / `multi-tenant` profiles and `--deny-unix` block it; the default now **warns at
-  launch** when such a socket is present (reproduced on the Linux test host: a default run reached
+  launch** when such a socket is present (reproduced on a Linux host: a default run reached
   `docker.sock` and the D-Bus bus; the hardened profiles close it).
 
 ### Effect log (observability)
@@ -186,10 +190,10 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
 - **`explain` matches `run`'s verdict.** `explain` now exits non-zero (2) wherever
   `run` would refuse on this host — no Landlock, Landlock net unavailable when a
   denial is required, isolation requested without a grantable namespace, or strict
-  caps with no usable cgroup — so an audit (`seisin check`) never shows a green ✓
+  caps with no usable cgroup — so an audit (an external `check`) never shows a green ✓
   on a host that cannot actually enforce the policy.
 
-### sandbox-runtime compatibility (seisin provider)
+### sandbox-runtime compatibility
 - **`--settings <file>`**: maps a sandbox-runtime `settings.json`
   (filesystem/network allow-deny) onto the policy, applying every field it can
   enforce and **refusing** (exit 2) anything it cannot — apply-fully-or-refuse.
@@ -199,7 +203,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   globs are refused rather than treated as never-matching literals.
 - **`--browser` — headless Chromium/Chrome Seatbelt grants (macOS)**: the minimal
   extra rules a headless browser needs, measured against Playwright + the headless
-  shell (seisin encargo 6): POSIX shared memory for `apple.cfprefs.*` and
+  shell (measured against a headless browser): POSIX shared memory for `apple.cfprefs.*` and
   `apple.shm.notification_center`, POSIX semaphores, the IOSurface/RootDomain IOKit
   user clients + `iokit-get-properties`, and `sysctl-read kern.proc.pid.` /
   `sysctl-write kern.tcsm_enable`. Scoped and opt-in — never a blanket open — and

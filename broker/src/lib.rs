@@ -27,11 +27,23 @@ use std::time::{Duration, Instant};
 
 /// Inject `header: value` on requests to `host` (or to any host when `host` is
 /// None). The value is the secret; it lives here, never in the agent.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Injection {
     pub host: Option<String>,
     pub header: String,
     pub value: String,
+}
+
+// Manual Debug that REDACTS the value: `value` is the injected secret, and a
+// derived Debug would print it (e.g. if a Broker/Capability were ever logged).
+impl std::fmt::Debug for Injection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Injection")
+            .field("host", &self.host)
+            .field("header", &self.header)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 impl Injection {
@@ -313,7 +325,7 @@ impl Broker {
         if let Some(tok) = &self.auth_token {
             let ok = headers
                 .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case("x-tartaros-auth") && v == tok);
+                .any(|(k, v)| k.eq_ignore_ascii_case("x-tartaros-auth") && ct_eq(v, tok));
             if !ok {
                 let _ = client
                     .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -702,6 +714,21 @@ fn read_capped(resp: ureq::Response) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+/// Constant-time equality for the auth token: compares every byte of an
+/// equal-length pair with an OR accumulator, so a mismatch does not short-circuit
+/// and leak position via timing. (Low-risk on a loopback-only port, but free.)
+fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
 /// "http://host:port/path" -> (host, port, "/path"). Defaults port 80.
 fn parse_abs_uri(uri: &str) -> Option<(String, u16, String)> {
     let rest = uri.strip_prefix("http://")?;
@@ -980,6 +1007,26 @@ mod tests {
         let _ = c.read_to_string(&mut resp);
         assert!(resp.contains("403"), "CONNECT to a non-allowed port must be 403, got: {resp:?}");
         assert!(resp.contains("port not allowed"), "got: {resp:?}");
+    }
+
+    #[test]
+    fn injection_debug_redacts_secret() {
+        let inj = Injection { host: Some("api.github.com".into()), header: "Authorization".into(), value: "ghp_SUPERSECRET".into() };
+        let s = format!("{inj:?}");
+        assert!(!s.contains("ghp_SUPERSECRET"), "Debug must not print the secret value, got: {s}");
+        assert!(s.contains("<redacted>"));
+        // a Capability holding injections must not leak them either (derived Debug
+        // uses Injection's custom Debug).
+        let cap = Capability { prefix: "/gh".into(), upstream_base: "https://api.github.com".into(), methods: vec!["GET".into()], injections: vec![inj] };
+        assert!(!format!("{cap:?}").contains("ghp_SUPERSECRET"));
+    }
+
+    #[test]
+    fn ct_eq_matches_only_equal() {
+        assert!(ct_eq("token-abc", "token-abc"));
+        assert!(!ct_eq("token-abc", "token-abd"));
+        assert!(!ct_eq("token-abc", "token-ab"));
+        assert!(!ct_eq("", "x"));
     }
 
     #[test]

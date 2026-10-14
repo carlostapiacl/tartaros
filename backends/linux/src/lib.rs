@@ -654,7 +654,7 @@ fn has_symlink_component(p: &std::path::Path) -> bool {
 
 /// Does THIS host block `run` for this policy? Returns the reason `run` would
 /// refuse (fail-closed), or None if it would proceed. `explain` calls this and
-/// exits non-zero wherever `run` would refuse, so an audit (e.g. `seisin check`)
+/// exits non-zero wherever `run` would refuse, so an external audit
 /// never shows a green ✓ on a host that cannot actually enforce the policy.
 #[cfg(target_os = "linux")]
 pub fn host_blocks_run(policy: &Policy) -> Option<String> {

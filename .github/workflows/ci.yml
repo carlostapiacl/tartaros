@@ -30,8 +30,8 @@ jobs:
       - name: security-bench (Landlock)
         if: steps.ll.outputs.have == '1'
         run: |
-          cargo build -p seisin-security-bench
-          cd security-bench && ../target/debug/seisin-security-bench corpus
+          cargo build -p tartaros-bench
+          cd security-bench && ../target/debug/tartaros-bench corpus
 
   macos:
     runs-on: macos-14
@@ -43,5 +43,5 @@ jobs:
         run: cargo test --workspace
       - name: security-bench
         run: |
-          cargo build -p seisin-security-bench
-          cd security-bench && ../target/debug/seisin-security-bench corpus
+          cargo build -p tartaros-bench
+          cd security-bench && ../target/debug/tartaros-bench corpus
