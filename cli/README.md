@@ -101,7 +101,7 @@ See [`examples/role-dev.toml`](examples/role-dev.toml). A sandbox-runtime
 them). `--config` flags are overridden by equivalent command-line flags.
 
 The exit code is the command's (128+signal on signal death, 124 on timeout).
-`--log` records every boundary-crossing attempt first-hand — the feed the intent layer reads.
+`--log` records every boundary-crossing attempt first-hand, as JSON Lines any tool can read.
 
 ## explain — audit a policy
 

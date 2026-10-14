@@ -1,289 +1,220 @@
 # TartarOS
 
-### NOTHING ESCAPES THE BOUNDARY.
+**A local sandbox for AI coding agents that you can test yourself.**
 
-**Secure Agent Runtime · Built in Rust.** The sandbox that confines AI coding
-agents — and protects what the others leave open: the **trust-handoff set**.
+Let Claude Code, Codex or any agent run unattended. Your secrets stay out of its
+reach, its network stays on an allowlist, your repo stays clean, and nothing it
+leaves behind runs later outside the box. Every one of those claims is a test in
+this repo that you can run on your own machine.
 
-Most agent sandboxes confine what the agent *does*. They do not protect the
-files a trusted tool *outside* the box later runs, loads, or scans — git hooks,
-`.claude/settings.json`, shell rc files, CI config. That gap is where the 2026
-wave of agent sandbox escapes lived (Pillar Security "Trust Handoff Flaw", CSA,
-CVE-2026-26268). TartarOS closes it, on macOS and Linux, with a policy you can
-verify — and adds process, resource and network confinement that holds **even
-when the agent runs as root**.
+Open source (Apache-2.0) · macOS and Linux · one binary · no Docker, no VM, no
+account, no login · written in Rust · `v0.1.0-alpha`
 
-> Status: **early but real** (`v0.1.0-alpha`). This repo is the open enforcement
-> layer: the policy model and the OS backends. A separate policy engine and
-> multi-agent orchestration build on top of it, and intent analysis is a
-> separate concern — both consume this layer rather than being part of it.
+[Website](https://carlostapiacl.github.io/tartaros/) ·
+[Evidence](https://carlostapiacl.github.io/tartaros/evidence.html) ·
+[Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
 
-## What makes it different (measured, not claimed)
+```
+tartaros run --write ./repo --read-deny ~/.ssh --read-deny ~/.aws \
+  --allow-domain api.anthropic.com --allow-domain github.com \
+  -- claude --dangerously-skip-permissions -p "fix the failing tests"
+```
 
-Reproducible with [`security-bench/`](security-bench/). Measured on a Linux host
-(Linux 6.8) and macOS 15.7, 2026-10-13. The genuine differentiators versus the
-measured competitors (Codex `0.162.1`, nono, `@anthropic-ai/sandbox-runtime`):
+Measured on macOS: Claude Code works confined like this, with egress only to
+the domains you list ([evidence](evidence/2026-10-14/macos/claude-code-allow-domain.txt)).
 
-- **Trust-handoff protected at *any* depth, path-based** — a nested `.git/hooks`
-  or `.claude/settings.json` is non-writable however deep, and an ancestor rename
-  cannot relocate it out from under its deny. Discovery walks to a bounded depth;
-  anything deeper is denied wholesale (fail-safe), so a handoff path is never left
-  writable just by being far down. The nearest comparison,
-  sandbox-runtime, path-protects nested hooks on Linux only up to a depth cap
-  (default 3); nono uses cryptographic attestation rather than path protection.
-- **Deny-inside-allow on Linux** — expressed as a carved Landlock allow-list.
-  nono cannot even express this policy (it refuses to start).
-- **The sandbox protects its *own* config by default** — the trust-handoff set
-  includes the files a trusted tool would re-read; we do not leave our own
-  settings writable for the agent to poison.
-- **Whole-workspace-writable without giving up the handoff, cleanly** — where a
-  mount namespace is available (root, container, or an unprivileged user
-  namespace), the workspace is granted writable and each handoff path is pinned
-  read-only with a bind mount, so the agent can create new files at a repo root
-  while the **existing** `.git/hooks` stays unwritable. Unlike bubblewrap/
-  sandbox-runtime, option B touches only paths that exist, so it leaves **no
-  placeholder/bind-mount residue** in the working tree; `.git` is bound as one
-  mount (no lockfile race). The tradeoff of a whole-writable root is that a
-  *not-yet-existing* handoff path (a new top-level `.claude/settings.json`, or a
-  brand-new nested repo's hooks) is **not** protected under this strategy — see
-  Honest limits. Without a mount namespace it falls back to the Landlock carve and
-  `explain` warns about the create-at-root limitation — never a silent downgrade.
+## What you get
 
-The rest of the hardening below (root-proof cgroup caps, `cgroup.kill` teardown,
-`--isolate-pids`, `--isolate-net`, `--seccomp-strict`) is strong but **not**
-claimed as unique: nono and sandbox-runtime close network egress and process
-caps by their own means (seccomp socket-family / network-namespace; cgroup
-`pids.max`). We do **not** claim "more secure than X in every scenario," and we
-do not sell a competitor's default or scope choice as a vulnerability.
+**Secrets out of the agent's reach.**
+- `~/.ssh`, `~/.aws`, `.env` and anything else you name are unreadable. You can
+  deny a whole directory and re-open one branch inside it; the most specific rule
+  wins.
+- The agent's environment is scrubbed by default, so `AWS_SECRET_ACCESS_KEY` and
+  `GITHUB_TOKEN` in your shell never reach it.
+- The broker injects a credential per host, so the agent *uses* a token it never
+  *holds* (Rust API today; the CLI flag is next on the [roadmap](ROADMAP.md)).
 
-## Capabilities
+**Network on an allowlist, deny by default.**
+- `--allow-domain` routes egress through a broker scoped to those domains, with
+  SSRF defense.
+- UDP, ICMP and raw sockets are closed too, so DNS tunnels and QUIC don't slip
+  out.
+- On Linux as root the agent gets its own network namespace whose only route is
+  the broker.
+- Local ports open one at a time (`--port 8080`), not all of localhost.
 
-| dimension | Linux | macOS |
+**Your repo stays clean.**
+- No stub files, no placeholder dotfiles, no bind-mount leftovers in your working
+  tree, and `git status` shows only what the agent actually wrote.
+- Submodules are covered: their hooks under `.git/modules/` are protected too.
+
+**Nothing it leaves behind runs later.**
+- An agent that writes a git hook, `.claude/settings.json`, `.mcp.json` or a CI
+  file doesn't escape when it writes. It escapes the next time *you* run `git
+  commit` or open your editor.
+- TartarOS keeps those files unwritable at any depth: nested repos, submodules,
+  and paths moved by renaming an ancestor directory. That includes the sandbox's
+  own config, so the agent can't switch the sandbox off.
+
+**No silent fallback.**
+- If the host can't provide a protection you asked for, TartarOS refuses to start
+  or reports it `UNSUPPORTED`. It never runs you with less than you asked for and
+  calls it a success.
+- `tartaros explain` prints exactly what a policy grants before anything runs.
+
+**Works where other sandboxes don't.**
+- The base sandbox (Landlock and seccomp on Linux, Seatbelt on macOS) needs no
+  user namespaces, no setuid helper and no Docker. It runs on hardened Ubuntu
+  24.04 and inside containers.
+- Root-proof process and memory caps (cgroup v2), and a timeout that reaps
+  escaped daemons.
+- Optional PID and network isolation.
+
+**A log of what the agent attempted.** Every network connect, secret read,
+process spawn, MCP server and file write, allowed or denied, as JSON Lines that
+any tool can read (`--log effects.jsonl`).
+
+**Already using sandbox-runtime?** `--settings settings.json` applies an existing
+sandbox-runtime config. It enforces every field it can and refuses, with exit 2,
+the ones it can't, instead of dropping them.
+
+## Don't take our word for it
+
+Each guarantee is a contract in [`security-bench/corpus/`](security-bench/corpus/):
+an **attack**, a **legitimate control** that must keep working, and an
+**assertion on the real effect** (the file is unchanged, the secret never shows up
+in the output). A sandbox that blocks everything fails its controls.
+
+| run (2026-10-14) | result |
+|---|---|
+| Linux 6.8, Ubuntu 24.04, Landlock | **32 / 32 pass**, 0 violations |
+| macOS 15.7, Seatbelt | **21 / 21 pass** (11 are Linux-only) |
+| Mutation check, both OS: remove one protection, the suite must catch it | **0 blind spots** |
+| microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle | **20 / 20 pass** |
+
+Raw output, host stamps and JSON reports are in
+[`evidence/2026-10-14/`](evidence/2026-10-14/), and every scenario is listed on the
+[evidence page](https://carlostapiacl.github.io/tartaros/evidence.html).
+Reproduce it in one command:
+
+```
+./scripts/verify.sh                                         # build, tests, corpus, mutation
+./scripts/verify.sh --require-caps landlock,cgroup,userns   # release gate: full Linux corpus
+sudo ./scripts/corpus-runsc.sh                              # the corpus under gVisor
+```
+
+## How it works
+
+```mermaid
+flowchart LR
+    P["your policy<br/>flags · TOML · settings.json"] --> S
+    subgraph S["tartaros supervisor (outside the agent)"]
+        direction TB
+        C["core: Policy + trust-handoff set"]
+        B["egress broker<br/>domain allowlist · credential injection"]
+        L["collectors → effect log (JSONL)"]
+    end
+    S -->|"compiles to"| K
+    subgraph K["the kernel enforces"]
+        direction TB
+        M["macOS: Seatbelt"]
+        X["Linux: Landlock + seccomp<br/>cgroup v2 + namespaces"]
+        V["microVM: OCI bundle (gVisor)"]
+    end
+    K --> A["agent<br/>claude · codex · any command"]
+    A -->|"only door out"| B
+```
+
+The enforcement lives in the kernel, below the agent. The agent can't negotiate
+with it, and it holds even when the agent runs as root: capabilities are dropped,
+device nodes can't be created, and the caps are cgroup-enforced. The
+policy model and trust-handoff logic in [`core/`](core/) are new code; the backends
+reuse proven, permissively licensed plumbing (Codex's Seatbelt base,
+`rust-landlock`), attributed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+More in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+```mermaid
+sequenceDiagram
+    participant Agent as agent (confined)
+    participant T as TartarOS
+    participant You as you, later
+    Agent->>T: write repo/sub/.git/hooks/pre-commit
+    T-->>Agent: denied (read-only, any depth)
+    Agent->>T: mv repo/sub repo/x, then write x/.git/hooks/pre-commit
+    T-->>Agent: denied (the protection follows the path)
+    Agent->>T: write repo/src/fix.rs
+    T-->>Agent: allowed
+    You->>You: git commit runs only the hooks you installed
+```
+
+## Threat-model profiles
+
+`--profile` picks a tier instead of hand-picking flags. Each profile states what
+it guarantees, and the caveat prints on `run` and on `explain`.
+
+| profile | adds | for |
 |---|---|---|
-| FS writes + trust-handoff (nested `.git`, `.claude`, `.codex`, ancestor rename) | ✅ | ✅ |
-| Create new files at a writable repo root (while handoff stays unwritable) | ✅ read-only bind mounts (root or user namespace) | ✅ |
-| FS reads of on-disk secrets (`~/.ssh`, `~/.aws`, `.env`) | ✅ carved read grant | ✅ `(deny file-read*)` |
-| Deny-read inside a re-allowed branch (specificity: deepest wins) | ✅ | ✅ |
-| Network: default-deny, all protocols | ✅ Landlock per-port TCP **+ seccomp denies AF_INET/INET6 UDP·raw** (closes DNS/QUIC/ICMP/IPv6 egress, no netns needed) | ✅ |
-| Network: egress scoped to domains (`--allow-domain`) | ✅ broker CONNECT/HTTPS proxy + SSRF defense | ✅ |
-| Network: complete off via namespace (`--isolate-net`) | ✅ empty netns (belt-and-suspenders over the seccomp UDP/raw close) | ❌ |
-| A single AF_UNIX socket by path (`allowUnixSockets`) | ❌ seccomp is all-or-nothing | ✅ Seatbelt `path-literal` |
-| Secret broker (capability, not raw token) | ✅ HTTP+HTTPS (CONNECT), client auth, TTL+quota, host allow-list | ✅ |
-| Resource: memory / processes / CPU | ✅ RLIMIT + cgroup (`memory.max`, `pids.max`), root-proof | 🟡 RLIMIT only |
-| Lifecycle: timeout + reliable teardown | ✅ `cgroup.kill` (reaps escaped daemons) | 🟡 `kill(-pgid)` best-effort |
-| Process isolation (`--isolate-pids`/`--isolate-net`) | ✅ PID + mount + net namespace (root **or** unprivileged user namespace) | ❌ (no primitive) |
-| Attributable kernel denials (unified log) | — | ✅ `(with message)` tag per deny |
-| First-hand effect log (collectors, record modes) | ✅ | ✅ |
+| `local-agent` (default) | trust-handoff + network deny | a trusted agent that can make mistakes |
+| `hostile-code` | + PID/mount isolation, AF_UNIX lockdown | actively malicious code on a shared kernel |
+| `multi-tenant` | + egress-free network namespace | the most a single kernel can give; full tenant isolation is the [microVM backend](docs/microvm-backend.md) |
 
-**Conformance:** 31/31 security scenarios pass on Linux (kernel 6.8), 0 violations;
-macOS (Seatbelt) passes the cross-platform subset (20/20). The suite also runs a
-mutation mode (`--mutate`) that proves it would catch a removed protection, and
-marks scenarios UNSUPPORTED on a host that lacks a required capability rather than
-silently passing.
-
-Reproduce the whole scorecard on your own machine in one command —
-[`./scripts/verify.sh`](scripts/verify.sh) — which builds the workspace, runs the
-tests, the conformance corpus against the real OS backend, and the mutation check,
-and prints the host-capability stamp (exits non-zero on any failure). Add
-`--require-caps landlock,cgroup,userns` for a release-gating run that must certify
-the full Linux corpus.
-
-## Honest limits
-
-- **macOS teardown is best-effort.** A daemon that calls `setsid()` leaves the
-  process group and `kill(-pgid)` misses it; macOS has no `cgroup.kill` or job
-  object to match Linux's guarantee. Use Linux for strict teardown.
-- **macOS cross-process environment read:** re-measured on macOS 15.7 (Darwin
-  24.6) with a validated direct `KERN_PROCARGS2` probe — another same-user
-  process's environment is **not** exposed (the OS returns only the executable
-  path; a process reads the full environment only for itself). It does not
-  reproduce on current macOS. A targeted `(deny sysctl-read (sysctl-name
-  "kern.procargs2"))` remains available as defense-in-depth for older macOS.
-- **Resource caps on a cgroup-less host degrade to RLIMIT** (bypassable by root)
-  and TartarOS warns on stderr rather than pretending to confine.
-- **Not-yet-existing handoff paths: macOS yes, Linux limited.** The real-world
-  Trust-Handoff attack — poisoning a config/hook that *already exists* in the repo
-  the agent works in — is blocked on both OS at any depth. Protecting a handoff
-  path that does **not exist yet** (pre-planting: a new top-level
-  `.claude/settings.json`, or a brand-new nested git repo's `.git/hooks`) is a
-  macOS property (Seatbelt matches by regex, so absent paths are covered). On
-  Linux it is inode-based: the carve + opt-in `--materialize` covers absent
-  **top-level** configs (at the cost of placeholder residue), but under the
-  whole-root-writable **bind-mount** strategy a not-yet-existing handoff path is
-  not protected, and a newly-created nested repo's hooks are never auto-protected.
-  `explain` states this for the active strategy. Measured, not hidden.
-- **AF_UNIX pathname sockets are not path-filtered on Linux.** Landlock does not
-  govern `connect()` to a unix socket by path, and the seccomp AF_UNIX deny is
-  all-or-nothing, so a confined agent can reach a host daemon's socket
-  (`docker.sock`, containerd, D-Bus, systemd) unless AF_UNIX is denied wholesale —
-  a host-escape vector. `--deny-unix` and the `hostile-code` / `multi-tenant`
-  profiles block it; the default (`local-agent`) does not, but **warns loudly** at
-  launch when such a socket is present rather than leaving it silent. macOS filters
-  AF_UNIX by path (`allowUnixSockets`) and denies it by default in the Seatbelt
-  profile, so this is Linux-only. (Reproduced: a default run reached `docker.sock`
-  and the D-Bus bus; `--deny-unix` / `hostile-code` close it.)
-- **No disk-space quota.** `--max-mem` caps memory, not disk: an agent can fill a
-  writable root (and the underlying filesystem) until it is full — a host DoS that
-  path-based confinement does not stop. Open fds are bounded (hard `RLIMIT_NOFILE`
-  capped at 65536) and processes by `pids.max`, but bytes-on-disk are not. For
-  untrusted code, give the writable root its own size-limited mount (a `tmpfs` with
-  `size=`, a loop device, or a filesystem project quota) — a disk-quota knob is not
-  yet built.
-- **Running the agent as root is hardened, not a microVM.** A root agent now runs
-  with **no capabilities** (bounding set emptied, `SECBIT_NOROOT`, cap sets zeroed)
-  and cannot create device nodes (Landlock drops `MakeBlock`/`MakeChar`; seccomp
-  denies `mknod`), so module load, raw I/O, host ptrace and raw-disk-via-`mknod`
-  are closed. One residual: a uid-0 agent can still *read an already-existing*
-  root-owned block device (e.g. `/dev/sda`) through owner permissions, which raw
-  bytes bypass path rules — run the agent as a **non-root uid** (or don't expose
-  block devices) for that case. A shared kernel is still a shared kernel; true
-  tenant isolation needs the microVM backend (not yet built).
-- **The effect log is observed, not a guarantee.** Enforcement is guaranteed; the
-  log is fed by collectors that sample the process tree (network, secret, process,
-  MCP and file-write, on both OS), so a very short-lived event can be missed. The
-  file-write collector observes *allowed* writes — a denied write (outside the
-  roots or to a handoff path) is blocked before the fd opens, so it is enforced,
-  not logged. Use the log for visibility and intent, never as the enforcement
-  boundary — that is the kernel policy.
-- **Namespaces need root or an unprivileged user namespace on Linux.** The mount
-  namespace (for the create-at-root bind mounts) and the PID/net namespaces
-  (`--isolate-pids`/`--isolate-net`) require CAP_SYS_ADMIN; a non-root user gets it
-  by entering a user namespace first (as bubblewrap does). Where a host forbids
-  unprivileged user namespaces (hardened Ubuntu with
-  `apparmor_restrict_unprivileged_userns=1`, Debian/Arch with
-  `unprivileged_userns_clone=0`, or a container without CAP_SYS_ADMIN) the two
-  behaviours differ **by design, never silently**:
-  - `--isolate-pids`/`--isolate-net` **refuse to start** with a one-line diagnostic
-    that names the exact blocking knob and its remedy — fail-closed, because the
-    caller asked for isolation we cannot provide.
-  - the create-at-root bind mounts **fall back to the Landlock carve**: existing
-    files and subdirectories stay writable, only *new* entries directly at a root
-    that has a handoff below it are blocked, and `explain` prints a one-line
-    warning. (Landlock cannot express "allow write to X but deny X/y".)
-
-  The base sandbox — FS carve + trust-handoff, read-deny, per-port network,
-  resource caps, the broker — needs **no** namespace and runs unprivileged on
-  these hardened hosts. macOS has none of these limits.
-
-## CLI
+## Install
 
 ```
-tartaros run \
-  --write ./repo --read-deny ~/.ssh --read-allow ./repo/runs/mine \
-  --write-deny ./repo/dist --allow-domain github.com \
-  --port 8080 --isolate-pids \
-  --max-procs 256 --max-mem 2147483648 --max-cpu 600 \
-  --timeout 600 --log effects.jsonl -- <cmd>
+cargo build --release -p tartaros-cli      # target/release/tartaros
+tartaros version                           # version + active backend
+tartaros explain --config role.toml        # audit a policy without running it
 ```
 
-Paths may be relative (`./repo`) — they are resolved against the current working
-directory at launch; the example above targets Linux, so on macOS drop the
-Linux-only flags (`--isolate-pids`, and `--max-mem`, whose RLIMIT_AS cap the Darwin
-kernel does not enforce — both are refused with a clear message, never silently
-ignored). `--allow-domain HOST` scopes egress to that domain through the capability broker
-(HTTPS via CONNECT on port 443, SSRF-defended); UDP/ICMP/raw (DNS, QUIC, IPv6
-datagrams) are blocked by the seccomp egress filter, and direct TCP is denied on
-every port except the broker's. **NET-01 closure:** Landlock's network filter is
-port-based, not address-based, so a port grant alone cannot stop a malicious agent
-from reaching an external host on the broker's port. On **Linux as root** TartarOS
-now closes this: the agent runs in a network namespace whose only route is a veth to
-the broker — no default route — so it reaches the broker and nothing else
-(verified: an external host and the host's own public IP on the broker port are both
-unreachable, while the allowed domain works through the broker). It is **fail-closed**
-(if the namespace can't be built and verified isolating, it tears down and falls
-back). On **macOS** the Seatbelt profile filters egress by remote address, so the
-gap never applied. The fallback — **non-root Linux**, where the scoped namespace
-can't be created — is the port grant with a loud warning, scoped egress for a
-*trusted-but-fallible* agent, not hostile-code containment. It is a
-**host:port capability** — a TCP tunnel with TLS end-to-end, so the broker does
-**not** inspect SNI or the certificate; the allowed host is reachable only on 443,
-not as a raw TCP endpoint on an arbitrary port. A full
-sandbox-runtime `settings.json` can be mapped in one shot with
-`--settings <file>`, which applies every field it can enforce and **refuses**
-(exit 2) anything it cannot, rather than silently dropping a rule — including its
-`network.allowMachRegister`/`allowMachLookup` (macOS Mach prefixes; Linux refuses
-them). For headless-browser roles, `--browser` adds the minimal Chromium/Chrome
-Seatbelt grants (macOS) and `--private-tmp` gives the run a private, AF_UNIX-scoped
-`TMPDIR` for the browser's control socket.
-
-**Environment scrubbing (secrets):** a launcher's environment routinely holds
-credentials (`AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, …), and those are inherited
-at `exec` and are **not** governed by Landlock or Seatbelt — a confined agent could
-read them straight out of its own environment (or `/proc/self/environ`). So by
-**default** the backend scrubs the child's environment down to a safe allowlist
-(`PATH`, `HOME`, `LANG`/`LC_*`, `TERM`, `TMPDIR`, the proxy vars the egress broker
-sets, …) before spawning. `--env KEY` carries one launcher variable through, `--env
-KEY=VALUE` sets one explicitly, and `--inherit-env` opts back into full passthrough
-(secrets and all) for trusted local use. Enforced at the spawn layer, so the
-guarantee holds for any embedder, not just the CLI; `explain` prints the exact env
-policy.
-
-### Threat-model profiles
-
-`--profile` selects a named tier instead of hand-picking flags — and states
-honestly what it does and does not guarantee:
-
-| profile | adds | guarantee |
-|---|---|---|
-| `local-agent` | trust-handoff + network-deny (default) | confines a trusted-but-fallible agent's mistakes |
-| `hostile-code` | + PID/mount isolation, AF_UNIX lockdown | confines actively-malicious code on a **shared kernel** (a kernel LPE still crosses it) |
-| `multi-tenant` | + egress-free network namespace | **kernel isolation NOT provided** — shared kernel; real tenant separation needs a microVM backend (not yet built). Maximum single-kernel hardening only. |
-
-A profile only tightens; explicit flags still extend it, and its caveat is
-printed on `run` and in `explain`. TartarOS never claims multi-tenant isolation
-from Landlock/Seatbelt alone.
-
-`tartaros explain [options]` prints exactly what a policy grants without running
-anything, so a security team can audit a profile before deploying it. A policy
-can also be declared once in a TOML file and applied with `--config`. See
-[`cli/README.md`](cli/README.md).
-
-## Architecture
-
-Two layers — the walls (this repo) and intent analysis
-(a separate intent-analysis layer) — both reading from the
-kernel, outside the agent. Full picture in [`ARCHITECTURE.md`](ARCHITECTURE.md).
-
-```
-          your policy  ─────────────┐
-                                     ▼
-      ┌───────────────────────────────────────────┐
-      │  tartaros-core                              │
-      │  Backend trait · Policy · trust-handoff set │
-      └───────────────┬───────────────┬────────────┘
-                      ▼               ▼
-            backends/macos     backends/linux
-            Seatbelt           Landlock + seccomp + cgroup v2 + namespaces
-```
-
-The differentiator (`core/`) is new code. The backends reuse proven,
-permissively-licensed plumbing; see `THIRD_PARTY_NOTICES.md`.
-
-## Conformance
-
-Reproducible scenarios (attack + legitimate control + real-effect assertion)
-live in [`security-bench/`](security-bench/) — run them against the OS backend
-for a PASS/VIOLATION scorecard that exits non-zero on any failure.
-
-## Build & install
-
-```
-cargo build --release -p tartaros-cli            # target/release/tartaros
-tartaros version                                 # version + active backend
-tartaros help                                    # full usage
-```
-
-For a dependency-free drop-in (distroless / minimal containers), build a fully
-static Linux binary — no glibc version to match:
+On Linux you can build a fully static binary for minimal containers:
 
 ```
 rustup target add x86_64-unknown-linux-musl
 cargo build --release -p tartaros-cli --target x86_64-unknown-linux-musl
-# -> static-pie, ldd reports "not a dynamic executable"
 ```
+
+Every flag, the TOML policy format and `explain` are documented in
+[`cli/README.md`](cli/README.md).
+
+## Know the edges
+
+A sandbox is only as trustworthy as its stated limits, so here they are, each with
+the roadmap item that closes it:
+
+- **Shared kernel.** Landlock and Seatbelt can't stop a kernel exploit. For
+  untrusted code, use the microVM backend; phase 1 is validated under gVisor and
+  phase 2 is Firecracker ([roadmap](ROADMAP.md)).
+- **macOS teardown is best effort.** A daemon that calls `setsid()` can outlive
+  the run; Linux reaps it with `cgroup.kill` (strict macOS teardown is on the
+  roadmap).
+- **AF_UNIX on Linux is all or nothing.** Landlock doesn't filter unix sockets by
+  path, so the default profile warns when `docker.sock` or D-Bus is reachable, and
+  `--deny-unix` or `hostile-code` close it. macOS filters by path.
+- **Disk space.** Memory, processes and CPU are capped; bytes on disk are not yet
+  (disk quota is on the roadmap).
+- **Handoff files the agent creates.** Existing handoff files are protected
+  everywhere at any depth, and macOS also covers files that don't exist yet.
+  On Linux, under the bind-mount strategy, a handoff file created during the run is
+  not, and `explain` says so ([roadmap](ROADMAP.md)).
+- **The effect log is observed, not enforced.** Enforcement is the kernel policy,
+  while the log samples the process tree, so a very short-lived event can be
+  missed.
+
+The full detail per OS is in [`docs/limits.md`](docs/limits.md).
+
+## Contributing
+
+The most valuable contribution is a **corpus scenario**: one TOML file with an
+attack, a control and an effect assertion. A scenario that fails today is the best
+bug report there is, and the same file runs against any sandbox, not just this one
+(see [`security-bench/comparison/`](security-bench/comparison/)). Results from other
+kernels and distros are welcome too. Report vulnerabilities privately, as described
+in [`SECURITY.md`](SECURITY.md).
 
 ## License
 
-Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
-Reused third-party code is attributed in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Apache-2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE); reused code is
+attributed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+*Tartarus: the deep pit where the Titans were bound. What goes in stays in, and
+here is the test that proves it.*

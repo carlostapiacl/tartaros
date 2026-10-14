@@ -10,13 +10,13 @@ agrees on what counts as "outside".
 
 - **The effect log is a neutral format (JSON Lines), not a dependency.**
   Collectors write it; anything reads it. See `core::effect::EffectEvent`.
-- **The intent layer does not depend on tartaros** and tartaros does not
-  depend on the intent layer. The intent layer reads the log via its own adapter (it also has
-  adapters for other sources — it treats this as one replaceable source).
+- **Readers bring their own adapter.** TartarOS does not know who reads the log,
+  and a reader does not need to link TartarOS — a SIEM, a script, or an
+  intent-analysis tool can all consume the same lines.
 - **Collectors attach to a process tree by pid** — they can watch any agent, not
   only one launched by this sandbox.
-- **An integrator** runs agents under the sandbox and points
-  the intent layer at the effect log; neither library knows about it.
+- **An integrator** runs agents under the sandbox and points whatever analysis it
+  uses at the effect log; neither side knows about the other.
 
 ## The map
 
@@ -64,6 +64,5 @@ Every collector emits the same `EffectEvent`:
 Capturing denials from the enforcement layer is unreliable (measured: Seatbelt
 denials are not dependably retrievable from the macOS unified log; Landlock
 returns EPERM without a path on kernels before audit support). So the log is fed
-by **collectors that observe the process tree**, the same approach the intent layer's
-research validated — and it captures attempts the wall allowed too, which the
+by **collectors that observe the process tree** — and it captures attempts the wall allowed too, which the
 enforcement layer never reports.

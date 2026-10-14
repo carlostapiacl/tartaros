@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TartarOS</title>
+<meta name="description" content="A local sandbox for AI coding agents that you can test yourself. Secrets out of reach, network on an allowlist, a clean repo, and nothing left behind that runs later. macOS and Linux, open source.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="./">TartarOS</a>
+    <nav aria-label="Site">
+      <a href="evidence.html">Evidence</a>
+      <a href="https://github.com/carlostapiacl/tartaros/blob/master/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/carlostapiacl/tartaros/blob/master/docs/limits.md">Limits</a>
+      <a href="https://github.com/carlostapiacl/tartaros">GitHub</a>
+    </nav>
+    <button class="theme" type="button" aria-label="Switch color theme">Theme</button>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <h1>A local sandbox for AI coding agents that you can test yourself.</h1>
+    <p class="lede">Let Claude Code, Codex or any agent run unattended. Your secrets stay out of its reach, its network stays on an allowlist, your repo stays clean, and nothing it leaves behind runs later outside the box.</p>
+    <p class="facts">Open source, Apache-2.0. macOS and Linux. One binary: no Docker, no VM, no account, no login.</p>
+    <div class="actions">
+      <a class="btn primary" href="#start">Get started</a>
+      <a class="btn secondary" href="evidence.html">See every test result</a>
+    </div>
+
+    <div class="wall" role="group" aria-label="A real contract from the test corpus">
+      <div class="wall-head">
+        <strong>Every claim is a contract you can run</strong>
+        <span>security-bench/corpus/trust-handoff-nested-git.toml</span>
+      </div>
+      <div class="contract">
+        <div>
+          <h3>The attack</h3>
+          <p>Plant a git hook in a nested repo, so it runs the next time someone commits.</p>
+<pre><code>echo '#!/bin/sh' &gt; \
+  work/a/nested/.git/hooks/pre-commit</code></pre>
+        </div>
+        <div>
+          <h3>The control</h3>
+          <p>Normal work in the same workspace must keep working, or the sandbox fails.</p>
+<pre><code>echo ok &gt; work/src/f.txt</code></pre>
+        </div>
+        <div>
+          <h3>The effect</h3>
+          <p>Checked on disk afterwards, not taken from the agent's exit code.</p>
+<pre><code>absent = "work/a/nested/
+  .git/hooks/pre-commit"</code></pre>
+        </div>
+      </div>
+      <div class="verdict" aria-label="Result on 2026-10-14">
+        <span>Linux 6.8 <span class="ok">pass</span></span>
+        <span>macOS 15.7 <span class="ok">pass</span></span>
+        <span>gVisor microVM <span class="ok">pass</span></span>
+        <a href="evidence.html">31 more like this</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="stays">
+  <div class="wrap">
+    <h2 id="stays">What stays in the box</h2>
+    <dl class="stays">
+      <div>
+        <dt>Your secrets</dt>
+        <dd><code>~/.ssh</code>, <code>~/.aws</code>, <code>.env</code> and anything you name are unreadable. Deny a directory and re-open one branch inside it; the most specific rule wins. The environment is scrubbed, so tokens in your shell never reach the agent, and the broker lets it use a credential it never holds.</dd>
+      </div>
+      <div>
+        <dt>Its network</dt>
+        <dd>Deny by default, with an allowlist of domains through a broker that defends against SSRF. UDP, ICMP and raw sockets are closed too, so DNS tunnels and QUIC don't slip out. Local ports open one at a time, not all of localhost.</dd>
+      </div>
+      <div>
+        <dt>Anything that runs later</dt>
+        <dd>Git hooks, <code>.claude/settings.json</code>, <code>.mcp.json</code> and CI files stay unwritable at any depth, through nested repos, submodules and renamed ancestors. That includes the sandbox's own config, so the agent can't switch it off.</dd>
+      </div>
+      <div>
+        <dt>The mess</dt>
+        <dd>No stub files, placeholder dotfiles or bind-mount leftovers in your working tree. <code>git status</code> shows only what the agent wrote.</dd>
+      </div>
+      <div>
+        <dt>Runaway processes</dt>
+        <dd>Root-proof process and memory caps on Linux (cgroup v2), a CPU budget, and a timeout that also reaps daemons that tried to escape the run.</dd>
+      </div>
+      <div>
+        <dt>Silent downgrades</dt>
+        <dd>If a host can't give you a protection you asked for, TartarOS refuses to start or marks it unsupported. <code>tartaros explain</code> prints exactly what a policy grants before anything runs.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section aria-labelledby="where">
+  <div class="wrap">
+    <h2 id="where">Where the wall is</h2>
+    <p>The policy is compiled by a supervisor outside the agent and enforced by the kernel below it: Seatbelt on macOS; Landlock, seccomp, cgroups and namespaces on Linux; an OCI bundle under gVisor for the microVM backend. The agent can't negotiate with it, and it holds when the agent runs as root.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 900 430" role="img" aria-labelledby="dg-t dg-d">
+        <title id="dg-t">The TartarOS boundary</title>
+        <desc id="dg-d">The agent runs inside a bronze wall. Inside, it can write source files but not git hooks or agent configs. Reads of ~/.ssh and direct connections to the internet are blocked. The only way out is the broker, which reaches allowlisted domains. Later, you run git commit outside the wall and only your own hooks run.</desc>
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--muted)"/></marker>
+          <marker id="ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--verdigris)"/></marker>
+        </defs>
+        <g style="font-family:Archivo,system-ui,sans-serif;font-size:15px">
+          <rect x="1" y="1" width="898" height="428" rx="6" style="fill:none;stroke:var(--rule)"/>
+          <text x="20" y="28" style="fill:var(--muted)">your machine</text>
+
+          <rect x="150" y="60" width="430" height="300" style="fill:none;stroke:var(--bronze);stroke-width:10"/>
+          <text x="165" y="88" style="fill:var(--bronze);font-weight:700">tartaros</text>
+
+          <rect x="185" y="110" width="150" height="60" rx="4" style="fill:var(--surface);stroke:var(--ink)"/>
+          <text x="260" y="146" text-anchor="middle" style="fill:var(--ink);font-weight:700">agent</text>
+
+          <rect x="370" y="110" width="180" height="225" rx="4" style="fill:none;stroke:var(--rule);stroke-dasharray:4 4"/>
+          <text x="385" y="134" style="fill:var(--muted)">repo/ (writable)</text>
+          <text x="385" y="172" style="fill:var(--verdigris);font-weight:650">src/fix.rs  written</text>
+          <text x="385" y="222" style="fill:var(--bronze);font-weight:650">.git/hooks  locked</text>
+          <text x="385" y="252" style="fill:var(--bronze);font-weight:650">.claude/  locked</text>
+          <text x="385" y="282" style="fill:var(--bronze);font-weight:650">.mcp.json  locked</text>
+          <text x="385" y="312" style="fill:var(--muted)">at any depth</text>
+
+          <line x1="335" y1="150" x2="378" y2="166" style="stroke:var(--verdigris);stroke-width:2" marker-end="url(#ok)"/>
+          <line x1="335" y1="160" x2="378" y2="216" style="stroke:var(--oxide);stroke-width:2;stroke-dasharray:5 4"/>
+
+          <text x="20" y="150" style="fill:var(--ink)">~/.ssh</text>
+          <text x="20" y="170" style="fill:var(--muted);font-size:13px">~/.aws, .env</text>
+          <line x1="185" y1="146" x2="158" y2="146" style="stroke:var(--oxide);stroke-width:2;stroke-dasharray:5 4"/>
+          <line x1="158" y1="136" x2="158" y2="156" style="stroke:var(--oxide);stroke-width:3"/>
+          <text x="20" y="196" style="fill:var(--oxide);font-size:13px">read denied</text>
+
+          <rect x="215" y="330" width="120" height="44" rx="4" style="fill:var(--surface);stroke:var(--bronze);stroke-width:2"/>
+          <text x="275" y="357" text-anchor="middle" style="fill:var(--ink);font-weight:650">broker</text>
+          <line x1="260" y1="170" x2="268" y2="328" style="stroke:var(--verdigris);stroke-width:2" marker-end="url(#ok)"/>
+
+          <text x="640" y="80" style="fill:var(--ink)">github.com</text>
+          <text x="640" y="100" style="fill:var(--muted);font-size:13px">on the allowlist</text>
+          <path d="M335,352 C470,410 600,300 660,108" style="fill:none;stroke:var(--verdigris);stroke-width:2" marker-end="url(#ok)"/>
+
+          <text x="300" y="38" style="fill:var(--ink)">anything else</text>
+          <text x="400" y="38" style="fill:var(--oxide);font-size:13px">connection denied</text>
+          <line x1="300" y1="110" x2="300" y2="68" style="stroke:var(--oxide);stroke-width:2;stroke-dasharray:5 4"/>
+          <line x1="290" y1="68" x2="310" y2="68" style="stroke:var(--oxide);stroke-width:3"/>
+
+          <text x="640" y="300" style="fill:var(--ink);font-weight:650">you, later</text>
+          <text x="640" y="320" style="fill:var(--muted);font-size:13px">git commit runs only</text>
+          <text x="640" y="338" style="fill:var(--muted);font-size:13px">the hooks you installed</text>
+        </g>
+      </svg>
+      <figcaption>Every arrow above is a scenario in the corpus: the dashed ones are attacks that must fail, the solid ones are controls that must keep working.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section aria-labelledby="proof">
+  <div class="wrap">
+    <h2 id="proof">Measured, not claimed</h2>
+    <p>Each guarantee is a contract with an attack, a legitimate control and an assertion on the real effect. The mutation check removes one protection at a time and requires the suite to catch it, so a green run means something.</p>
+    <div class="table-scroll">
+      <table class="score">
+        <thead><tr><th scope="col">Run on 2026-10-14</th><th scope="col">Result</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Linux 6.8, Ubuntu 24.04, Landlock</th><td><span class="big pass">32 / 32</span> pass</td></tr>
+          <tr><th scope="row">macOS 15.7, Seatbelt (11 scenarios are Linux-only)</th><td><span class="big pass">21 / 21</span> pass</td></tr>
+          <tr><th scope="row">Mutation check, both systems</th><td><span class="big pass">0</span> blind spots</td></tr>
+          <tr><th scope="row">microVM phase 1, under gVisor</th><td><span class="big pass">20 / 20</span> pass</td></tr>
+          <tr><th scope="row">Claude Code confined, egress to one domain (macOS)</th><td><span class="big pass">works</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:1.25rem"><a href="evidence.html">Every scenario, every platform, with the raw output</a>. Run it on your own machine with <code>./scripts/verify.sh</code>.</p>
+  </div>
+</section>
+
+<section id="start" aria-labelledby="start-h">
+  <div class="wrap">
+    <h2 id="start-h">Get started</h2>
+    <div class="cols">
+      <div>
+        <p>Build the binary:</p>
+<pre><code>git clone https://github.com/carlostapiacl/tartaros
+cd tartaros
+cargo build --release -p tartaros-cli
+./target/release/tartaros version</code></pre>
+      </div>
+      <div>
+        <p>Run an agent on a repo with its keys hidden and two domains allowed:</p>
+<pre><code>tartaros run --write ./repo \
+  --read-deny ~/.ssh --read-deny ~/.aws \
+  --allow-domain api.anthropic.com \
+  --allow-domain github.com \
+  -- claude -p "fix the failing tests"</code></pre>
+      </div>
+    </div>
+    <p style="margin-top:1.25rem">Write the policy once in TOML and use it on both systems, or apply an existing sandbox-runtime <code>settings.json</code> with <code>--settings</code>. Every flag is in the <a href="https://github.com/carlostapiacl/tartaros/blob/master/cli/README.md">CLI reference</a>.</p>
+  </div>
+</section>
+
+<section aria-labelledby="edges">
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <h2 id="edges">Know the edges</h2>
+        <ul class="edges">
+          <li>Landlock and Seatbelt share the host kernel, so a kernel exploit crosses them. For untrusted code, use the microVM backend: phase 1 is validated under gVisor, and phase 2 (Firecracker) is next.</li>
+          <li>macOS teardown is best effort for daemons that leave the process group; Linux reaps them.</li>
+          <li>On Linux, unix sockets are all or nothing: the default profile warns when <code>docker.sock</code> is reachable, and <code>--deny-unix</code> closes it.</li>
+          <li>Disk space isn't capped yet; memory, processes and CPU are.</li>
+        </ul>
+        <p><a href="https://github.com/carlostapiacl/tartaros/blob/master/docs/limits.md">All limits, per system</a></p>
+      </div>
+      <div>
+        <h2>Help build it</h2>
+        <p>The most useful contribution is a corpus scenario: one TOML file with an attack, a control and an effect check. A scenario that fails today is the best bug report there is, and the same file runs against any sandbox, not just this one.</p>
+        <p>Results from other kernels and distros are welcome too. Report vulnerabilities privately through <a href="https://github.com/carlostapiacl/tartaros/security">GitHub security advisories</a>.</p>
+        <p><a href="https://github.com/carlostapiacl/tartaros/blob/master/ROADMAP.md">What's coming next</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="myth">Tartarus: the pit beneath the underworld, ringed by a wall of bronze, where the Titans were bound. What goes in stays in.</p>
+    <p>TartarOS is open source under the Apache-2.0 license. It reuses Codex's Seatbelt base and rust-landlock, with attribution in THIRD_PARTY_NOTICES.md.</p>
+  </div>
+</footer>
+<script src="assets/theme.js"></script>
+</body>
+</html>

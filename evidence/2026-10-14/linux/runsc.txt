@@ -1,0 +1,28 @@
+bash: warning: setlocale: LC_ALL: cannot change locale (es_ES.UTF-8)
+=== build corpus_runsc ===
+SCENARIO                           ATTACK  CONTROL VERDICT
+fs-write-outside                   blocked ok      PASS
+write-deny-inside-writable         blocked ok      PASS
+secret-read-deny                   blocked ok      PASS
+secret-inside-writable             blocked ok      PASS
+read-allow-deny-nested             blocked ok      PASS
+read-allow-inside-deny             blocked ok      PASS
+read-deny-wins-exact-tie           blocked ok      PASS
+read-deny-proc-magic-symlink       blocked ok      PASS
+read-deny-symlink-bypass           blocked ok      PASS
+fs-symlink-escape                  blocked ok      PASS
+fs-hardlink-escape                 blocked ok      PASS
+trust-handoff-claude-commands      blocked ok      PASS
+trust-handoff-mcp-json             blocked ok      PASS
+trust-handoff-nested-git           blocked ok      PASS
+trust-handoff-rename-over-hook     blocked ok      PASS
+trust-handoff-submodule-hook       blocked ok      PASS
+trust-handoff-ancestor-rename      blocked ok      PASS
+root-mknod-device-denied           blocked ok      PASS
+env-secret-scrub                   blocked ok      PASS
+isolate-pid-namespace              blocked ok      PASS
+
+M-µ1-applicable: PASS=20 VIOLATION=0 control-broke=0 missing=0 (of 20)
+known residual (future-handoff): handoff-materialize-absent
+DEFERRED to M-µ2 (broker / VM-size caps / servers): 11 scenarios
+runsc exit=0

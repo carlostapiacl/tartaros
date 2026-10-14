@@ -5,16 +5,41 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### macOS — opt-in mach-lookup scoping (reported by seisin)
+### Website, evidence and docs
+- A project site in `docs/` (GitHub Pages): what TartarOS protects, where the
+  boundary is, and the measured results.
+- `evidence/2026-10-14/`: the raw output, JSON reports and host stamps of a full run
+  on Linux 6.8 (32/32, mutation 0 blind spots, gVisor 20/20) and macOS 15.7 (21/21,
+  mutation 0 blind spots), plus Claude Code running confined with egress to one
+  domain on macOS.
+- `scripts/site-evidence.py` builds `docs/evidence.html` from an evidence run, so
+  the published table is generated, not typed.
+- New `ROADMAP.md`; the October working log moved to `docs/journal/`. Per-OS limits
+  moved to `docs/limits.md`.
+
+### microVM (M-µ1) — uid mapping and the full corpus under runsc
+- `GuestUser` (Root / Direct / Mapped). gVisor rejects the user-namespace form; its
+  native non-root form (`Direct`) is validated end to end under `runsc`.
+- The whole M-µ1-applicable corpus runs under `runsc`, one bundle per scenario
+  (`examples/corpus_runsc.rs` + `scripts/corpus-runsc.sh`): 20/20. It found and
+  fixed three real bugs: `write_denies` were dropped (now read-only binds),
+  `read_allows` were not shared (now read-only shares, deepest wins), and a secret
+  that is a regular file could not be masked (now a read-only bind of `/dev/null`).
+
+### Fixed
+- `tartaros-bench` wrote `skipped`/`unsupported` inside the `scenarios` array, so
+  `reports/last.json` was not valid JSON.
+
+### macOS — opt-in mach-lookup scoping
 - `mach-lookup` was allowed broadly (the dynamic linker and ordinary tools look up a
   wide, version-dependent set of system services, so a blind close breaks them).
   Now, when a role provides `network.allowMachLookup` (via `--settings`, its curated
   srt-derived list), the profile switches to **deny-by-default + only those name
-  prefixes** — the tight posture seisin asked for. With no list it stays broad
+  prefixes** — the tight posture integrators asked for. With no list it stays broad
   (back-compat; nothing silently breaks). `allowMachLookup` prefixes were previously
   accepted but inert; they now actually scope.
 
-### N1 — reach declared loopback ports through the broker
+### Reach declared loopback ports through the broker
 - A role's declared `local_ports` (e.g. a local MCP server on `127.0.0.1:8768` or a
   model proxy) are now reachable THROUGH the broker, not just by a direct loopback
   connection. Clients that route everything via `HTTP_PROXY` (ignoring `NO_PROXY`,
@@ -43,7 +68,7 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   after the run. Needs root + iproute2; on macOS the Seatbelt profile already
   filters egress by address, so the gap never applied there.
 
-### macOS — allow signalling same-sandbox processes (reported by seisin)
+### macOS — allow signalling same-sandbox processes
 - The Seatbelt profile allowed `signal` only to `(target self)`, so a process
   could not signal its own children — killing a timed-out subprocess or closing a
   headless browser (`@playwright/mcp`, and how Claude Code terminates Bash
@@ -270,7 +295,7 @@ Verified on a Linux host (kernel 6.8) and macOS 15.7.
   within / outside the writable roots — the file axis now has a collector, so the
   log covers all five axes. Honest scope: it observes *allowed* writes; a denied
   write is blocked by enforcement before the fd opens (enforced, not logged). The
-  log is a sampled observation feed for visibility and intent (the intent layer), never the
+  log is a sampled observation feed for visibility and intent analysis, never the
   enforcement boundary.
 
 ### Threat-model profiles

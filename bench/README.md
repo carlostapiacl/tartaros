@@ -9,4 +9,5 @@ sandbox either passes or fails, run against the real binaries.
 - no cross-process environment read (macOS KERN_PROCARGS2, Linux /proc)
 - exit status on signal death; a single SIGINT; descendants reaped
 
-> These checks are being turned into contracts in `security-bench/`.
+> These checks now live as contracts in [`security-bench/corpus/`](../security-bench/corpus/),
+> and the cross-sandbox runs in [`security-bench/comparison/`](../security-bench/comparison/).

@@ -1,0 +1,19 @@
+tartaros-bench · MUTATION MODE · backend=linux
+
+Each mutation removes one protection; a healthy corpus flips >=1 scenario.
+
+mutation             flips      sensitive scenarios
+----------------------------------------------------------------------
+drop-read-denies     7/8        read-allow-deny-nested, read-allow-inside-deny, read-deny-proc-magic-symlink, read-deny-symlink-bypass, read-deny-wins-exact-tie, secret-read-inside-writable, secret-read-deny [ok]
+grant-network        2/2        broker-credential-egress, net-unauthorized-port [ok]
+drop-isolate-net     1/1        isolate-net-egress [ok]
+drop-isolate-pids    1/1        isolate-pid-namespace [ok]
+raise-proc-limit     1/1        resource-process-limit [ok]
+raise-mem-limit      1/1        resource-memory-limit [ok]
+drop-env-scrub       1/1        env-secret-scrub [ok]
+
+== mutation scorecard ==
+  mutations with a blind spot: 0  [target 0]
+
+OK: every removable protection is caught by at least one scenario.
+mutate exit=0

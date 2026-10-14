@@ -1,6 +1,6 @@
 //! A real observed session (Linux): spawn a confined agent and let the
 //! collectors watch its process tree, producing the effect log — the first-hand
-//! record that feeds the intent layer. Run on a Landlock kernel; needs curl.
+//! record an analysis tool reads. Run on a Landlock kernel; needs curl.
 //! `cargo run -p tartaros-collect --example session`
 
 use tartaros_collect::{
