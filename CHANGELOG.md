@@ -20,6 +20,29 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   `loopback ports: [N]`.
 
 ### Added
+- **Windows backend (native, no WSL, no VM), exercised by the conformance
+  corpus.** Two tiers that enforce the same policy model:
+  - **`appcontainer` (default, no admin ever).** An AppContainer held by what
+    its SID is granted, a private desktop, and a kill-on-close job object for
+    process/memory/CPU caps. Reads are deny-by-default (only granted paths are
+    readable), stricter than the neutral model.
+  - **`sandbox-user` (admin once, then unprivileged).** A dedicated hidden local
+    user created by `backends/windows/setup/sandbox-user.ps1`, launched with
+    `CreateProcessWithLogonW` into a runner that re-execs the command under a
+    `WRITE_RESTRICTED` token. Reads follow the neutral model (everything the host
+    allows minus explicit `--read-deny`, as on Linux/macOS); protection is
+    explicit deny ACEs bound to the user SID.
+  - Trust-handoff is enforced the same way as the other backends, at any depth,
+    including a writable root nested inside a handoff surface and a `.git`
+    pointer's relocated gitdir. Absent handoff names are held for the run with
+    empty placeholder directories that leave no residue in the working tree.
+  - A write-ahead ACL journal (`%LOCALAPPDATA%\tartaros\journal`) restores any
+    grant left behind by a run that died, recovered by the next run.
+  - Selected with `TARTAROS_WINDOWS_TIER`; exercised through the conformance
+    bench. Wiring `tartaros run` to the backend on Windows is the next step
+    ([roadmap](ROADMAP.md)). Measured on Windows 10 19045 (corpus, `--ignore-os`):
+    appcontainer 85/111, sandbox-user 90/111, zero critical violations. Known
+    differences and limits are in [`docs/limits.md`](docs/limits.md).
 - **`--protect-home-handoff` (opt-in).** Also denies the per-user home-handoff
   surface under the writable roots — shell rc files (`.bashrc`, `.bash_profile`,
   `.zshrc`, `.zprofile`, `.profile`), `.gitconfig` (core.fsmonitor/core.pager run

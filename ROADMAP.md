@@ -46,8 +46,11 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
 - [ ] **Learn mode.** *Don't make me write the policy by hand.* Run once in
       observe mode, collect what the agent touched from the effect log, and
       propose the smallest policy that would have allowed it.
-- [ ] **Windows, native (not WSL).** *The same sandbox on every machine.* A
-      backend on AppContainer and job objects, held to the same corpus.
+- [ ] **Windows, native (not WSL) — wire `tartaros run`.** *The same sandbox on
+      every machine.* The backend exists and is held to the corpus (AppContainer
+      and a dedicated-user tier with a write-restricted runner; see
+      [`docs/limits.md`](docs/limits.md)); next is dispatching `tartaros run` to it
+      on Windows, Windows effect-log collectors, and an egress broker channel.
 - [ ] **Not-yet-existing handoff paths under the bind-mount strategy (Linux).**
       Protect a `.claude/settings.json` or a nested repo's hooks that the agent
       creates during the run, without placeholder residue in the working tree.
