@@ -309,6 +309,7 @@ unsafe fn apply_user(path: &Path, sid: &str, grant: Grant) -> Result<Saved, Stri
 /// run <pid> <process creation time>
 /// container <AppContainer profile name>      (AppContainer tier only)
 /// acl <path>\t<SDDL before the change>        (one per path, before it changes)
+/// made <path>                                 (a placeholder dir this run created)
 /// ```
 ///
 /// Tab and newline cannot appear in a Windows path, so the format needs no
@@ -375,11 +376,58 @@ impl Journal {
             .map_err(|e| format!("journal write: {e}"))
     }
 
+    /// Record a placeholder directory this run just created.
+    fn record_made(&mut self, path: &Path) -> Result<(), String> {
+        use std::io::Write;
+        self.file
+            .write_all(format!("made {}\n", path.display()).as_bytes())
+            .and_then(|_| self.file.sync_data())
+            .map_err(|e| format!("journal write: {e}"))
+    }
+
     /// The run restored everything: the journal is no longer needed.
     fn finish(self) {
         drop(self.file);
         std::fs::remove_file(&self.path).ok();
     }
+}
+
+/// Create the run's placeholder directories (see `crate::placeholder_plan`).
+/// `create_dir` (not `_all`): the plan lists parents first, and one that
+/// appeared meanwhile is not ours and is left alone. Each is journaled right
+/// after it is created, so recovery only ever removes directories this backend
+/// made (a crash between the two leaves at most one empty directory).
+fn make_placeholders(policy: &Policy, journal: &mut Journal) -> Result<Vec<PathBuf>, String> {
+    let mut made = Vec::new();
+    for d in crate::placeholder_plan(policy) {
+        match std::fs::create_dir(&d) {
+            Ok(()) => {
+                made.push(d.clone());
+                if let Err(e) = journal.record_made(&d) {
+                    remove_placeholders(&made);
+                    return Err(e);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                remove_placeholders(&made);
+                return Err(format!("placeholder {}: {e}", d.display()));
+            }
+        }
+    }
+    Ok(made)
+}
+
+/// Remove placeholder directories, deepest first. `remove_dir` only removes an
+/// empty directory, so nothing the run wrote can be lost; returns the ones kept.
+fn remove_placeholders(made: &[PathBuf]) -> Vec<String> {
+    let mut kept = Vec::new();
+    for d in made.iter().rev() {
+        if d.exists() && std::fs::remove_dir(d).is_err() {
+            kept.push(d.display().to_string());
+        }
+    }
+    kept
 }
 
 /// Put back what dead runs left behind. Called at the start of every run.
@@ -391,6 +439,7 @@ struct JournalFile {
     alive: bool,
     container: Option<String>,
     entries: Vec<(String, String)>,
+    made: Vec<PathBuf>,
 }
 
 fn parse_journal(path: PathBuf) -> Option<JournalFile> {
@@ -403,15 +452,18 @@ fn parse_journal(path: PathBuf) -> Option<JournalFile> {
     };
     let mut container = None;
     let mut entries = Vec::new();
+    let mut made = Vec::new();
     for l in lines {
-        if let Some(c) = l.strip_prefix("container ") {
+        if let Some(m) = l.strip_prefix("made ") {
+            made.push(PathBuf::from(m));
+        } else if let Some(c) = l.strip_prefix("container ") {
             container = Some(c.to_string());
         } else if let Some((p, sddl)) = l.strip_prefix("acl ").and_then(|r| r.split_once('\t')) {
             entries.push((p.to_string(), sddl.to_string()));
         }
     }
     let alive = unsafe { run_alive(pid, created) };
-    Some(JournalFile { path, pid, alive, container, entries })
+    Some(JournalFile { path, pid, alive, container, entries, made })
 }
 
 unsafe fn recover_orphans() -> Option<String> {
@@ -427,7 +479,8 @@ unsafe fn recover_orphans() -> Option<String> {
     let mut notes = Vec::new();
     for j in journals.iter().filter(|j| !j.alive) {
         let (path, pid, container, entries) = (&j.path, j.pid, &j.container, &j.entries);
-        if entries.iter().any(|(p, _)| live.iter().any(|l| l.eq_ignore_ascii_case(p))) {
+        let made_by_live = j.made.iter().any(|m| live.iter().any(|l| Path::new(l).starts_with(m)));
+        if made_by_live || entries.iter().any(|(p, _)| live.iter().any(|l| l.eq_ignore_ascii_case(p))) {
             notes.push(format!("dead run {pid} shares paths with a live run; its ACLs are restored once that run ends"));
             continue;
         }
@@ -442,6 +495,11 @@ unsafe fn recover_orphans() -> Option<String> {
         }
         if let Some(c) = &container {
             DeleteAppContainerProfile(wide(OsStr::new(c)).as_ptr());
+        }
+        // Only after the ACLs are back (a placeholder's own DACL is among them).
+        let kept = remove_placeholders(&j.made);
+        if !kept.is_empty() {
+            notes.push(format!("left non-empty placeholders of dead run {pid}: {}", kept.join(", ")));
         }
         if failed.is_empty() {
             std::fs::remove_file(path).ok();
@@ -692,7 +750,14 @@ pub(crate) fn run(policy: &Policy, command: &[String]) -> Result<RunOutcome, Run
         let program = program.is_absolute().then_some(program);
 
         let mut journal = Journal::open(&tag, Some(&format!("tartaros.{tag}"))).map_err(err)?;
-        let saved = apply_plan(policy, program, &mut journal, |path, grant| apply(path, &container.sid_str, grant))?;
+        let made = make_placeholders(policy, &mut journal).map_err(err)?;
+        let saved = match apply_plan(policy, program, &mut journal, |path, grant| apply(path, &container.sid_str, grant)) {
+            Ok(s) => s,
+            Err(e) => {
+                remove_placeholders(&made);
+                return Err(e);
+            }
+        };
 
         let outcome = spawn(policy, command, &container, &tag);
         let failed = restore(saved);
@@ -701,6 +766,7 @@ pub(crate) fn run(policy: &Policy, command: &[String]) -> Result<RunOutcome, Run
             // The journal stays: the next run retries the restore.
             return Err(err(format!("run finished but ACL restore failed:{}", restore_note(&failed))));
         }
+        warn_kept(&remove_placeholders(&made));
         journal.finish();
         outcome
     }
@@ -792,6 +858,14 @@ fn materialize(policy: &Policy) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// A placeholder that is not empty after the run was written into by someone
+/// with more rights than the agent; it is left for the user to look at.
+fn warn_kept(kept: &[String]) {
+    if !kept.is_empty() {
+        eprintln!("tartaros: placeholder directories not empty after the run, left in place: {}", kept.join(", "));
+    }
 }
 
 fn restore_note(failed: &[String]) -> String {
@@ -987,13 +1061,21 @@ pub(crate) fn run_sandbox_user(policy: &Policy, command: &[String]) -> Result<Ru
         let program = Path::new(&command[0]);
         let program = program.is_absolute().then_some(program);
         let mut journal = Journal::open(&tag, None).map_err(err)?;
-        let saved = apply_plan(policy, program, &mut journal, |path, grant| apply_user(path, &user.sid_str, grant))?;
+        let made = make_placeholders(policy, &mut journal).map_err(err)?;
+        let saved = match apply_plan(policy, program, &mut journal, |path, grant| apply_user(path, &user.sid_str, grant)) {
+            Ok(s) => s,
+            Err(e) => {
+                remove_placeholders(&made);
+                return Err(e);
+            }
+        };
         let outcome = spawn_user(policy, command, &user, &tag);
         let failed = restore(saved);
         if !failed.is_empty() {
             // The journal stays: the next run retries the restore.
             return Err(err(format!("run finished but ACL restore failed:{}", restore_note(&failed))));
         }
+        warn_kept(&remove_placeholders(&made));
         journal.finish();
         outcome
     }

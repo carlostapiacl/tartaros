@@ -10,7 +10,9 @@
 //! refused by `validate`, never silently dropped.
 
 use std::path::{Path, PathBuf};
-use tartaros_core::{Access, Backend, Network, Policy, PolicyError, RunError, RunOutcome};
+use tartaros_core::{
+    Access, Backend, Network, Policy, PolicyError, RunError, RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES,
+};
 
 #[cfg(windows)]
 mod sys;
@@ -99,8 +101,11 @@ pub fn acl_plan(policy: &Policy, program: Option<&Path>) -> Vec<(PathBuf, Grant)
                 if dir == root.as_path() || !dir.starts_with(root) {
                     break;
                 }
-                let taken = protect.iter().chain(&read_denies).any(|q| q == dir);
-                if !taken && !pins.iter().any(|q| q == dir) {
+                // A dir inside a protected or read-denied path is already held by
+                // that path's inherited DACL; a pin there (which keeps the write
+                // grant) would reopen it.
+                let covered = protect.iter().chain(&read_denies).any(|q| dir.starts_with(q));
+                if !covered && !pins.iter().any(|q| q == dir) {
                     pins.push(dir.to_path_buf());
                 }
                 a = dir.parent();
@@ -132,6 +137,88 @@ fn read_denied(denies: &[PathBuf], allows: &[PathBuf], p: &Path) -> bool {
         (Some(_), None) => true,
         _ => false,
     }
+}
+
+/// Absent trust-handoff names to hold with a placeholder for the run, as the
+/// directories to create, parents first. An ACE cannot name a missing object
+/// and NTFS has no per-name rule, so an absent `.git/hooks` or `.mcp.json` is
+/// created for the run (and protected by the ACL plan like any existing one),
+/// then removed if still empty.
+///
+/// Every placeholder is an empty DIRECTORY, even for a file name such as
+/// `.mcp.json`: git does not track empty directories (an agent's `git add -A`
+/// cannot commit one), nothing can parse it as configuration, and removing it
+/// afterwards with `remove_dir` can never delete content.
+///
+/// Scope, to stay out of every subdirectory: the names directly in a writable
+/// root or in a git repo's root, a repo's `.git/hooks`, a `.git` pointer's
+/// gitdir `hooks`, and a nested name whose first component already exists
+/// (`.claude/agents` when `.claude` does). `.git/config` is never held (a
+/// directory there would break git). Nothing is created through a symlink or
+/// outside a writable root. Not covered: a new name in an arbitrary
+/// subdirectory, such as `sub/.gitattributes`.
+pub fn placeholder_plan(policy: &Policy) -> Vec<PathBuf> {
+    let roots: Vec<PathBuf> = policy.writable_roots.iter().filter(|r| r.is_dir()).cloned().collect();
+    let names: Vec<&str> = HANDOFF_CONFIG_NAMES.iter().chain(HANDOFF_GIT_NAMES).copied().collect();
+    let mut targets: Vec<PathBuf> = Vec::new();
+    for rule in policy.trust_handoff_rules() {
+        let p = rule.path;
+        if rule.access != Access::Deny || std::fs::symlink_metadata(&p).is_ok() {
+            continue;
+        }
+        let wanted = match names.iter().find(|n| p.ends_with(n)) {
+            Some(&".git/config") => false,
+            Some(n) => {
+                let depth = Path::new(n).components().count();
+                let base: PathBuf = p.ancestors().nth(depth).map(Path::to_path_buf).unwrap_or_default();
+                let first = Path::new(n).components().next().map(|c| base.join(c.as_os_str()));
+                roots.iter().any(|r| *r == base)
+                    || base.join(".git").exists()
+                    || (depth > 1 && first.is_some_and(|f| f.is_dir()))
+            }
+            // A `.git` pointer's gitdir surface: hold `hooks`, never `config`.
+            None => p.file_name().is_some_and(|f| f == "hooks") && p.parent().is_some_and(|d| d.is_dir()),
+        };
+        if wanted {
+            targets.push(p);
+        }
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    'target: for t in targets {
+        let Some(root) = roots.iter().find(|r| t.starts_with(r)) else { continue };
+        // Every missing directory from the nearest existing ancestor down; none
+        // may be reached through a link.
+        let mut chain: Vec<PathBuf> = Vec::new();
+        let mut a = Some(t.as_path());
+        while let Some(dir) = a {
+            match std::fs::symlink_metadata(dir) {
+                Ok(m) if m.file_type().is_symlink() => continue 'target,
+                Ok(m) if !m.is_dir() => continue 'target,
+                Ok(_) => break,
+                Err(_) => chain.push(dir.to_path_buf()),
+            }
+            if dir == root.as_path() {
+                break;
+            }
+            a = dir.parent();
+        }
+        let mut b = Some(t.as_path());
+        while let Some(dir) = b {
+            if dir == root.as_path() {
+                break;
+            }
+            if std::fs::symlink_metadata(dir).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+                continue 'target;
+            }
+            b = dir.parent();
+        }
+        for d in chain.into_iter().rev() {
+            if !out.contains(&d) {
+                out.push(d);
+            }
+        }
+    }
+    out
 }
 
 /// Explicit write-denies whose path does not exist yet. An ACE cannot name a
@@ -356,6 +443,54 @@ pub fn is_elevated() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn no_pin_inside_a_write_deny() {
+        let tmp = std::env::temp_dir().join(format!("tt-pin-{}", std::process::id()));
+        let w = tmp.join("work");
+        std::fs::create_dir_all(w.join("proj/out/.mcp.json")).unwrap();
+        let p = Policy {
+            writable_roots: vec![w.clone(), w.join("proj/out")],
+            fs_rules: vec![tartaros_core::FsRule { path: w.join("proj"), access: Access::Deny, even_if_absent: false }],
+            ..Default::default()
+        };
+        let plan = acl_plan(&p, None);
+        let c = |q: &Path| canon(q);
+        assert!(!plan.iter().any(|(q, g)| *g == Grant::Pin && q.starts_with(c(&w.join("proj")))), "{plan:?}");
+        assert!(!plan.iter().any(|(q, g)| *g == Grant::Write && *q == c(&w.join("proj/out"))));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn placeholders_hold_absent_names_only_where_they_matter() {
+        let tmp = std::env::temp_dir().join(format!("tt-ph-{}", std::process::id()));
+        let w = tmp.join("work");
+        for d in ["repo/.git", "sub/src", "nested/.claude", "link-target"] {
+            std::fs::create_dir_all(w.join(d)).unwrap();
+        }
+        std::fs::write(w.join(".gitmodules"), "x").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(w.join("link-target"), w.join("lnk")).unwrap();
+        let p = Policy { writable_roots: vec![w.clone()], ..Default::default() };
+        let plan = placeholder_plan(&p);
+        let has = |rel: &str| plan.contains(&w.join(rel));
+        // top level, parents first
+        assert!(has(".mcp.json") && has(".claude") && has(".claude/agents") && !has(".git/hooks"));
+        let ci = plan.iter().position(|x| *x == w.join(".claude")).unwrap();
+        let ai = plan.iter().position(|x| *x == w.join(".claude/agents")).unwrap();
+        assert!(ci < ai);
+        // existing names are left alone
+        assert!(!has(".gitmodules"));
+        // a repo's hooks and its root names
+        assert!(has("repo/.git/hooks") && has("repo/.gitattributes"));
+        assert!(!has("repo/.git/config"));
+        // an existing first component pulls in its nested names, nothing else does
+        assert!(has("nested/.claude/agents") && !has("nested/.mcp.json"));
+        assert!(!has("sub/.gitattributes") && !has("sub/src/.gitattributes"));
+        // never through a link
+        assert!(!plan.iter().any(|x| x.starts_with(w.join("lnk"))));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
     #[test]
     fn sandbox_user_protects_with_deny_aces() {
         let sid = "S-1-5-21-1-2-3-1001";
