@@ -19,14 +19,14 @@ type Be = tartaros_linux::LandlockBackend;
 type Be = tartaros_macos::SeatbeltBackend;
 
 #[cfg(windows)]
-type Be = tartaros_windows::AppContainerBackend;
+type Be = tartaros_windows::WindowsBackend;
 
 #[cfg(target_os = "linux")]
 const BACKEND: Be = tartaros_linux::LandlockBackend;
 #[cfg(target_os = "macos")]
 const BACKEND: Be = tartaros_macos::SeatbeltBackend;
 #[cfg(windows)]
-const BACKEND: Be = tartaros_windows::AppContainerBackend;
+const BACKEND: Be = tartaros_windows::WindowsBackend;
 
 const OS: &str = if cfg!(target_os = "linux") {
     "linux"
