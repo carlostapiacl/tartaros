@@ -35,6 +35,17 @@ pub(crate) fn compile_all(
     }
     if restrict_net {
         progs.push(compile_deny_inet_dgram_raw()?);
+        // Also close the non-IP egress/host-comms families: AF_PACKET (raw
+        // ethernet) and AF_VSOCK (guest<->host). AF_NETLINK and AF_UNIX stay —
+        // netlink is kernel-only (not egress) and glibc uses it for name
+        // resolution, AF_UNIX is local IPC.
+        progs.push(compile_deny_socket_families(&[libc::AF_PACKET, 40 /* AF_VSOCK */])?);
+    }
+    if harden {
+        // clone3 hides its flags behind a struct pointer seccomp can't inspect, so
+        // deny it with ENOSYS; glibc then falls back to clone(), whose flags we DO
+        // filter (namespace bits) in compile_harden_syscalls.
+        progs.push(compile_deny_clone3_enosys()?);
     }
     // io_uring can create/connect sockets bypassing the socket() filters above, so
     // deny it whenever any socket filter is active (review #4).
@@ -95,10 +106,68 @@ fn compile_harden_syscalls() -> std::io::Result<BpfProgram> {
     for nr in deny {
         map.insert(nr, Vec::new()); // empty rule list = match unconditionally
     }
+    // clone(2) with a namespace flag is the other way (besides unshare/setns) to
+    // enter a new user/mount/net/... namespace after lockdown. clone is also how
+    // every fork/thread is created, so deny it ONLY when a CLONE_NEW* bit is set:
+    // one rule per bit (arg 0 is the flags word on both x86_64 and aarch64).
+    const CLONE_NEW_BITS: &[u64] = &[
+        0x0000_0100, // CLONE_NEWTIME (newer; arg layout unchanged)
+        0x0200_0000, // CLONE_NEWCGROUP
+        0x0400_0000, // CLONE_NEWUTS
+        0x0800_0000, // CLONE_NEWIPC
+        0x1000_0000, // CLONE_NEWUSER
+        0x2000_0000, // CLONE_NEWPID
+        0x4000_0000, // CLONE_NEWNET
+        0x0002_0000, // CLONE_NEWNS
+    ];
+    let mut clone_rules = Vec::new();
+    for bit in CLONE_NEW_BITS {
+        let cond = SeccompCondition::new(0, SeccompCmpArgLen::Qword, SeccompCmpOp::MaskedEq(*bit), *bit)
+            .map_err(|e| to_io(format!("seccomp cond: {e}")))?;
+        clone_rules.push(SeccompRule::new(vec![cond]).map_err(|e| to_io(format!("seccomp rule: {e}")))?);
+    }
+    map.insert(libc::SYS_clone, clone_rules);
     let filter = SeccompFilter::new(
         map,
         SeccompAction::Allow,                     // default: allow
         SeccompAction::Errno(libc::EPERM as u32), // denied syscalls
+        std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
+    )
+    .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
+    finalize(filter)
+}
+
+/// Deny `socket(family, …)` for each listed family (any type), returning EPERM.
+/// Used to close AF_PACKET/AF_VSOCK when the network is restricted.
+fn compile_deny_socket_families(families: &[i32]) -> std::io::Result<BpfProgram> {
+    let mut rules = Vec::new();
+    for fam in families {
+        let cond = SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, *fam as u64)
+            .map_err(|e| to_io(format!("seccomp cond: {e}")))?;
+        rules.push(SeccompRule::new(vec![cond]).map_err(|e| to_io(format!("seccomp rule: {e}")))?);
+    }
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(libc::SYS_socket, rules);
+    let filter = SeccompFilter::new(
+        map,
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::EAFNOSUPPORT as u32),
+        std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
+    )
+    .map_err(|e| to_io(format!("seccomp filter: {e}")))?;
+    finalize(filter)
+}
+
+/// Deny `clone3` with ENOSYS so a caller (glibc) falls back to `clone`, whose
+/// namespace flags ARE filtered. clone3's flags live behind a pointer seccomp
+/// cannot read, so it cannot be filtered in place.
+fn compile_deny_clone3_enosys() -> std::io::Result<BpfProgram> {
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(libc::SYS_clone3, Vec::new()); // unconditional
+    let filter = SeccompFilter::new(
+        map,
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::ENOSYS as u32),
         std::env::consts::ARCH.try_into().map_err(|e| to_io(format!("seccomp arch: {e}")))?,
     )
     .map_err(|e| to_io(format!("seccomp filter: {e}")))?;

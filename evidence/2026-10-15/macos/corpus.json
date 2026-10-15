@@ -1,13 +1,13 @@
 {
   "os": "macos",
-  "environment": {"os":"macos","kernel":"24.6.0","tool_version":"0.1.0-alpha","unix_time":1792032635,"caps":{"landlock":false,"cgroup_v2":false,"userns":false}},
+  "environment": {"os":"macos","kernel":"24.6.0","tool_version":"0.1.0-alpha","unix_time":1792033564,"caps":{"landlock":false,"cgroup_v2":false,"userns":false}},
   "total": 106,
   "passed": 106,
   "violations": 0,
   "critical_violations": 0,
   "control_broken": 0,
   "vacuous": 0,
-  "skipped": 25,
+  "skipped": 29,
   "unsupported": 0,
   "scenarios": [
     {"id":"broker-credential-egress","category":"credentials","severity":"critical","passed":true,"violation":false,"control_broke":false,"infra_error":false,"vacuous":false,"source":null},

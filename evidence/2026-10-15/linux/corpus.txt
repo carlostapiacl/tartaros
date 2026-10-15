@@ -1,66 +1,66 @@
 tartaros-bench · backend=linux
 
 /bin/sh: 1: cannot create forbidden.txt: Permission denied
-mv: cannot move '/tmp/secbench-filesystem-rename-into-territory-3808019/outside/config' to '/tmp/secbench-filesystem-rename-into-territory-3808019/work/stolen': Permission denied
-mv: cannot move '/tmp/secbench-filesystem-rename-out-of-territory-3808019/work/data.txt' to '/tmp/secbench-filesystem-rename-out-of-territory-3808019/outside/data.txt': Permission denied
-rm: cannot remove '/tmp/secbench-filesystem-rm-under-read-deny-ancestor-3808019/base/outside/protected.txt': Permission denied
-sh: 1: cannot create /tmp/secbench-filesystem-single-file-grant-3808019/work/sibling.txt: Permission denied
-truncate: cannot open '/tmp/secbench-filesystem-truncate-outside-3808019/outside/db.sqlite' for writing: Permission denied
-rm: cannot remove '/tmp/secbench-filesystem-unlink-outside-3808019/outside/keep.txt': Permission denied
-sh: 1: cannot create /tmp/secbench-filesystem-write-deny-absent-path-3808019/work/denied.lock: Permission denied
-mkdir: cannot create directory '/tmp/secbench-filesystem-write-deny-absent-path-3808019/work/gone': Permission denied
-mv: cannot move '/tmp/secbench-filesystem-write-deny-rename-bypass-3808019/work/protected' to '/tmp/secbench-filesystem-write-deny-rename-bypass-3808019/work/p2': Device or resource busy
-/bin/sh: 1: cannot create /tmp/secbench-filesystem-write-deny-symlink-alias-3808019/work/alias/cfg: Read-only file system
-sh: 1: cannot create /tmp/secbench-filesystem-write-deny-truncate-unlink-3808019/work/protected/cfg: Read-only file system
-sh: 1: cannot create /tmp/secbench-filesystem-write-deny-truncate-unlink-3808019/work/protected/cfg: Read-only file system
-rm: cannot remove '/tmp/secbench-filesystem-write-deny-unlink-recreate-3808019/work/policy.lock': Device or resource busy
-sh: 1: cannot create /tmp/secbench-filesystem-write-deny-unlink-recreate-3808019/work/policy.lock: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-filesystem-write-deny-via-symlink-spelling-3808019/work/repo/hooks/pre-push: Read-only file system
-cat: /tmp/secbench-filesystem-write-reallow-inside-deny-3808019/vault/other: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-fs-dangling-symlink-create-outside-3808019/work/dangle: Permission denied
-ln: failed to create hard link '/tmp/secbench-fs-hardlink-create-write-out-3808019/work/second-name' => '/tmp/secbench-fs-hardlink-create-write-out-3808019/outside/file': Invalid cross-device link
-ln: failed to create hard link '/tmp/secbench-fs-hardlink-widen-write-3808019/work/t' => '/tmp/secbench-fs-hardlink-widen-write-3808019/outside/target': Invalid cross-device link
-/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-dangling-create-3808019/work/dangling: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-escape-3808019/work/link/secret: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-file-out-agent-made-3808019/work/made: Permission denied
-mv: cannot move '/tmp/secbench-fs-symlink-rename-out-3808019/work/made' to '/tmp/secbench-fs-symlink-rename-out-3808019/work/link-to-dir/file': Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-fs-write-outside-territory-3808019/outside.txt: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-materialize-absent-3808019/work/.claude/settings.json: Read-only file system
+mv: cannot move '/tmp/secbench-filesystem-rename-into-territory-3854579/outside/config' to '/tmp/secbench-filesystem-rename-into-territory-3854579/work/stolen': Permission denied
+mv: cannot move '/tmp/secbench-filesystem-rename-out-of-territory-3854579/work/data.txt' to '/tmp/secbench-filesystem-rename-out-of-territory-3854579/outside/data.txt': Permission denied
+rm: cannot remove '/tmp/secbench-filesystem-rm-under-read-deny-ancestor-3854579/base/outside/protected.txt': Permission denied
+sh: 1: cannot create /tmp/secbench-filesystem-single-file-grant-3854579/work/sibling.txt: Permission denied
+truncate: cannot open '/tmp/secbench-filesystem-truncate-outside-3854579/outside/db.sqlite' for writing: Permission denied
+rm: cannot remove '/tmp/secbench-filesystem-unlink-outside-3854579/outside/keep.txt': Permission denied
+sh: 1: cannot create /tmp/secbench-filesystem-write-deny-absent-path-3854579/work/denied.lock: Permission denied
+mkdir: cannot create directory '/tmp/secbench-filesystem-write-deny-absent-path-3854579/work/gone': Permission denied
+mv: cannot move '/tmp/secbench-filesystem-write-deny-rename-bypass-3854579/work/protected' to '/tmp/secbench-filesystem-write-deny-rename-bypass-3854579/work/p2': Device or resource busy
+/bin/sh: 1: cannot create /tmp/secbench-filesystem-write-deny-symlink-alias-3854579/work/alias/cfg: Read-only file system
+sh: 1: cannot create /tmp/secbench-filesystem-write-deny-truncate-unlink-3854579/work/protected/cfg: Read-only file system
+sh: 1: cannot create /tmp/secbench-filesystem-write-deny-truncate-unlink-3854579/work/protected/cfg: Read-only file system
+rm: cannot remove '/tmp/secbench-filesystem-write-deny-unlink-recreate-3854579/work/policy.lock': Device or resource busy
+sh: 1: cannot create /tmp/secbench-filesystem-write-deny-unlink-recreate-3854579/work/policy.lock: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-filesystem-write-deny-via-symlink-spelling-3854579/work/repo/hooks/pre-push: Read-only file system
+cat: /tmp/secbench-filesystem-write-reallow-inside-deny-3854579/vault/other: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-fs-dangling-symlink-create-outside-3854579/work/dangle: Permission denied
+ln: failed to create hard link '/tmp/secbench-fs-hardlink-create-write-out-3854579/work/second-name' => '/tmp/secbench-fs-hardlink-create-write-out-3854579/outside/file': Invalid cross-device link
+ln: failed to create hard link '/tmp/secbench-fs-hardlink-widen-write-3854579/work/t' => '/tmp/secbench-fs-hardlink-widen-write-3854579/outside/target': Invalid cross-device link
+/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-dangling-create-3854579/work/dangling: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-escape-3854579/work/link/secret: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-file-out-agent-made-3854579/work/made: Permission denied
+mv: cannot move '/tmp/secbench-fs-symlink-rename-out-3854579/work/made' to '/tmp/secbench-fs-symlink-rename-out-3854579/work/link-to-dir/file': Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-fs-write-outside-territory-3854579/outside.txt: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-materialize-absent-3854579/work/.claude/settings.json: Read-only file system
 unshare: unshare failed: Operation not permitted
-/bin/sh: 1: cannot open /proc/3808019/environ: Permission denied
+/bin/sh: 1: cannot open /proc/3854579/environ: Permission denied
 launched
 sh: 1: cannot create {effect_log}: Permission denied
-cat: /tmp/secbench-read-allow-deny-nested-3808019/vault/mine/settings.json: Permission denied
-cat: /tmp/secbench-read-allow-inside-deny-writable-ancestor-3808019/base/denied/secret.txt: Permission denied
-cat: /tmp/secbench-read-allow-inside-deny-3808019/vault/other-secret: Permission denied
-cat: /tmp/secbench-read-allow-symlink-into-deny-3808019/home/.ssh/id_rsa: Permission denied
-cat: /tmp/secbench-read-allow-symlink-no-reopen-3808019/proj/docs/id_rsa: Permission denied
-cat: /tmp/secbench-read-allow-symlink-no-reopen-3808019/home/.ssh/id_rsa: Permission denied
-cat: /tmp/secbench-read-allow-trailing-slash-nested-deny-3808019/priv/pub/secret/key: Permission denied
-cat: /tmp/secbench-read-allow-writable-carveout-trailing-slash-3808019/secrets/key: Permission denied
-cat: /tmp/secbench-read-deny-alt-spelling-3808019/vault/key: Permission denied
-cat: '/tmp/secbench-read-deny-backslash-name-3808019/tree/a\b': Permission denied
-cat: '/tmp/secbench-read-deny-bracket-dir-3808019/tree/[user-id]/secret': Permission denied
-cat: /tmp/secbench-read-deny-given-via-symlink-3808019/vault/key: Permission denied
-cat: /tmp/secbench-read-deny-link-dotdot-3808019/elsewhere/file: Permission denied
-cat: /tmp/secbench-read-deny-not-reopened-by-nested-writable-3808019/vault/key: Permission denied
-ls: cannot open directory '/tmp/secbench-read-deny-not-reopened-by-nested-writable-3808019/vault': Permission denied
-cat: /proc/self/root/tmp/secbench-read-deny-proc-magic-symlink-3808019/vault/key: Permission denied
-cat: /tmp/secbench-read-deny-root-carve-out-3808019/outside/secret: Permission denied
-cat: /tmp/secbench-read-deny-symlink-bypass-3808019/work/link: Permission denied
-cat: /tmp/secbench-read-deny-symlink-entry-3808019/work/secrets/key: Permission denied
-cat: /tmp/secbench-read-deny-symlinked-dir-3808019/work/dotfiles/private/key: Permission denied
-cat: /tmp/secbench-read-deny-symlinked-dir-3808019/work/proj/.private/key: Permission denied
-cat: /tmp/secbench-read-deny-trailing-slash-nested-write-deny-3808019/work/secrets/sub/token: Permission denied
-cat: /tmp/secbench-read-deny-under-write-deny-3808019/work/proj/secrets/key: Permission denied
-cat: /tmp/secbench-read-deny-wins-exact-tie-3808019/vault/sec/key.txt: Permission denied
+cat: /tmp/secbench-read-allow-deny-nested-3854579/vault/mine/settings.json: Permission denied
+cat: /tmp/secbench-read-allow-inside-deny-writable-ancestor-3854579/base/denied/secret.txt: Permission denied
+cat: /tmp/secbench-read-allow-inside-deny-3854579/vault/other-secret: Permission denied
+cat: /tmp/secbench-read-allow-symlink-into-deny-3854579/home/.ssh/id_rsa: Permission denied
+cat: /tmp/secbench-read-allow-symlink-no-reopen-3854579/proj/docs/id_rsa: Permission denied
+cat: /tmp/secbench-read-allow-symlink-no-reopen-3854579/home/.ssh/id_rsa: Permission denied
+cat: /tmp/secbench-read-allow-trailing-slash-nested-deny-3854579/priv/pub/secret/key: Permission denied
+cat: /tmp/secbench-read-allow-writable-carveout-trailing-slash-3854579/secrets/key: Permission denied
+cat: /tmp/secbench-read-deny-alt-spelling-3854579/vault/key: Permission denied
+cat: '/tmp/secbench-read-deny-backslash-name-3854579/tree/a\b': Permission denied
+cat: '/tmp/secbench-read-deny-bracket-dir-3854579/tree/[user-id]/secret': Permission denied
+cat: /tmp/secbench-read-deny-given-via-symlink-3854579/vault/key: Permission denied
+cat: /tmp/secbench-read-deny-link-dotdot-3854579/elsewhere/file: Permission denied
+cat: /tmp/secbench-read-deny-not-reopened-by-nested-writable-3854579/vault/key: Permission denied
+ls: cannot open directory '/tmp/secbench-read-deny-not-reopened-by-nested-writable-3854579/vault': Permission denied
+cat: /proc/self/root/tmp/secbench-read-deny-proc-magic-symlink-3854579/vault/key: Permission denied
+cat: /tmp/secbench-read-deny-root-carve-out-3854579/outside/secret: Permission denied
+cat: /tmp/secbench-read-deny-symlink-bypass-3854579/work/link: Permission denied
+cat: /tmp/secbench-read-deny-symlink-entry-3854579/work/secrets/key: Permission denied
+cat: /tmp/secbench-read-deny-symlinked-dir-3854579/work/dotfiles/private/key: Permission denied
+cat: /tmp/secbench-read-deny-symlinked-dir-3854579/work/proj/.private/key: Permission denied
+cat: /tmp/secbench-read-deny-trailing-slash-nested-write-deny-3854579/work/secrets/sub/token: Permission denied
+cat: /tmp/secbench-read-deny-under-write-deny-3854579/work/proj/secrets/key: Permission denied
+cat: /tmp/secbench-read-deny-wins-exact-tie-3854579/vault/sec/key.txt: Permission denied
 Killed
-mknod: /tmp/secbench-root-mknod-device-denied-3808019/work/disk: Operation not permitted
-cat: /tmp/secbench-secret-read-inside-writable-3808019/work/.secrets/token: Permission denied
-cat: /tmp/secbench-secret-read-deny-3808019/vault/key: Permission denied
-sh: 1: cannot create /tmp/secbench-secrets-home-credentials-in-writable-3808019/home/.aws/config: Read-only file system
-mv: inter-device move failed: '/tmp/secbench-secrets-home-credentials-in-writable-3808019/home/replacement' to '/tmp/secbench-secrets-home-credentials-in-writable-3808019/home/.aws/config'; unable to remove target: Read-only file system
-mv: cannot move '/tmp/secbench-secrets-home-credentials-in-writable-3808019/home/.aws' to '/tmp/secbench-secrets-home-credentials-in-writable-3808019/home/aws2': Device or resource busy
+mknod: /tmp/secbench-root-mknod-device-denied-3854579/work/disk: Operation not permitted
+cat: /tmp/secbench-secret-read-inside-writable-3854579/work/.secrets/token: Permission denied
+cat: /tmp/secbench-secret-read-deny-3854579/vault/key: Permission denied
+sh: 1: cannot create /tmp/secbench-secrets-home-credentials-in-writable-3854579/home/.aws/config: Read-only file system
+mv: inter-device move failed: '/tmp/secbench-secrets-home-credentials-in-writable-3854579/home/replacement' to '/tmp/secbench-secrets-home-credentials-in-writable-3854579/home/.aws/config'; unable to remove target: Read-only file system
+mv: cannot move '/tmp/secbench-secrets-home-credentials-in-writable-3854579/home/.aws' to '/tmp/secbench-secrets-home-credentials-in-writable-3854579/home/aws2': Device or resource busy
 sh: 1: cannot open /proc/1/environ: Permission denied
 sh: 1: cannot open /proc/1111171/environ: Permission denied
 sh: 1: cannot open /proc/1111196/environ: Permission denied
@@ -225,35 +225,50 @@ sh: 1: cannot open /proc/3617/environ: Permission denied
 sh: 1: cannot open /proc/3637/environ: Permission denied
 sh: 1: cannot open /proc/3638/environ: Permission denied
 sh: 1: cannot open /proc/37/environ: No such process
-sh: 1: cannot open /proc/3728208/environ: No such process
-sh: 1: cannot open /proc/3748689/environ: No such process
-sh: 1: cannot open /proc/3762477/environ: No such process
-sh: 1: cannot open /proc/3772582/environ: No such process
 sh: 1: cannot open /proc/3774710/environ: No such process
 sh: 1: cannot open /proc/3775620/environ: No such process
 sh: 1: cannot open /proc/3776284/environ: No such process
 sh: 1: cannot open /proc/378/environ: Permission denied
 sh: 1: cannot open /proc/3786/environ: Permission denied
 sh: 1: cannot open /proc/38/environ: No such process
-sh: 1: cannot open /proc/3801985/environ: No such process
 sh: 1: cannot open /proc/3801986/environ: No such process
-sh: 1: cannot open /proc/3802212/environ: No such process
 sh: 1: cannot open /proc/3802237/environ: No such process
 sh: 1: cannot open /proc/3802371/environ: No such process
-sh: 1: cannot open /proc/3802375/environ: No such process
-sh: 1: cannot open /proc/3804470/environ: Permission denied
-sh: 1: cannot open /proc/3804907/environ: Permission denied
 sh: 1: cannot open /proc/3805851/environ: No such process
-sh: 1: cannot open /proc/3807517/environ: Permission denied
-sh: 1: cannot open /proc/3807627/environ: Permission denied
-sh: 1: cannot open /proc/3807740/environ: Permission denied
-sh: 1: cannot open /proc/3807832/environ: Permission denied
-sh: 1: cannot open /proc/3808019/environ: Permission denied
-sh: 1: cannot open /proc/3810468/environ: Permission denied
-sh: 1: cannot open /proc/3810535/environ: No such file
-sh: 1: cannot open /proc/3810536/environ: No such file
-sh: 1: cannot open /proc/3810537/environ: No such file
 sh: 1: cannot open /proc/3822/environ: Permission denied
+sh: 1: cannot open /proc/3839010/environ: No such process
+sh: 1: cannot open /proc/3842465/environ: No such process
+sh: 1: cannot open /proc/3847544/environ: No such process
+sh: 1: cannot open /proc/3847545/environ: No such process
+sh: 1: cannot open /proc/3847546/environ: No such process
+sh: 1: cannot open /proc/3848994/environ: No such process
+sh: 1: cannot open /proc/3849022/environ: No such process
+sh: 1: cannot open /proc/3849376/environ: No such process
+sh: 1: cannot open /proc/3850616/environ: No such process
+sh: 1: cannot open /proc/3851027/environ: Permission denied
+sh: 1: cannot open /proc/3851030/environ: Permission denied
+sh: 1: cannot open /proc/3854252/environ: Permission denied
+sh: 1: cannot open /proc/3854402/environ: Permission denied
+sh: 1: cannot open /proc/3854579/environ: Permission denied
+sh: 1: cannot open /proc/3855577/environ: Permission denied
+sh: 1: cannot open /proc/3855720/environ: Permission denied
+sh: 1: cannot open /proc/3855884/environ: Permission denied
+sh: 1: cannot open /proc/3856002/environ: Permission denied
+sh: 1: cannot open /proc/3856005/environ: Permission denied
+sh: 1: cannot open /proc/3856006/environ: Permission denied
+sh: 1: cannot open /proc/3856042/environ: Permission denied
+sh: 1: cannot open /proc/3856309/environ: Permission denied
+sh: 1: cannot open /proc/3856312/environ: Permission denied
+sh: 1: cannot open /proc/3856327/environ: Permission denied
+sh: 1: cannot open /proc/3856342/environ: Permission denied
+sh: 1: cannot open /proc/3856942/environ: Permission denied
+sh: 1: cannot open /proc/3857504/environ: Permission denied
+sh: 1: cannot open /proc/3857544/environ: Permission denied
+sh: 1: cannot open /proc/3857577/environ: Permission denied
+sh: 1: cannot open /proc/3857640/environ: Permission denied
+sh: 1: cannot open /proc/3857737/environ: No such file
+sh: 1: cannot open /proc/3857738/environ: No such file
+sh: 1: cannot open /proc/3857739/environ: No such file
 sh: 1: cannot open /proc/39/environ: No such process
 sh: 1: cannot open /proc/399/environ: Permission denied
 sh: 1: cannot open /proc/4/environ: No such process
@@ -342,52 +357,52 @@ sh: 1: cannot open /proc/898/environ: Permission denied
 sh: 1: cannot open /proc/9/environ: No such process
 sh: 1: cannot open /proc/93/environ: No such process
 sh: 1: cannot open /proc/955/environ: Permission denied
-cat: /tmp/secbench-secrets-read-allow-symlink-into-deny-3808019/work/docs/id_rsa: Permission denied
-cat: /tmp/secbench-secrets-read-allow-symlink-into-deny-3808019/vault/id_rsa: Permission denied
-cat: /tmp/secbench-secrets-read-deny-after-chmod-3808019/work/cfg/secrets/key: Permission denied
-cat: /tmp/secbench-secrets-read-deny-also-write-denied-3808019/work/.secrets/token: Permission denied
+cat: /tmp/secbench-secrets-read-allow-symlink-into-deny-3854579/work/docs/id_rsa: Permission denied
+cat: /tmp/secbench-secrets-read-allow-symlink-into-deny-3854579/vault/id_rsa: Permission denied
+cat: /tmp/secbench-secrets-read-deny-after-chmod-3854579/work/cfg/secrets/key: Permission denied
+cat: /tmp/secbench-secrets-read-deny-also-write-denied-3854579/work/.secrets/token: Permission denied
   -- secrets-read-deny-case-fold (SKIPPED: not for linux)
   -- secrets-read-deny-clonefile (SKIPPED: not for linux)
-ls: cannot open directory '/tmp/secbench-secrets-read-deny-dir-listing-3808019/home/.aws': Permission denied
+ls: cannot open directory '/tmp/secbench-secrets-read-deny-dir-listing-3854579/home/.aws': Permission denied
   -- secrets-read-deny-firmlink (SKIPPED: not for linux)
-cat: /tmp/secbench-secrets-read-deny-on-symlinked-path-3808019/home/.aws/credentials: Permission denied
-cat: /tmp/secbench-secrets-read-deny-on-symlinked-path-3808019/dotfiles/aws/credentials: Permission denied
-cat: '/tmp/secbench-secrets-read-deny-path-special-chars-3808019/my vault "prod" (x)/key': Permission denied
-cat: /tmp/secbench-secrets-read-deny-prefix-collision-3808019/home/.ssh/id_ed25519: Permission denied
-not-a-keygrep: /tmp/secbench-secrets-read-deny-single-file-3808019/home/.netrc: Permission denied
-grep: /tmp/secbench-secrets-read-deny-symlinked-entry-3808019/home/.netrc: Permission denied
-grep: /tmp/secbench-secrets-read-deny-symlinked-entry-3808019/dotfiles/netrc: Permission denied
-cat: /tmp/secbench-secrets-read-deny-under-write-denied-ancestor-3808019/work/cfg/secrets/key: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-ancestor-rename-3808019/work/a/n2/.git/hooks/pre-commit: Read-only file system
-mv: cannot move '/tmp/secbench-trust-handoff-bracketed-root-3808019/w[o]rk/.git/hooks' to '/tmp/secbench-trust-handoff-bracketed-root-3808019/w[o]rk/.git/hooks-moved': Device or resource busy
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-bracketed-root-3808019/w[o]rk/.git/hooks/pre-commit: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-bracketed-root-3808019/w[o]rk/secrets/key: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-claude-commands-3808019/work/a/b/.claude/commands/evil.md: Read-only file system
-mv: cannot move '/tmp/secbench-trust-handoff-git-config-move-aside-3808019/work/.git/config' to '/tmp/secbench-trust-handoff-git-config-move-aside-3808019/work/.git/config.aside': Device or resource busy
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-git-config-3808019/work/repo/.git/config: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-gitdir-pointer-3808019/common/gitdir/hooks/pre-commit: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-gitignored-repo-3808019/work/sub/.git/hooks/pre-commit: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-mcp-json-3808019/work/proj/.mcp.json: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-nested-git-hook-3808019/work/a/nested/.git/hooks/pre-commit: Read-only file system
-mv: inter-device move failed: '/tmp/secbench-trust-handoff-rename-over-hook-3808019/work/evil.sh' to '/tmp/secbench-trust-handoff-rename-over-hook-3808019/work/.git/hooks/pre-commit'; unable to remove target: Read-only file system
-sh: 1: cannot create /tmp/secbench-trust-handoff-submodule-hook-3808019/work/.git/modules/m/hooks/pre-commit: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-symlinked-claude-dir-3808019/work/proj/.claude/commands/evil.md: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-unreadable-at-compile-3808019/work/locked/.git/config: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-worktree-gitfile-3808019/work/main/.git/hooks/post-checkout: Read-only file system
-mkdir: cannot create directory '/tmp/secbench-write-deny-absent-deep-3808019/work/a': Permission denied
-mkdir: cannot create directory '/tmp/secbench-write-deny-backslash-absent-3808019/work/c\\d': Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-covers-nested-root-3808019/work/proj/out/x: Read-only file system
+cat: /tmp/secbench-secrets-read-deny-on-symlinked-path-3854579/home/.aws/credentials: Permission denied
+cat: /tmp/secbench-secrets-read-deny-on-symlinked-path-3854579/dotfiles/aws/credentials: Permission denied
+cat: '/tmp/secbench-secrets-read-deny-path-special-chars-3854579/my vault "prod" (x)/key': Permission denied
+cat: /tmp/secbench-secrets-read-deny-prefix-collision-3854579/home/.ssh/id_ed25519: Permission denied
+not-a-keygrep: /tmp/secbench-secrets-read-deny-single-file-3854579/home/.netrc: Permission denied
+grep: /tmp/secbench-secrets-read-deny-symlinked-entry-3854579/home/.netrc: Permission denied
+grep: /tmp/secbench-secrets-read-deny-symlinked-entry-3854579/dotfiles/netrc: Permission denied
+cat: /tmp/secbench-secrets-read-deny-under-write-denied-ancestor-3854579/work/cfg/secrets/key: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-ancestor-rename-3854579/work/a/n2/.git/hooks/pre-commit: Read-only file system
+mv: cannot move '/tmp/secbench-trust-handoff-bracketed-root-3854579/w[o]rk/.git/hooks' to '/tmp/secbench-trust-handoff-bracketed-root-3854579/w[o]rk/.git/hooks-moved': Device or resource busy
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-bracketed-root-3854579/w[o]rk/.git/hooks/pre-commit: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-bracketed-root-3854579/w[o]rk/secrets/key: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-claude-commands-3854579/work/a/b/.claude/commands/evil.md: Read-only file system
+mv: cannot move '/tmp/secbench-trust-handoff-git-config-move-aside-3854579/work/.git/config' to '/tmp/secbench-trust-handoff-git-config-move-aside-3854579/work/.git/config.aside': Device or resource busy
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-git-config-3854579/work/repo/.git/config: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-gitdir-pointer-3854579/common/gitdir/hooks/pre-commit: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-gitignored-repo-3854579/work/sub/.git/hooks/pre-commit: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-mcp-json-3854579/work/proj/.mcp.json: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-nested-git-hook-3854579/work/a/nested/.git/hooks/pre-commit: Read-only file system
+mv: inter-device move failed: '/tmp/secbench-trust-handoff-rename-over-hook-3854579/work/evil.sh' to '/tmp/secbench-trust-handoff-rename-over-hook-3854579/work/.git/hooks/pre-commit'; unable to remove target: Read-only file system
+sh: 1: cannot create /tmp/secbench-trust-handoff-submodule-hook-3854579/work/.git/modules/m/hooks/pre-commit: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-symlinked-claude-dir-3854579/work/proj/.claude/commands/evil.md: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-unreadable-at-compile-3854579/work/locked/.git/config: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-worktree-gitfile-3854579/work/main/.git/hooks/post-checkout: Read-only file system
+mkdir: cannot create directory '/tmp/secbench-write-deny-absent-deep-3854579/work/a': Permission denied
+mkdir: cannot create directory '/tmp/secbench-write-deny-backslash-absent-3854579/work/c\\d': Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-covers-nested-root-3854579/work/proj/out/x: Read-only file system
 mkdir: cannot create directory 'hop': Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-dangling-link-target-3808019/here/new: Permission denied
-chmod: changing permissions of '/tmp/secbench-write-deny-existing-file-chmod-3808019/work/repo/.git/config.lock': Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-existing-file-chmod-3808019/work/repo/.git/config.lock: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-glob-chars-dir-3808019/[WIP] project/keep/file: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-inside-writable-3808019/work/protected/evil: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-link-dotdot-3808019/elsewhere/down/in/file: Read-only file system
-mkdir: cannot create directory '/tmp/secbench-write-deny-noncanonical-absent-3808019/work/protected': Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-symlinked-parent-3808019/work/proj2/.cfg: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-symlinked-parent-3808019/work/real-proj/.cfg: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-under-dotdot-root-3808019/p/real/file: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-dangling-link-target-3854579/here/new: Permission denied
+chmod: changing permissions of '/tmp/secbench-write-deny-existing-file-chmod-3854579/work/repo/.git/config.lock': Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-existing-file-chmod-3854579/work/repo/.git/config.lock: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-glob-chars-dir-3854579/[WIP] project/keep/file: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-inside-writable-3854579/work/protected/evil: Read-only file system
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-link-dotdot-3854579/elsewhere/down/in/file: Read-only file system
+mkdir: cannot create directory '/tmp/secbench-write-deny-noncanonical-absent-3854579/work/protected': Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-symlinked-parent-3854579/work/proj2/.cfg: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-symlinked-parent-3854579/work/real-proj/.cfg: Permission denied
+/bin/sh: 1: cannot create /tmp/secbench-write-deny-under-dotdot-root-3854579/p/real/file: Read-only file system
 
 scenario                             sev      result
 ----------------------------------------------------------------
@@ -416,13 +431,14 @@ fs-symlink-dangling-create           critical PASS  attack rc=2 control rc=0
 fs-symlink-escape                    critical PASS  attack rc=2 control rc=0
 fs-symlink-file-out-agent-made       critical PASS  attack rc=2 control rc=0
 fs-symlink-rename-out                critical PASS  attack rc=1 control rc=0
-fs-writable-root-symlink-out         critical PASS  refused: writable root /tmp/secbench-fs-writable-root-symlink-out-3808019/work/evil is a 
-fs-writable-root-symlink-parent      critical PASS  refused: writable root /tmp/secbench-fs-writable-root-symlink-parent-3808019/work/up is a
+fs-writable-root-symlink-out         critical PASS  refused: writable root /tmp/secbench-fs-writable-root-symlink-out-3854579/work/evil is a 
+fs-writable-root-symlink-parent      critical PASS  refused: writable root /tmp/secbench-fs-writable-root-symlink-parent-3854579/work/up is a
 fs-write-outside-territory           critical PASS  attack rc=2 control rc=0
 trust-handoff-materialize-absent     high     PASS  attack rc=2 control rc=0
 ipc-unix-socket-outside              critical PASS  attack rc=1 control rc=0
 isolate-net-egress                   critical PASS  attack rc=1 control rc=0
 isolate-pid-namespace                high     PASS  attack rc=1 control rc=0
+isolation-clone-newns-denied         high     PASS  attack rc=1 control rc=0
 isolation-no-capabilities            high     PASS  attack rc=1 control rc=0
 isolation-no-effective-caps          high     PASS  attack rc=1 control rc=0
 isolation-no-nested-userns           high     PASS  attack rc=1 control rc=0
@@ -433,6 +449,7 @@ isolation-process-info-environ       high     PASS  attack rc=1 control rc=0
 isolation-ptrace-launcher-denied     critical PASS  attack rc=1 control rc=0
 isolation-root-mount-bypass-denied   critical PASS  attack rc=1 control rc=0
 isolation-seccomp-io-uring-denied    high     PASS  attack rc=1 control rc=0
+isolation-vsock-socket-denied        high     PASS  attack rc=1 control rc=0
 lifecycle-background-reaped-on-exit  high     PASS  attack rc=0 control rc=0
 lifecycle-daemon-escape              high     PASS  attack rc=124 control rc=0
 lifecycle-effect-log-tamper          high     PASS  attack rc=2 control rc=0
@@ -443,6 +460,7 @@ network-egress-public-denied         critical PASS  attack rc=1 control rc=0
 network-local-bind-denied            high     PASS  attack rc=1 control rc=0
 network-socket-domain-high-bits      high     PASS  attack rc=1 control rc=0
 network-tcp-external-denied          critical PASS  attack rc=1 control rc=0
+network-vsock-denied                 high     PASS  attack rc=1 control rc=0
 read-allow-deny-nested               critical PASS  attack rc=1 control rc=0
 read-allow-inside-deny-writable-ancestor high     PASS  attack rc=1 control rc=0
 read-allow-inside-deny               critical PASS  attack rc=1 control rc=0
@@ -468,6 +486,7 @@ resource-cpu-limit                   high     PASS  attack rc=137 control rc=0
 resource-memory-limit                high     PASS  attack rc=1 control rc=0
 resource-process-limit               high     PASS  attack rc=1 control rc=0
 root-mknod-device-denied             critical PASS  attack rc=1 control rc=0
+seccomp-clone-newuser-denied         high     PASS  attack rc=1 control rc=0
 seccomp-attack-surface               high     PASS  attack rc=1 control rc=0
 seccomp-io-uring-denied              critical PASS  attack rc=1 control rc=0
 seccomp-new-mount-api-denied         medium   PASS  attack rc=1 control rc=0
@@ -521,19 +540,19 @@ write-deny-trailing-slash            high     PASS  attack rc=2 control rc=0
 write-deny-under-dotdot-root         high     PASS  attack rc=2 control rc=0
 
 == scorecard ==
-  scenarios run:           128
-  PASS:                    128/128
+  scenarios run:           132
+  PASS:                    132/132
   VIOLATION:               0  (critical: 0)  [target 0]
   CONTROL_BROKE:           0  [target 0]
   INFRA_ERROR:             0  [target 0]
   VACUOUS (no baseline):   0  [target 0]
   SKIPPED (other OS):      3
   UNSUPPORTED (host caps): 0
-  coverage:                128/128 applicable scenarios ran
+  coverage:                132/132 applicable scenarios ran
 
 environment: linux · kernel 6.8.0-146-generic · tartaros-bench 0.1.0-alpha
 host caps:  landlock=true cgroup_v2=true userns=true
 
 report: reports/last.json
 
-OK: all 128 scenarios passed (3 skipped, 0 unsupported, coverage 128/128)
+OK: all 132 scenarios passed (3 skipped, 0 unsupported, coverage 132/132)
