@@ -101,3 +101,13 @@ than you asked for.
   but no new entry can be created directly in it. Such a policy uses the carve
   instead of the bind-mount strategy. macOS matches by path and has no such cost.
   Earlier versions silently dropped an absent explicit deny; it is now enforced.
+
+- **Absent *nested* handoff paths under the bind-mount strategy (Linux root).**
+  When the whole workspace is granted writable and existing handoff paths are
+  pinned read-only (the root/container strategy), a handoff path **nested below the
+  root that does not exist yet** — e.g. a new `sub/.gitmodules`, or
+  `.claude/skills/` when only `.claude/` exists — can still be created, because
+  there is nothing to bind read-only. Existing nested handoff paths and all
+  top-level ones are protected. macOS (regex) covers the absent case; closing it on
+  Linux (carve the absent handoff's existing ancestor even under bind mounts) is on
+  the roadmap. `explain` states the active strategy.
