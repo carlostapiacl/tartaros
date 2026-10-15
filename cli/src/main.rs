@@ -652,7 +652,33 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     p.network = Some(Network::Denied);
     // Per-domain egress IS enforceable: the broker runs as a CONNECT/forward proxy
     // scoped to these hosts and the agent gets no other egress. Map it through.
-    p.allow_domains = s.network.allowed_domains.clone();
+    //
+    // Exception, matching srt: a loopback literal with an explicit port
+    // (`localhost:N`, `127.0.0.1:N`, `[::1]:N`) is NOT an external domain — it
+    // grants a LOCAL service on that port, exactly like `--port N` (a kernel grant
+    // to that loopback port plus a broker loopback-port forward, so the broker
+    // never treats it as an external host and rejects it 403). Route those to
+    // `local_ports`; send everything else to the egress allow-list. A bare loopback
+    // host (no port) or a loopback wildcard (`localhost:*`, `*.localhost`) is
+    // unbounded, so refuse it (apply-fully-or-refuse), as srt does.
+    let mut domains: Vec<String> = Vec::new();
+    for e in &s.network.allowed_domains {
+        match classify_loopback_entry(e) {
+            LoopbackEntry::Port(n) => p.local_ports.push(n),
+            LoopbackEntry::External => domains.push(e.clone()),
+            LoopbackEntry::Unbounded => {
+                eprintln!(
+                    "tartaros: --settings: loopback allowedDomains entry '{e}' is unbounded — \
+                     grant a local service by an explicit port (localhost:N / 127.0.0.1:N / [::1]:N), \
+                     not a bare host or a wildcard. Refusing (apply-fully-or-refuse)."
+                );
+                exit(2);
+            }
+        }
+    }
+    p.allow_domains = domains;
+    p.local_ports.sort_unstable();
+    p.local_ports.dedup();
     if !s.network.denied_domains.is_empty() {
         refuse("per-domain deny lists");
     }
@@ -693,6 +719,57 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     }
     // Strict: a settings-driven run is guaranteed-or-abort.
     p.strict = true;
+}
+
+/// How a `--settings` `allowedDomains` entry maps into TartarOS's model.
+enum LoopbackEntry {
+    /// A loopback literal with an explicit port -> a local-service grant (local_ports).
+    Port(u16),
+    /// A bare loopback host, or a loopback wildcard -> unbounded, must be refused.
+    Unbounded,
+    /// Any non-loopback host -> an external domain for the egress broker.
+    External,
+}
+
+/// Classify an srt `allowedDomains` entry. A loopback literal
+/// (`localhost` / `127.0.0.1` / `::1`, the last optionally bracketed) with an
+/// explicit numeric port is a local-service grant; the same host with no port, or
+/// any entry that references loopback through a wildcard, is unbounded; everything
+/// else is an external domain.
+fn classify_loopback_entry(entry: &str) -> LoopbackEntry {
+    // A wildcard that touches loopback (`localhost:*`, `*.localhost`, `127.0.0.1:*`)
+    // is never a concrete port grant — refuse before any port parse.
+    if entry.contains('*')
+        && (entry.contains("localhost") || entry.contains("127.0.0.1") || entry.contains("::1"))
+    {
+        return LoopbackEntry::Unbounded;
+    }
+    let (host, port) = split_host_port(entry);
+    let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]");
+    if !is_loopback {
+        return LoopbackEntry::External;
+    }
+    match port.and_then(|s| s.parse::<u16>().ok()) {
+        Some(n) => LoopbackEntry::Port(n),
+        None => LoopbackEntry::Unbounded, // bare loopback host, or a non-numeric port
+    }
+}
+
+/// Split `host:port` into its parts, handling bracketed IPv6 (`[::1]:N` -> `[::1]`,
+/// `N`). Returns the port only when one is present after the host.
+fn split_host_port(e: &str) -> (&str, Option<&str>) {
+    if e.starts_with('[') {
+        if let Some(close) = e.find(']') {
+            let host = &e[..=close];
+            let port = e[close + 1..].strip_prefix(':');
+            return (host, port);
+        }
+        return (e, None);
+    }
+    match e.rfind(':') {
+        Some(i) => (&e[..i], Some(&e[i + 1..])),
+        None => (e, None),
+    }
 }
 
 /// Parse a numeric flag value or exit with a clear message — never silently fall
@@ -1013,4 +1090,49 @@ impl RunObserved for tartaros_macos::SeatbeltBackend {
 fn run(_policy: &Policy, _cmd: &[String], _log: Option<&str>) -> i32 {
     eprintln!("tartaros: unsupported OS");
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_loopback_entry, LoopbackEntry};
+
+    fn port(e: &str) -> Option<u16> {
+        match classify_loopback_entry(e) {
+            LoopbackEntry::Port(n) => Some(n),
+            _ => None,
+        }
+    }
+    fn is_unbounded(e: &str) -> bool {
+        matches!(classify_loopback_entry(e), LoopbackEntry::Unbounded)
+    }
+    fn is_external(e: &str) -> bool {
+        matches!(classify_loopback_entry(e), LoopbackEntry::External)
+    }
+
+    #[test]
+    fn loopback_literal_with_port_becomes_a_local_port() {
+        assert_eq!(port("localhost:18769"), Some(18769));
+        assert_eq!(port("127.0.0.1:18769"), Some(18769));
+        assert_eq!(port("[::1]:18769"), Some(18769));
+    }
+
+    #[test]
+    fn non_loopback_stays_an_external_domain() {
+        assert!(is_external("example.com"));
+        assert!(is_external("api.example.com:443"));
+        // A non-loopback wildcard is a normal domain pattern, not refused.
+        assert!(is_external("*.github.com"));
+        // A real external IPv6 literal is not loopback.
+        assert!(is_external("[2001:db8::1]:443"));
+    }
+
+    #[test]
+    fn bare_loopback_or_wildcard_is_refused() {
+        assert!(is_unbounded("localhost"));
+        assert!(is_unbounded("127.0.0.1"));
+        assert!(is_unbounded("[::1]"));
+        assert!(is_unbounded("localhost:*"));
+        assert!(is_unbounded("*.localhost"));
+        assert!(is_unbounded("127.0.0.1:*"));
+    }
 }
