@@ -95,7 +95,7 @@ other sandboxes (sandbox-runtime, nono, Codex, bubblewrap) and credited in
 | macOS 15.7, Seatbelt | **106 / 106 pass** (the rest are Linux-only) |
 | Mutation check, both OS: remove one protection, the suite must catch it | **0 blind spots** |
 | microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle | **20 / 20 pass** |
-| Windows 10 19045, corpus `--ignore-os` (backend via the bench) | **AppContainer 85/111, dedicated-user 90/111**, 0 critical violations ([limits](docs/limits.md)) |
+| Windows 10 19045, corpus `--ignore-os` (backend via the bench) | **AppContainer 85/111, dedicated-user 90/111**, 0 critical violations; `--allow-domain` enforced via a per-SID WFP filter + egress broker ([limits](docs/limits.md)) |
 
 Scenarios still open on some host are kept in `security-bench/corpus-known-gaps/`
 with their measured status, not hidden — see [Know the edges](#know-the-edges).

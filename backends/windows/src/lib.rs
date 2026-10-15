@@ -374,8 +374,22 @@ impl Backend for AppContainerBackend {
                 unsupported.push("network other than denied (the egress broker channel is not built on Windows yet)")
             }
         }
-        if !policy.allow_domains.is_empty() || !policy.allowed_hosts.is_empty() || !policy.local_ports.is_empty() {
-            unsupported.push("--allow-domain / allowed hosts / local ports (needs the egress broker channel, not built on Windows yet)");
+        // Domain-scoped egress is the sandbox-user tier routed through a loopback
+        // broker on a fixed port the setup allowed via WFP. It needs that tier and
+        // a configured broker port; otherwise refuse rather than run open.
+        let wants_domains = !policy.allow_domains.is_empty() || !policy.allowed_hosts.is_empty();
+        if wants_domains {
+            if Tier::from_env() != Tier::SandboxUser {
+                unsupported.push("--allow-domain / allowed hosts (needs the sandbox-user tier: TARTAROS_WINDOWS_TIER=sandbox-user)");
+            } else if configured_broker_port().is_none() {
+                unsupported.push("--allow-domain / allowed hosts (run setup/sandbox-user.ps1 install -BrokerPort <port> once, elevated, to allow a broker channel)");
+            }
+        }
+        // Arbitrary local-port grants are not enforceable here (WFP permits only the
+        // one broker port); the broker's own port is not added to local_ports on
+        // Windows, so a non-empty list is a user-requested --port we cannot honor.
+        if !policy.local_ports.is_empty() {
+            unsupported.push("--port local-port grants (only the egress broker's loopback port is reachable on Windows)");
         }
         if policy.isolate_pids {
             unsupported.push("--isolate-pids (no PID namespace; process listing not yet measured)");
@@ -478,6 +492,22 @@ pub fn sandbox_runner_main() -> ! {
     {
         eprintln!("tartaros-sbx-runner only runs on Windows");
         std::process::exit(125)
+    }
+}
+
+/// The fixed loopback port the sandbox-user egress broker must bind, as stored
+/// by `setup/sandbox-user.ps1 install -BrokerPort`. `None` means the setup
+/// installed the default block-all (no domain egress); the CLI then refuses
+/// `--allow-domain` on this host. The WFP permit for this exact port was
+/// installed, with admin, at setup time, so the unprivileged run needs no admin.
+pub fn configured_broker_port() -> Option<u16> {
+    #[cfg(windows)]
+    {
+        sys::reg_dword_port("BrokerPort")
+    }
+    #[cfg(not(windows))]
+    {
+        None
     }
 }
 
