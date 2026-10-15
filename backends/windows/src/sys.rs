@@ -1068,31 +1068,20 @@ impl Drop for SandboxUser {
     }
 }
 
-/// Display name of the outbound egress-block rule the setup installs, scoped to
-/// the sandbox user's SID (keep in sync with setup/sandbox-user.ps1 $FwGroup).
-const FW_OUT_RULE: &str = "tartaros sandbox user (out)";
-
-/// Fail closed if the sandbox user's egress-block firewall rule is not present.
-/// On this tier "network denied" is enforced by that per-SID rule, installed once
-/// by the admin setup; the backend must not assume it. `netsh` returns exit 0
-/// even when nothing matches, so the check reads stdout: when the rule exists its
-/// output echoes the rule's name, and when it does not the output is the (localized)
-/// "no rules match" message. The rule name is our own literal string, so matching
-/// on it is locale-independent.
+/// Fail closed if the sandbox user's per-SID WFP egress-block filter is not
+/// present. On this tier "network denied" (the only supported mode) is enforced
+/// by that filter, installed once by the admin setup; the backend must not assume
+/// it. The check is a read-only WFP query (no admin needed).
 fn verify_egress_blocked() -> Result<(), String> {
-    let out = std::process::Command::new("netsh")
-        .args(["advfirewall", "firewall", "show", "rule", &format!("name={FW_OUT_RULE}")])
-        .stderr(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("could not query the firewall (netsh): {e}"))?;
-    if String::from_utf8_lossy(&out.stdout).contains(FW_OUT_RULE) {
+    if unsafe { crate::wfp::block_installed() } {
         Ok(())
     } else {
-        Err(format!(
-            "network is denied but the sandbox user's egress-block firewall rule (\"{FW_OUT_RULE}\") \
-             is not installed; run setup/sandbox-user.ps1 install (elevated) to restore it. \
+        Err(
+            "network is denied but the sandbox user's WFP egress-block filter is not installed; \
+             run setup/sandbox-user.ps1 install (elevated) to restore it. \
              Refusing rather than run with open egress."
-        ))
+                .to_string(),
+        )
     }
 }
 
