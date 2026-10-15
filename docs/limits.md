@@ -94,3 +94,10 @@ than you asked for.
   scoped egress for a trusted agent, not containment of hostile code. The broker is
   a host:port capability: a TCP tunnel with TLS end to end, so it does not inspect
   SNI or certificates.
+
+- **A write-deny on a path that does not exist yet (Linux).** Landlock matches
+  inodes, so an explicit `--write-deny` on an absent path is enforced by
+  withholding the nearest existing ancestor: its existing children stay writable,
+  but no new entry can be created directly in it. Such a policy uses the carve
+  instead of the bind-mount strategy. macOS matches by path and has no such cost.
+  Earlier versions silently dropped an absent explicit deny; it is now enforced.

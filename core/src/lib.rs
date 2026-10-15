@@ -339,13 +339,18 @@ impl Policy {
     /// falls back to bwrap. `linux_write_allowlist` reports the allow set; the
     /// caller decides.
     pub fn linux_write_allowlist(&self) -> Vec<PathBuf> {
-        let mut denied: Vec<PathBuf> = self
+        // Explicit write denies are kept even when the path does not exist yet:
+        // the carve then withholds the nearest existing ancestor (only its
+        // existing children are granted), so the absent path cannot be created.
+        // The implicit trust-handoff names are kept only where they exist; for
+        // absent ones see the note below.
+        let explicit: Vec<PathBuf> = self
             .fs_rules
             .iter()
             .filter(|r| r.access == Access::Deny)
-            .map(|r| r.path.clone())
+            .map(|r| resolve_best_effort(&r.path))
             .collect();
-        denied.extend(self.trust_handoff_rules().into_iter().map(|r| r.path));
+        let mut denied: Vec<PathBuf> = self.trust_handoff_rules().into_iter().map(|r| r.path).collect();
         // Landlock protects by inode: a path that does not exist cannot be
         // carved out of an allow (and an absent name can still be created inside
         // a granted dir). So on Linux we only carve denies that EXIST; absent
@@ -356,6 +361,7 @@ impl Policy {
         // through a symlinked directory must exclude the directory it resolves to.
         denied = denied.iter().map(|p| resolve_best_effort(p)).collect();
         denied.retain(|p| p.exists());
+        denied.extend(explicit);
         denied.sort();
         denied.dedup();
 
@@ -550,33 +556,79 @@ impl Profile {
     }
 }
 
-/// Resolve a path's symlinks as far as it exists: canonicalize the nearest
-/// existing ancestor and reattach the rest. Lets a rule on a not-yet-existing
-/// file under a symlinked directory land where a write through the link would
-/// create it. Falls back to the path unchanged if nothing resolves.
+/// Resolve a path's symlinks the way the kernel would when the path is used,
+/// including links whose target does not exist yet (a write through a dangling
+/// link creates the target, so a rule on the link must land on the target).
+/// Walks component by component: each existing symlink is replaced by its
+/// target (relative targets resolve from the link's directory, and a `..` in a
+/// target is taken from where the previous link led), while missing components
+/// are appended as written. Bounded to 40 link hops, like the kernel.
 pub fn resolve_best_effort(path: &Path) -> PathBuf {
-    if let Ok(c) = path.canonicalize() {
-        return c;
-    }
-    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
-    let mut cur = path;
-    while let Some(parent) = cur.parent() {
-        if let Some(name) = cur.file_name() {
-            suffix.push(name.to_owned());
-        }
-        if let Ok(c) = parent.canonicalize() {
-            let mut out = c;
-            for s in suffix.iter().rev() {
-                out.push(s);
+    use std::collections::VecDeque;
+    use std::path::Component;
+    let mut out = if path.is_absolute() {
+        PathBuf::from("/")
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
+    };
+    let mut pending: VecDeque<std::ffi::OsString> = VecDeque::new();
+    let push_all = |p: &Path, q: &mut VecDeque<std::ffi::OsString>, front: bool| {
+        let comps: Vec<std::ffi::OsString> = p
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(n) => Some(n.to_owned()),
+                Component::ParentDir => Some("..".into()),
+                _ => None,
+            })
+            .collect();
+        if front {
+            for c in comps.into_iter().rev() {
+                q.push_front(c);
             }
-            return out;
+        } else {
+            q.extend(comps);
         }
-        cur = parent;
+    };
+    push_all(path, &mut pending, false);
+    let mut hops = 0;
+    while let Some(c) = pending.pop_front() {
+        if c == ".." {
+            out.pop();
+            continue;
+        }
+        let cand = out.join(&c);
+        match std::fs::symlink_metadata(&cand) {
+            Ok(m) if m.file_type().is_symlink() && hops < 40 => {
+                hops += 1;
+                match std::fs::read_link(&cand) {
+                    Ok(target) => {
+                        if target.is_absolute() {
+                            out = PathBuf::from("/");
+                        }
+                        push_all(&target, &mut pending, true);
+                    }
+                    Err(_) => out = cand,
+                }
+            }
+            _ => out = cand,
+        }
     }
-    path.to_path_buf()
+    out
 }
 
 impl Policy {
+    /// Explicit write denies whose (resolved) path does not exist yet. Landlock
+    /// matches inodes, so these can only be enforced by the carve (withholding
+    /// the nearest existing ancestor), never by a bind mount.
+    pub fn absent_write_denies(&self) -> Vec<PathBuf> {
+        self.fs_rules
+            .iter()
+            .filter(|r| r.access == Access::Deny)
+            .map(|r| resolve_best_effort(&r.path))
+            .filter(|p| std::fs::symlink_metadata(p).is_err())
+            .collect()
+    }
+
     /// A writable root that is a symlink grants its TARGET. Refuse one whose target
     /// is not inside another (non-symlink) writable root: following it would grant
     /// a directory nobody named (e.g. a link planted by an earlier run).
