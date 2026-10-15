@@ -1,4 +1,3 @@
-# STATUS 2026-10-15 (known gap): linux=violation
 # derived from anthropics/sandbox-runtime test/sandbox/seccomp-vsock-block.test.ts (Apache-2.0)
 id = "network-vsock-denied"
 source = "anthropics/sandbox-runtime test/sandbox/seccomp-vsock-block.test.ts (Apache-2.0)"

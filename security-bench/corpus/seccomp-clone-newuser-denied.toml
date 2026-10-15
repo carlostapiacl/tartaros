@@ -1,4 +1,3 @@
-# STATUS 2026-10-15 (known gap): linux=violation
 # derived from anthropics/sandbox-runtime test/sandbox/linux-nested-userns.test.ts (Apache-2.0)
 id = "seccomp-clone-newuser-denied"
 source = "anthropics/sandbox-runtime test/sandbox/linux-nested-userns.test.ts (Apache-2.0)"

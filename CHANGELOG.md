@@ -24,6 +24,16 @@ scenario and measured on Linux 6.8 and macOS 15.7:
   names are denied even when absent (macOS; the absent-nested case under the Linux
   bind-mount strategy is a documented limit).
 
+### seccomp: close non-IP egress families and namespace clone (Linux)
+- When the network is restricted, `socket(AF_PACKET …)` (raw ethernet) and
+  `socket(AF_VSOCK …)` (guest↔host) are now denied alongside the existing
+  UDP/ICMP/raw close. AF_NETLINK stays allowed — glibc needs it for name resolution
+  and it reaches only the kernel, not the network.
+- Under `--seccomp-strict`, `clone`/`clone3` with a namespace flag (`CLONE_NEW*`) is
+  denied, closing the bypass of the existing `unshare`/`setns` deny (`clone3` returns
+  ENOSYS so glibc falls back to the filtered `clone`). Ordinary fork/thread creation
+  is unaffected. Corpus 132/132 on Linux with no control broken.
+
 ### Conformance runner
 - A scenario that does not prove anything can no longer certify green: unknown TOML
   keys and unknown `requires` are contract errors; a `root`/`nonroot` requirement is
