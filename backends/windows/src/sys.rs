@@ -1068,6 +1068,34 @@ impl Drop for SandboxUser {
     }
 }
 
+/// Display name of the outbound egress-block rule the setup installs, scoped to
+/// the sandbox user's SID (keep in sync with setup/sandbox-user.ps1 $FwGroup).
+const FW_OUT_RULE: &str = "tartaros sandbox user (out)";
+
+/// Fail closed if the sandbox user's egress-block firewall rule is not present.
+/// On this tier "network denied" is enforced by that per-SID rule, installed once
+/// by the admin setup; the backend must not assume it. `netsh` returns exit 0
+/// even when nothing matches, so the check reads stdout: when the rule exists its
+/// output echoes the rule's name, and when it does not the output is the (localized)
+/// "no rules match" message. The rule name is our own literal string, so matching
+/// on it is locale-independent.
+fn verify_egress_blocked() -> Result<(), String> {
+    let out = std::process::Command::new("netsh")
+        .args(["advfirewall", "firewall", "show", "rule", &format!("name={FW_OUT_RULE}")])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("could not query the firewall (netsh): {e}"))?;
+    if String::from_utf8_lossy(&out.stdout).contains(FW_OUT_RULE) {
+        Ok(())
+    } else {
+        Err(format!(
+            "network is denied but the sandbox user's egress-block firewall rule (\"{FW_OUT_RULE}\") \
+             is not installed; run setup/sandbox-user.ps1 install (elevated) to restore it. \
+             Refusing rather than run with open egress."
+        ))
+    }
+}
+
 pub(crate) fn run_sandbox_user(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let tag = format!("u{}.{}", std::process::id(), COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -1076,6 +1104,10 @@ pub(crate) fn run_sandbox_user(policy: &Policy, command: &[String]) -> Result<Ru
             eprintln!("tartaros: {note}");
         }
         let user = SandboxUser::load().map_err(err)?;
+        // This tier supports only "network denied" (validate refuses the rest),
+        // enforced by the per-SID firewall rule from setup. Verify it is present
+        // rather than assume it.
+        verify_egress_blocked().map_err(err)?;
         prepare(policy)?;
         let program = Path::new(&command[0]);
         let program = program.is_absolute().then_some(program);
