@@ -149,14 +149,15 @@ to it on Windows, and `--log` has no Windows collectors.
   The `sandbox-user` tier follows the neutral model (read everything except
   `--read-deny`), matching Linux/macOS, at the cost of a one-time admin setup.
   Pick the tier that matches what you need.
-- **Loopback on the `sandbox-user` tier.** Egress to non-loopback addresses is
-  blocked by the per-SID firewall rules the setup installs, and the backend now
-  verifies those rules are present before each run and refuses (fail-closed) if
-  they are not — it no longer assumes them. The Windows firewall does not filter
-  loopback, though, so a service on `127.0.0.1` stays reachable to the agent on
-  this tier. The `appcontainer` tier has no network capability at all, so loopback
-  is closed there. Closing loopback on the `sandbox-user` tier needs a WFP filter
-  installed at setup time; that and a broker-backed domain allowlist are future work.
+- **Egress on the `sandbox-user` tier.** All egress for the sandbox user —
+  external *and* loopback — is blocked by a per-SID WFP filter the setup installs
+  (`tartaros-wfp`), since the Windows firewall exempts loopback and cannot. The
+  backend verifies that filter is present before each run and refuses (fail-closed)
+  if it is not; it no longer assumes it. The `appcontainer` tier has no network
+  capability at all, so its egress and loopback are closed by construction. A
+  broker-backed domain allowlist (permit the agent to reach only an egress broker
+  on a loopback port, which `tartaros-wfp --allow-loopback-port` already carves)
+  is the remaining network step.
 - **`WRITE_RESTRICTED` runner (sandbox-user).** The command runs under a
   write-restricted token whose restricting SIDs are the user and `Everyone`;
   `Everyone` is required or the loader cannot start a process. A path writable by

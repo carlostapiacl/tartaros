@@ -39,8 +39,10 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   - A write-ahead ACL journal (`%LOCALAPPDATA%\tartaros\journal`) restores any
     grant left behind by a run that died, recovered by the next run.
   - `tartaros run` dispatches to the backend on Windows (`--log` is refused, no
-    collectors yet); the dedicated-user tier verifies its egress-block firewall
-    rule is present before each run and refuses fail-closed if it is missing.
+    collectors yet). The dedicated-user tier blocks all egress (external and
+    loopback) with a per-SID WFP filter installed by the setup (`tartaros-wfp`),
+    since the Windows firewall exempts loopback; the backend verifies the filter
+    is present before each run and refuses fail-closed if it is missing.
   - Selected with `TARTAROS_WINDOWS_TIER`; exercised through the conformance
     bench. Wiring `tartaros run` to the backend on Windows is the next step
     ([roadmap](ROADMAP.md)). Measured on Windows 10 19045 (corpus, `--ignore-os`):
