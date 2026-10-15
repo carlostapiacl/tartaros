@@ -543,6 +543,12 @@ fn confined_command(
             if !robind_cstrings.is_empty() {
                 namespace::setup_ro_binds(&robind_cstrings, !isolate_pids)?;
             }
+            // Isolate /dev/shm from the host whenever a mount namespace exists (an
+            // isolation tier): a fresh private tmpfs so the shared POSIX shm dir is
+            // not a side channel. local-agent (no namespace) keeps the shared dir.
+            if isolate_pids || isolate_network {
+                namespace::mount_private_shm()?;
+            }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
             // SIGKILL of the supervisor that never runs destroy_cgroup.
             //   - With --isolate-pids this is a COMPLETE tree-kill: the parent is

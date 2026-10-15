@@ -330,6 +330,33 @@ pub(crate) unsafe fn setup_ro_binds(
     Ok(())
 }
 
+/// Mount a fresh, private tmpfs over `/dev/shm` inside the current mount namespace,
+/// so the agent cannot use the host-shared POSIX shared-memory dir as a cross-
+/// process/-container channel or fill it (a DoS). Called only when a mount
+/// namespace already exists (an isolation tier). Fails closed: a requested
+/// isolation that cannot be installed aborts the launch.
+pub(crate) unsafe fn mount_private_shm() -> std::io::Result<()> {
+    let shm = c"/dev/shm";
+    // Only if /dev/shm exists as a dir (it does on normal Linux). If absent, there
+    // is nothing shared to isolate.
+    let mut st: libc::stat = std::mem::zeroed();
+    if libc::stat(shm.as_ptr(), &mut st) != 0 || (st.st_mode & libc::S_IFMT) != libc::S_IFDIR {
+        return Ok(());
+    }
+    let opts = c"mode=1777,size=64m";
+    if libc::mount(
+        c"tmpfs".as_ptr(),
+        shm.as_ptr(),
+        c"tmpfs".as_ptr(),
+        0,
+        opts.as_ptr() as *const libc::c_void,
+    ) != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Bring the loopback interface up inside the current (new) network namespace via
 /// SIOCGIFFLAGS/SIOCSIFFLAGS. A fresh netns has `lo` DOWN; without this even
 /// 127.0.0.1-to-self fails. No external interface exists, so egress stays closed.

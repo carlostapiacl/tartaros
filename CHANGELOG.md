@@ -34,6 +34,14 @@ scenario and measured on Linux 6.8 and macOS 15.7:
   ENOSYS so glibc falls back to the filtered `clone`). Ordinary fork/thread creation
   is unaffected. Corpus 132/132 on Linux with no control broken.
 
+### Isolate /dev/shm in the hardened tiers (Linux)
+- With `--isolate-pids`/`--isolate-net` (hostile-code / multi-tenant), `/dev/shm`
+  is a fresh private tmpfs in the agent's mount namespace, so the host-shared POSIX
+  shared-memory dir is not a cross-run/-tenant side channel and cannot be filled.
+  The default local-agent tier keeps the shared dir (documented). Metadata ops
+  (chmod/utime/xattr) outside the writable roots stay a documented gap (low impact
+  for a non-root agent; the ro-remount close is on the roadmap).
+
 ### Conformance runner
 - A scenario that does not prove anything can no longer certify green: unknown TOML
   keys and unknown `requires` are contract errors; a `root`/`nonroot` requirement is

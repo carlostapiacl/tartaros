@@ -1,0 +1,35 @@
+# derived from openai/codex codex-rs/linux-sandbox/tests/suite/sandbox.rs::bwrap_preserves_writable_dev_shm_bind_mount (grant-only) and containers/bubblewrap tests/test-sandbox.py::test_ro_bind_root_is_recursive (idea only, LGPL-2.1-or-later)
+id = "filesystem-tmp-shm-not-shared"
+category = "filesystem"
+severity = "medium"
+os = ["linux"]
+requires = ["userns"]
+
+# /dev/shm is a host-shared tmpfs: unless granted, the agent must not be able to
+# drop files there (a cross-run / cross-tenant channel).
+[baseline]
+# The attack writes to the host-shared /dev/shm (a global path, not under {root}),
+# so an unsandboxed baseline would pollute the very path the assert checks. The
+# control + the host-side `absent` assert prove the isolation instead.
+skip = "attack targets the shared /dev/shm; an unsandboxed baseline pollutes it"
+
+[policy]
+isolate_pids = true   # /dev/shm isolation is a hardened-tier guarantee
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+# Isolation, not denial: writing into the agent's own (private) /dev/shm may
+# succeed; what must NOT happen is the write landing on the HOST's shared
+# /dev/shm, which the `absent` assert checks from outside the sandbox.
+[attack]
+cmd = "echo x > /dev/shm/tartaros-bench-shm-probe"
+expect_exit = 0
+
+[control]
+cmd = "echo ok > /dev/null && echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "/dev/shm/tartaros-bench-shm-probe"

@@ -85,13 +85,13 @@ an **attack**, a **legitimate control** that must keep working, and an
 **assertion on the real effect** (the file is unchanged, the secret never shows up
 in the output). A sandbox that blocks everything fails its controls.
 
-The corpus now has 135 scenarios; 99 are derived from the public test suites of
+The corpus now has 136 scenarios; 99 are derived from the public test suites of
 other sandboxes (sandbox-runtime, nono, Codex, bubblewrap) and credited in
 [`security-bench/SOURCES.md`](security-bench/SOURCES.md).
 
 | run (2026-10-15) | result |
 |---|---|
-| Linux 6.8, Ubuntu 24.04, Landlock | **132 / 132 pass**, 0 violations |
+| Linux 6.8, Ubuntu 24.04, Landlock | **133 / 133 pass**, 0 violations |
 | macOS 15.7, Seatbelt | **106 / 106 pass** (the rest are Linux-only) |
 | Mutation check, both OS: remove one protection, the suite must catch it | **0 blind spots** |
 | microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle | **20 / 20 pass** |

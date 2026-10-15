@@ -42,13 +42,13 @@ backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind
 
 ## Scorecard (measured 2026-10-15, a Linux host kernel 6.8)
 
-The corpus has 135 scenarios; 99 are derived from other sandboxes' public test
+The corpus has 136 scenarios; 99 are derived from other sandboxes' public test
 suites and credited in [`SOURCES.md`](SOURCES.md). Confirmed-open scenarios live in
 [`corpus-known-gaps/`](corpus-known-gaps/) with their per-OS status.
 
 | | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) |
 |---|---|---|
-| scenarios | 132/132 pass | 106/106 pass |
+| scenarios | 133/133 pass | 106/106 pass |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 | mutation blind spots | 0 | 0 |
