@@ -97,6 +97,22 @@ pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
 /// reads from the host, outside the box.
 pub const HANDOFF_GIT_NAMES: &[&str] = &[".git/hooks", ".git/config"];
 
+/// Per-USER startup/config files a trusted tool or the host's next shell later
+/// runs or sources, when the workspace is (or becomes) HOME or a tool reads them
+/// from the directory: shell rc files and per-user tool config with run-command
+/// hooks (`.gitconfig` core.fsmonitor/core.pager, `.ripgreprc` pre-processor).
+///
+/// These are NOT in the default handoff set because protecting them breaks the
+/// legitimate case of editing one's own dotfiles inside the sandbox (a dotfiles
+/// repo is exactly a writable root full of these names). They are an OPT-IN:
+/// `Policy::protect_home_handoff` adds them to the deny set, for when the
+/// workspace is known not to be a dotfiles repo and the home-handoff surface is
+/// in scope. Denied even if absent, like the config names.
+pub const HANDOFF_HOME_NAMES: &[&str] = &[
+    ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
+    ".gitconfig", ".ripgreprc",
+];
+
 /// How deep the walk for nested markers goes. A real tree rarely nests repos
 /// deeper than this; the bound keeps a pathological tree from stalling us.
 /// Bound on the handoff-discovery walk (guards against pathological depth and
@@ -145,6 +161,12 @@ pub struct Policy {
     /// later runs. Landlock protects by inode, so a path must exist to be carved;
     /// this materializes it. A workspace side effect — hence opt-in.
     pub materialize_absent_handoff: bool,
+    /// Opt-in: also protect the per-user home-handoff surface
+    /// (`HANDOFF_HOME_NAMES`: shell rc files, `.gitconfig`, `.ripgreprc`) under the
+    /// writable roots, denied even if absent. Off by default because it breaks
+    /// editing one's own dotfiles in the box; turn it on when the workspace is not
+    /// a dotfiles repo and that surface is in scope.
+    pub protect_home_handoff: bool,
     /// Wall-clock limit; on expiry the whole process group is killed (exit 124).
     pub timeout: Option<Duration>,
     /// Address-space (memory) limit in bytes (`RLIMIT_AS`).
@@ -253,6 +275,14 @@ impl Policy {
                 let p = root.join(name);
                 if !p.exists() {
                     out.push(p);
+                }
+            }
+            if self.protect_home_handoff {
+                for name in HANDOFF_HOME_NAMES {
+                    let p = root.join(name);
+                    if !p.exists() {
+                        out.push(p);
+                    }
                 }
             }
         }
@@ -478,7 +508,7 @@ impl Policy {
     pub fn trust_handoff_rules(&self) -> Vec<FsRule> {
         let mut out = Vec::new();
         for root in &self.writable_roots {
-            expand_root(root, &mut out);
+            expand_root(root, self.protect_home_handoff, &mut out);
         }
         dedup(&mut out);
         out
@@ -734,17 +764,23 @@ fn carve(dir: &Path, denied: &[PathBuf], out: &mut Vec<PathBuf>) {
     }
 }
 
-fn expand_root(root: &Path, out: &mut Vec<FsRule>) {
+fn expand_root(root: &Path, home: bool, out: &mut Vec<FsRule>) {
     // Top-level config handoff files: deny even if absent.
     for name in HANDOFF_CONFIG_NAMES {
         out.push(deny(root.join(name), true));
     }
-    walk(root, 0, true, out);
+    // Opt-in home-handoff names, same treatment (deny even if absent).
+    if home {
+        for name in HANDOFF_HOME_NAMES {
+            out.push(deny(root.join(name), true));
+        }
+    }
+    walk(root, 0, true, home, out);
 }
 
 /// Recursive walk. At each directory, protect a repo's git handoff files if the
 /// directory is a git repo, and protect any config handoff files that exist.
-fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
+fn walk(dir: &Path, depth: usize, is_root: bool, home: bool, out: &mut Vec<FsRule>) {
     if depth > MAX_WALK_DEPTH {
         // Fail-safe: beyond the discovery bound we cannot verify which
         // trust-handoff paths live below, so deny write to the whole subtree
@@ -788,6 +824,11 @@ fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
         for name in HANDOFF_CONFIG_NAMES {
             out.push(deny(dir.join(name), true));
         }
+        if home {
+            for name in HANDOFF_HOME_NAMES {
+                out.push(deny(dir.join(name), true));
+            }
+        }
     }
 
     let entries = match std::fs::read_dir(dir) {
@@ -808,7 +849,7 @@ fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
         if path.file_name().and_then(|n| n.to_str()) == Some(".git") {
             continue;
         }
-        walk(&path, depth + 1, false, out);
+        walk(&path, depth + 1, false, home, out);
     }
 }
 
@@ -1000,6 +1041,32 @@ mod tests {
         let r = rules.iter().find(|r| r.path == settings).expect("settings.json must be denied");
         assert_eq!(r.access, Access::Deny);
         assert!(r.even_if_absent);
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn home_handoff_is_opt_in() {
+        let tmp = std::env::temp_dir().join(format!("sbx-home-{}", std::process::id()));
+        let root = tmp.join("work");
+        fs::create_dir_all(&root).unwrap();
+        let bashrc = root.join(".bashrc");
+        let gitconfig = root.join(".gitconfig");
+
+        // Default: home-handoff names are NOT denied (a dotfiles repo stays editable).
+        let off = Policy { writable_roots: vec![root.clone()], ..Default::default() };
+        let off_rules = off.trust_handoff_rules();
+        assert!(!off_rules.iter().any(|r| r.path == bashrc), ".bashrc must be writable by default");
+        assert!(!off_rules.iter().any(|r| r.path == gitconfig), ".gitconfig must be writable by default");
+
+        // Opt-in: the same names are denied, even if absent.
+        let on = Policy { writable_roots: vec![root.clone()], protect_home_handoff: true, ..Default::default() };
+        let on_rules = on.trust_handoff_rules();
+        let denied = |p: &Path| on_rules.iter().any(|r| r.path == *p && r.access == Access::Deny && r.even_if_absent);
+        assert!(denied(&bashrc), ".bashrc must be denied under protect_home_handoff");
+        assert!(denied(&gitconfig), ".gitconfig must be denied under protect_home_handoff");
+        // A non-handoff file stays writable even with the flag on.
+        assert!(!on_rules.iter().any(|r| r.path == root.join("src.rs")));
 
         fs::remove_dir_all(&tmp).ok();
     }

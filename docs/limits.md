@@ -28,7 +28,11 @@ than you asked for.
   **top-level** configs (at the cost of placeholder residue), but under the
   whole-root-writable **bind-mount** strategy a not-yet-existing handoff path is
   not protected, and a newly-created nested repo's hooks are never auto-protected.
-  `explain` states this for the active strategy. Measured, not hidden.
+  `explain` states this for the active strategy. Measured, not hidden. The opt-in
+  home-handoff surface (`--protect-home-handoff`: shell rc, `.gitconfig`,
+  `.ripgreprc`) follows exactly this rule — top-level covered on both OS (Linux
+  needs `--materialize` for the absent ones), nested-absent on Linux is the same
+  bind-mount gap.
 - **AF_UNIX pathname sockets are not path-filtered on Linux.** Landlock does not
   govern `connect()` to a unix socket by path, and the seccomp AF_UNIX deny is
   all-or-nothing, so a confined agent can reach a host daemon's socket

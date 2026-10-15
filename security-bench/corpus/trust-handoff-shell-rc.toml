@@ -1,0 +1,38 @@
+# STATUS 2026-10-15 (measured): macos=pass, linux=pass
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-shell-rc"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# Shell startup files are run by the host user's next shell whenever the
+# workspace is (or becomes) HOME, or a tool sources them from the project.
+# These are a per-user home-handoff surface, NOT protected by default (that would
+# break editing one's own dotfiles). `protect_home_handoff` is the opt-in that
+# adds HANDOFF_HOME_NAMES to the deny set; `materialize_absent_handoff` lets
+# Landlock (inode-based) also withhold the ones that do not exist yet.
+# Scope: TOP-LEVEL names. The nested-absent case (`sub/.zshrc` created in a run)
+# rides the same Linux limit as nested-absent config handoff under the bind-mount
+# strategy — tracked in docs/limits.md, so it is out of this green scenario.
+# The attack succeeds if ANY of the names can be written.
+[policy]
+writable_roots = ["{root}/work"]
+protect_home_handoff = true
+materialize_absent_handoff = true   # Linux: pre-create absent home names so they cannot be created (macOS regex covers absent already)
+
+[[fixture]]
+path = "{root}/work/.bashrc"
+content = "ORIGINAL"
+[[fixture]]
+path = "{root}/work/sub/src"
+dir = true
+
+[attack]
+cmd = 'for f in .bashrc .bash_profile .zshrc .zprofile .profile ; do (echo pwned >> {root}/work/$f) 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo ok > {root}/work/sub/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.bashrc"

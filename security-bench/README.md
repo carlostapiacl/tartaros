@@ -42,19 +42,26 @@ backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind
 
 ## Scorecard (measured 2026-10-15, a Linux host kernel 6.8)
 
-The corpus has 136 scenarios; 99 are derived from other sandboxes' public test
+The corpus has 138 scenarios; 101 are derived from other sandboxes' public test
 suites and credited in [`SOURCES.md`](SOURCES.md). Confirmed-open scenarios live in
 [`corpus-known-gaps/`](corpus-known-gaps/) with their per-OS status.
 
 | | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) |
 |---|---|---|
-| scenarios | 133/133 pass | 106/106 pass |
+| scenarios | 133/133 pass¹ | 108/108 pass |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 | mutation blind spots | 0 | 0 |
 
 macOS runs the cross-platform subset (scenarios whose `os` includes macOS).
 Targets: violations 0, blind spots 0, legitimate ops ≥ 99%.
+
+¹ The last clean full-suite Linux snapshot (bare lab host). The two
+`trust-handoff-{shell,tool}-rc` scenarios added 2026-10-15 were verified PASS on
+Linux 6.8 (individually and inside the suite); a fresh full-suite snapshot that
+folds them in is pending a bare-host run, because inside a privileged container two
+unrelated environment-sensitive scenarios (PID-namespace isolation and the cgroup
+process cap) do not reflect bare-metal behavior.
 
 ## Coverage, not just green (what a PASS does and does not certify)
 
@@ -106,7 +113,8 @@ so Seatbelt/Landlock see the real path).
 
 ## Covered families (7)
 
-filesystem write-outside · symlink escape · hardlink bypass · trust-handoff nested `.git` · ancestor
+filesystem write-outside · symlink escape · hardlink bypass · trust-handoff nested `.git` · home-handoff
+shell-rc / tool-config (opt-in `--protect-home-handoff`) · ancestor
 rename · secret read-deny · secret inside a writable root (P0-1) · absent-handoff
 materialization · network per-port · lifecycle timeout (kills the group) · memory limit · IPC unix-socket (opt-in seccomp on Linux) · broker credential egress (the secret lives only in the broker).
 

@@ -98,6 +98,8 @@ struct PolicySpec {
     #[serde(default)]
     materialize_absent_handoff: bool,
     #[serde(default)]
+    protect_home_handoff: bool,
+    #[serde(default)]
     isolate_process_info: bool,
     #[serde(default)]
     timeout_secs: Option<u64>,
@@ -806,6 +808,7 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
             _ => Some(Network::Denied),
         },
         materialize_absent_handoff: c.policy.materialize_absent_handoff,
+        protect_home_handoff: c.policy.protect_home_handoff,
         isolate_process_info: c.policy.isolate_process_info,
         timeout: c.policy.timeout_secs.map(std::time::Duration::from_secs),
         max_memory_bytes: c.policy.max_memory_bytes,
