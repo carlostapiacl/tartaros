@@ -1005,6 +1005,18 @@ unsafe fn reg_value(key: &str, name: &str) -> Result<Vec<u8>, String> {
 }
 
 /// A REG_SZ / REG_EXPAND_SZ value (RegGetValue expands the latter).
+/// A REG_DWORD value as u16 (ports fit), or None if absent or out of range.
+pub(crate) fn reg_dword_port(name: &str) -> Option<u16> {
+    unsafe {
+        let b = reg_value(SBX_KEY, name).ok()?;
+        if b.len() < 4 {
+            return None;
+        }
+        let v = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        u16::try_from(v).ok().filter(|p| *p != 0)
+    }
+}
+
 unsafe fn reg_string(key: &str, name: &str) -> Result<String, String> {
     let b = reg_value(key, name)?;
     let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();

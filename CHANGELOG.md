@@ -43,6 +43,12 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
     loopback) with a per-SID WFP filter installed by the setup (`tartaros-wfp`),
     since the Windows firewall exempts loopback; the backend verifies the filter
     is present before each run and refuses fail-closed if it is missing.
+  - `--allow-domain` works on the dedicated-user tier: `setup ... -BrokerPort P`
+    carves a WFP permit for `127.0.0.1:P` (all else blocked), and `tartaros run`
+    starts the egress broker on P and points the agent's HTTPS_PROXY at it, so the
+    agent reaches only allowlisted hosts (measured: allowed host CONNECT 200,
+    others 403, direct external blocked). Refused fail-closed without a broker
+    port or on the appcontainer tier.
   - Selected with `TARTAROS_WINDOWS_TIER`; exercised through the conformance
     bench. Wiring `tartaros run` to the backend on Windows is the next step
     ([roadmap](ROADMAP.md)). Measured on Windows 10 19045 (corpus, `--ignore-os`):

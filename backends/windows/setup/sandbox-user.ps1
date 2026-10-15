@@ -27,7 +27,11 @@ param(
     # The profile of the person who will run tartaros: read is granted on it.
     [string]$ProfileDir,
     [string]$UserName = 'tartaros-sbx',
-    [string]$GroupName = 'tartaros-sandbox-users'
+    [string]$GroupName = 'tartaros-sandbox-users',
+    # When set, the sandbox user may reach only 127.0.0.1:<BrokerPort> (the egress
+    # broker tartaros starts for --allow-domain); every other connection, loopback
+    # and external, stays blocked. Omit for block-all (no domain egress).
+    [int]$BrokerPort = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -142,8 +146,17 @@ function Install {
     $wfp = Join-Path $PSScriptRoot 'tartaros-wfp.exe'
     if (-not (Test-Path $wfp)) { throw "tartaros-wfp.exe not found next to this script ($wfp); build it (cargo build -p tartaros-windows --bin tartaros-wfp) and place it here." }
     & $wfp uninstall | Out-Null
-    & $wfp install $sid
+    if ($BrokerPort -gt 0) {
+        & $wfp install $sid --allow-loopback-port $BrokerPort
+    } else {
+        & $wfp install $sid
+    }
     if ($LASTEXITCODE -ne 0) { throw "tartaros-wfp install failed ($LASTEXITCODE)" }
+    if ($BrokerPort -gt 0) {
+        Set-ItemProperty -Path $KeyPath -Name BrokerPort -Value $BrokerPort -Type DWord
+    } else {
+        Remove-ItemProperty -Path $KeyPath -Name BrokerPort -ErrorAction SilentlyContinue
+    }
 
     # Read on the runner's profile: the neutral model reads everything except
     # what the policy denies; the backend adds those denies per run. Note: this
@@ -195,6 +208,7 @@ function Status {
         Group         = if (Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue) { $GroupName } else { 'missing' }
         Credential    = if ($k -and $k.Blob) { "stored ($($k.Blob.Length) bytes)" } else { 'missing' }
         ProfileDir    = if ($k) { $k.ProfileDir } else { '' }
+        BrokerPort    = $(if ($k -and $k.BrokerPort) { $k.BrokerPort } else { '(block-all)' })
         EgressBlock   = $($wfp = Join-Path $PSScriptRoot 'tartaros-wfp.exe'; if (Test-Path $wfp) { & $wfp check | Out-Null; if ($LASTEXITCODE -eq 0) { 'WFP filter installed' } else { 'MISSING' } } else { 'tartaros-wfp.exe not found' })
         Hidden        = [bool](Get-ItemProperty -Path $HideKey -Name $UserName -ErrorAction SilentlyContinue)
     } | Format-List

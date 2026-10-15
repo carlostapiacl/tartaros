@@ -439,7 +439,35 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
         }
     }
 
+    // Windows: the agent runs as a separate user whose egress is blocked by a
+    // per-SID WFP filter that permits exactly ONE loopback port (installed with
+    // admin at setup). The broker must bind that fixed port, not a random one; a
+    // run-time process cannot add a WFP permit (no admin). The port is not added
+    // to local_ports — the WFP permit, not a port grant, is what lets the agent
+    // reach it. Fail closed if the setup did not configure a broker channel.
+    #[cfg(target_os = "windows")]
+    {
+        let Some(port) = tartaros_windows::configured_broker_port() else {
+            eprintln!("tartaros: --allow-domain needs a broker channel; run setup/sandbox-user.ps1 install -BrokerPort <port> once (elevated).");
+            exit(2);
+        };
+        let broker = make_broker();
+        let listener = broker.bind_addr("127.0.0.1", port).map(|(l, _)| l).unwrap_or_else(|e| {
+            eprintln!("tartaros: cannot start egress broker on 127.0.0.1:{port}: {e}");
+            exit(1);
+        });
+        set_proxy("127.0.0.1", port, false); // route everything (incl. loopback) via the broker
+        eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; TCP tunnel, no TLS inspection)", hosts.join(", "));
+        std::thread::spawn(move || {
+            let mut sink = tartaros_core::VecSink::default();
+            let _ = broker.serve(listener, &mut sink);
+        });
+        return Default::default();
+    }
+
     // Fallback (macOS, non-root Linux, or netns setup failed): loopback broker.
+    #[cfg(not(target_os = "windows"))]
+    {
     let broker = make_broker();
     let (listener, port) = broker.bind(0).unwrap_or_else(|e| {
         eprintln!("tartaros: cannot start egress broker: {e}");
@@ -455,6 +483,7 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
         let _ = broker.serve(listener, &mut sink);
     });
     Default::default()
+    }
 }
 
 #[cfg(target_os = "linux")]
