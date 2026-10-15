@@ -48,20 +48,19 @@ suites and credited in [`SOURCES.md`](SOURCES.md). Confirmed-open scenarios live
 
 | | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) |
 |---|---|---|
-| scenarios | 133/133 pass¹ | 108/108 pass |
+| scenarios | 135/135 pass | 108/108 pass |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 | mutation blind spots | 0 | 0 |
 
 macOS runs the cross-platform subset (scenarios whose `os` includes macOS).
-Targets: violations 0, blind spots 0, legitimate ops ≥ 99%.
-
-¹ The last clean full-suite Linux snapshot (bare lab host). The two
-`trust-handoff-{shell,tool}-rc` scenarios added 2026-10-15 were verified PASS on
-Linux 6.8 (individually and inside the suite); a fresh full-suite snapshot that
-folds them in is pending a bare-host run, because inside a privileged container two
-unrelated environment-sensitive scenarios (PID-namespace isolation and the cgroup
-process cap) do not reflect bare-metal behavior.
+Targets: violations 0, blind spots 0, legitimate ops ≥ 99%. The Linux figure is
+measured on kernel 6.8 with all host capabilities present
+(`landlock cgroup_v2 userns`); two scenarios are capability-sensitive and need a
+real cgroup-v2-delegated, populated host to be meaningful (the PID-namespace and
+process-cap tests), so a quiescent or cgroup-undelegated environment reports them
+UNSUPPORTED/VACUOUS rather than PASS — run with `--require-caps` to fail loudly
+instead of silently skipping.
 
 ## Coverage, not just green (what a PASS does and does not certify)
 

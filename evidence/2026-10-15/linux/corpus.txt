@@ -1,395 +1,10 @@
 tartaros-bench · backend=linux
 
-/bin/sh: 1: cannot create forbidden.txt: Permission denied
-mv: cannot move '/tmp/secbench-filesystem-rename-into-territory-3903398/outside/config' to '/tmp/secbench-filesystem-rename-into-territory-3903398/work/stolen': Permission denied
-mv: cannot move '/tmp/secbench-filesystem-rename-out-of-territory-3903398/work/data.txt' to '/tmp/secbench-filesystem-rename-out-of-territory-3903398/outside/data.txt': Permission denied
-rm: cannot remove '/tmp/secbench-filesystem-rm-under-read-deny-ancestor-3903398/base/outside/protected.txt': Permission denied
-sh: 1: cannot create /tmp/secbench-filesystem-single-file-grant-3903398/work/sibling.txt: Permission denied
-truncate: cannot open '/tmp/secbench-filesystem-truncate-outside-3903398/outside/db.sqlite' for writing: Permission denied
-rm: cannot remove '/tmp/secbench-filesystem-unlink-outside-3903398/outside/keep.txt': Permission denied
-sh: 1: cannot create /tmp/secbench-filesystem-write-deny-absent-path-3903398/work/denied.lock: Permission denied
-mkdir: cannot create directory '/tmp/secbench-filesystem-write-deny-absent-path-3903398/work/gone': Permission denied
-mv: cannot move '/tmp/secbench-filesystem-write-deny-rename-bypass-3903398/work/protected' to '/tmp/secbench-filesystem-write-deny-rename-bypass-3903398/work/p2': Device or resource busy
-/bin/sh: 1: cannot create /tmp/secbench-filesystem-write-deny-symlink-alias-3903398/work/alias/cfg: Read-only file system
-sh: 1: cannot create /tmp/secbench-filesystem-write-deny-truncate-unlink-3903398/work/protected/cfg: Read-only file system
-sh: 1: cannot create /tmp/secbench-filesystem-write-deny-truncate-unlink-3903398/work/protected/cfg: Read-only file system
-rm: cannot remove '/tmp/secbench-filesystem-write-deny-unlink-recreate-3903398/work/policy.lock': Device or resource busy
-sh: 1: cannot create /tmp/secbench-filesystem-write-deny-unlink-recreate-3903398/work/policy.lock: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-filesystem-write-deny-via-symlink-spelling-3903398/work/repo/hooks/pre-push: Read-only file system
-cat: /tmp/secbench-filesystem-write-reallow-inside-deny-3903398/vault/other: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-fs-dangling-symlink-create-outside-3903398/work/dangle: Permission denied
-ln: failed to create hard link '/tmp/secbench-fs-hardlink-create-write-out-3903398/work/second-name' => '/tmp/secbench-fs-hardlink-create-write-out-3903398/outside/file': Invalid cross-device link
-ln: failed to create hard link '/tmp/secbench-fs-hardlink-widen-write-3903398/work/t' => '/tmp/secbench-fs-hardlink-widen-write-3903398/outside/target': Invalid cross-device link
-/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-dangling-create-3903398/work/dangling: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-escape-3903398/work/link/secret: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-fs-symlink-file-out-agent-made-3903398/work/made: Permission denied
-mv: cannot move '/tmp/secbench-fs-symlink-rename-out-3903398/work/made' to '/tmp/secbench-fs-symlink-rename-out-3903398/work/link-to-dir/file': Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-fs-write-outside-territory-3903398/outside.txt: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-materialize-absent-3903398/work/.claude/settings.json: Read-only file system
-unshare: unshare failed: Operation not permitted
-/bin/sh: 1: cannot open /proc/3903398/environ: Permission denied
 launched
-sh: 1: cannot create {effect_log}: Permission denied
-cat: /tmp/secbench-read-allow-deny-nested-3903398/vault/mine/settings.json: Permission denied
-cat: /tmp/secbench-read-allow-inside-deny-writable-ancestor-3903398/base/denied/secret.txt: Permission denied
-cat: /tmp/secbench-read-allow-inside-deny-3903398/vault/other-secret: Permission denied
-cat: /tmp/secbench-read-allow-symlink-into-deny-3903398/home/.ssh/id_rsa: Permission denied
-cat: /tmp/secbench-read-allow-symlink-no-reopen-3903398/proj/docs/id_rsa: Permission denied
-cat: /tmp/secbench-read-allow-symlink-no-reopen-3903398/home/.ssh/id_rsa: Permission denied
-cat: /tmp/secbench-read-allow-trailing-slash-nested-deny-3903398/priv/pub/secret/key: Permission denied
-cat: /tmp/secbench-read-allow-writable-carveout-trailing-slash-3903398/secrets/key: Permission denied
-cat: /tmp/secbench-read-deny-alt-spelling-3903398/vault/key: Permission denied
-cat: '/tmp/secbench-read-deny-backslash-name-3903398/tree/a\b': Permission denied
-cat: '/tmp/secbench-read-deny-bracket-dir-3903398/tree/[user-id]/secret': Permission denied
-cat: /tmp/secbench-read-deny-given-via-symlink-3903398/vault/key: Permission denied
-cat: /tmp/secbench-read-deny-link-dotdot-3903398/elsewhere/file: Permission denied
-cat: /tmp/secbench-read-deny-not-reopened-by-nested-writable-3903398/vault/key: Permission denied
-ls: cannot open directory '/tmp/secbench-read-deny-not-reopened-by-nested-writable-3903398/vault': Permission denied
-cat: /proc/self/root/tmp/secbench-read-deny-proc-magic-symlink-3903398/vault/key: Permission denied
-cat: /tmp/secbench-read-deny-root-carve-out-3903398/outside/secret: Permission denied
-cat: /tmp/secbench-read-deny-symlink-bypass-3903398/work/link: Permission denied
-cat: /tmp/secbench-read-deny-symlink-entry-3903398/work/secrets/key: Permission denied
-cat: /tmp/secbench-read-deny-symlinked-dir-3903398/work/dotfiles/private/key: Permission denied
-cat: /tmp/secbench-read-deny-symlinked-dir-3903398/work/proj/.private/key: Permission denied
-cat: /tmp/secbench-read-deny-trailing-slash-nested-write-deny-3903398/work/secrets/sub/token: Permission denied
-cat: /tmp/secbench-read-deny-under-write-deny-3903398/work/proj/secrets/key: Permission denied
-cat: /tmp/secbench-read-deny-wins-exact-tie-3903398/vault/sec/key.txt: Permission denied
-Killed
-mknod: /tmp/secbench-root-mknod-device-denied-3903398/work/disk: Operation not permitted
-cat: /tmp/secbench-secret-read-inside-writable-3903398/work/.secrets/token: Permission denied
-cat: /tmp/secbench-secret-read-deny-3903398/vault/key: Permission denied
-sh: 1: cannot create /tmp/secbench-secrets-home-credentials-in-writable-3903398/home/.aws/config: Read-only file system
-mv: inter-device move failed: '/tmp/secbench-secrets-home-credentials-in-writable-3903398/home/replacement' to '/tmp/secbench-secrets-home-credentials-in-writable-3903398/home/.aws/config'; unable to remove target: Read-only file system
-mv: cannot move '/tmp/secbench-secrets-home-credentials-in-writable-3903398/home/.aws' to '/tmp/secbench-secrets-home-credentials-in-writable-3903398/home/aws2': Device or resource busy
-sh: 1: cannot open /proc/1/environ: Permission denied
-sh: 1: cannot open /proc/1111171/environ: Permission denied
-sh: 1: cannot open /proc/1111196/environ: Permission denied
-sh: 1: cannot open /proc/1111425/environ: Permission denied
-sh: 1: cannot open /proc/1111426/environ: Permission denied
-sh: 1: cannot open /proc/1111435/environ: Permission denied
-sh: 1: cannot open /proc/1111436/environ: Permission denied
-sh: 1: cannot open /proc/1111437/environ: Permission denied
-sh: 1: cannot open /proc/1111822/environ: Permission denied
-sh: 1: cannot open /proc/1111862/environ: Permission denied
-sh: 1: cannot open /proc/1112900/environ: Permission denied
-sh: 1: cannot open /proc/1112909/environ: Permission denied
-sh: 1: cannot open /proc/1112933/environ: Permission denied
-sh: 1: cannot open /proc/1112974/environ: Permission denied
-sh: 1: cannot open /proc/1113000/environ: Permission denied
-sh: 1: cannot open /proc/1113120/environ: Permission denied
-sh: 1: cannot open /proc/1113121/environ: Permission denied
-sh: 1: cannot open /proc/1140944/environ: Permission denied
-sh: 1: cannot open /proc/1140988/environ: Permission denied
-sh: 1: cannot open /proc/117/environ: No such process
-sh: 1: cannot open /proc/12/environ: No such process
-sh: 1: cannot open /proc/13/environ: No such process
-sh: 1: cannot open /proc/1387390/environ: Permission denied
-sh: 1: cannot open /proc/1387416/environ: Permission denied
-sh: 1: cannot open /proc/14/environ: No such process
-sh: 1: cannot open /proc/143/environ: No such process
-sh: 1: cannot open /proc/1446/environ: Permission denied
-sh: 1: cannot open /proc/1447847/environ: Permission denied
-sh: 1: cannot open /proc/1450/environ: Permission denied
-sh: 1: cannot open /proc/1459/environ: Permission denied
-sh: 1: cannot open /proc/1483/environ: Permission denied
-sh: 1: cannot open /proc/15/environ: No such process
-sh: 1: cannot open /proc/1504/environ: Permission denied
-sh: 1: cannot open /proc/1506/environ: Permission denied
-sh: 1: cannot open /proc/1553/environ: Permission denied
-sh: 1: cannot open /proc/1596/environ: Permission denied
-sh: 1: cannot open /proc/16/environ: No such process
-sh: 1: cannot open /proc/1605/environ: Permission denied
-sh: 1: cannot open /proc/166/environ: No such process
-sh: 1: cannot open /proc/167/environ: No such process
-sh: 1: cannot open /proc/169/environ: No such process
-sh: 1: cannot open /proc/17/environ: No such process
-sh: 1: cannot open /proc/170/environ: No such process
-sh: 1: cannot open /proc/171/environ: No such process
-sh: 1: cannot open /proc/172/environ: No such process
-sh: 1: cannot open /proc/1728/environ: Permission denied
-sh: 1: cannot open /proc/173/environ: No such process
-sh: 1: cannot open /proc/1730/environ: Permission denied
-sh: 1: cannot open /proc/174/environ: No such process
-sh: 1: cannot open /proc/175/environ: No such process
-sh: 1: cannot open /proc/176/environ: No such process
-sh: 1: cannot open /proc/177/environ: No such process
-sh: 1: cannot open /proc/1779/environ: Permission denied
-sh: 1: cannot open /proc/179/environ: No such process
-sh: 1: cannot open /proc/18/environ: No such process
-sh: 1: cannot open /proc/1824/environ: Permission denied
-sh: 1: cannot open /proc/1842/environ: Permission denied
-sh: 1: cannot open /proc/1852/environ: Permission denied
-sh: 1: cannot open /proc/1861/environ: Permission denied
-sh: 1: cannot open /proc/1864/environ: Permission denied
-sh: 1: cannot open /proc/1875/environ: Permission denied
-sh: 1: cannot open /proc/1877/environ: Permission denied
-sh: 1: cannot open /proc/1883/environ: Permission denied
-sh: 1: cannot open /proc/1898/environ: Permission denied
-sh: 1: cannot open /proc/19/environ: No such process
-sh: 1: cannot open /proc/1919/environ: Permission denied
-sh: 1: cannot open /proc/1923/environ: Permission denied
-sh: 1: cannot open /proc/1929/environ: Permission denied
-sh: 1: cannot open /proc/1981/environ: Permission denied
-sh: 1: cannot open /proc/2/environ: No such process
-sh: 1: cannot open /proc/20/environ: No such process
-sh: 1: cannot open /proc/2002205/environ: Permission denied
-sh: 1: cannot open /proc/2002233/environ: Permission denied
-sh: 1: cannot open /proc/2032/environ: Permission denied
-sh: 1: cannot open /proc/2060/environ: Permission denied
-sh: 1: cannot open /proc/21/environ: No such process
-sh: 1: cannot open /proc/2120/environ: Permission denied
-sh: 1: cannot open /proc/2143/environ: Permission denied
-sh: 1: cannot open /proc/2164/environ: Permission denied
-sh: 1: cannot open /proc/217/environ: No such process
-sh: 1: cannot open /proc/2180/environ: Permission denied
-sh: 1: cannot open /proc/22/environ: No such process
-sh: 1: cannot open /proc/2216/environ: Permission denied
-sh: 1: cannot open /proc/23/environ: No such process
-sh: 1: cannot open /proc/2365/environ: Permission denied
-sh: 1: cannot open /proc/2366/environ: Permission denied
-sh: 1: cannot open /proc/2376/environ: Permission denied
-sh: 1: cannot open /proc/2377/environ: Permission denied
-sh: 1: cannot open /proc/2378/environ: Permission denied
-sh: 1: cannot open /proc/2390/environ: Permission denied
-sh: 1: cannot open /proc/2391/environ: Permission denied
-sh: 1: cannot open /proc/24/environ: No such process
-sh: 1: cannot open /proc/2400/environ: Permission denied
-sh: 1: cannot open /proc/2401/environ: Permission denied
-sh: 1: cannot open /proc/2402/environ: Permission denied
-sh: 1: cannot open /proc/2416807/environ: Permission denied
-sh: 1: cannot open /proc/2454/environ: Permission denied
-sh: 1: cannot open /proc/2532/environ: Permission denied
-sh: 1: cannot open /proc/256/environ: No such process
-sh: 1: cannot open /proc/2567/environ: Permission denied
-sh: 1: cannot open /proc/257/environ: No such process
-sh: 1: cannot open /proc/2594/environ: Permission denied
-sh: 1: cannot open /proc/26/environ: No such process
-sh: 1: cannot open /proc/2642/environ: Permission denied
-sh: 1: cannot open /proc/2644/environ: No such process
-sh: 1: cannot open /proc/2667/environ: Permission denied
-sh: 1: cannot open /proc/2680/environ: Permission denied
-sh: 1: cannot open /proc/27/environ: No such process
-sh: 1: cannot open /proc/2722/environ: Permission denied
-sh: 1: cannot open /proc/2728/environ: Permission denied
-sh: 1: cannot open /proc/2769/environ: Permission denied
-sh: 1: cannot open /proc/2775/environ: Permission denied
-sh: 1: cannot open /proc/28/environ: No such process
-sh: 1: cannot open /proc/2824/environ: Permission denied
-sh: 1: cannot open /proc/2832/environ: Permission denied
-sh: 1: cannot open /proc/2877/environ: Permission denied
-sh: 1: cannot open /proc/2885/environ: Permission denied
-sh: 1: cannot open /proc/29/environ: No such process
-sh: 1: cannot open /proc/2983805/environ: Permission denied
-sh: 1: cannot open /proc/2983815/environ: Permission denied
-sh: 1: cannot open /proc/2983854/environ: Permission denied
-sh: 1: cannot open /proc/2983866/environ: Permission denied
-sh: 1: cannot open /proc/2983942/environ: Permission denied
-sh: 1: cannot open /proc/2993/environ: Permission denied
-sh: 1: cannot open /proc/2994/environ: Permission denied
-sh: 1: cannot open /proc/2995/environ: Permission denied
-sh: 1: cannot open /proc/2999/environ: Permission denied
-sh: 1: cannot open /proc/3/environ: No such process
-sh: 1: cannot open /proc/30/environ: No such process
-sh: 1: cannot open /proc/3003/environ: Permission denied
-sh: 1: cannot open /proc/3004/environ: Permission denied
-sh: 1: cannot open /proc/3015/environ: Permission denied
-sh: 1: cannot open /proc/3016/environ: Permission denied
-sh: 1: cannot open /proc/3017/environ: Permission denied
-sh: 1: cannot open /proc/3037/environ: Permission denied
-sh: 1: cannot open /proc/3049/environ: Permission denied
-sh: 1: cannot open /proc/3194/environ: No such process
-sh: 1: cannot open /proc/32/environ: No such process
-sh: 1: cannot open /proc/321/environ: No such process
-sh: 1: cannot open /proc/326/environ: Permission denied
-sh: 1: cannot open /proc/3268/environ: Permission denied
-sh: 1: cannot open /proc/3278/environ: Permission denied
-sh: 1: cannot open /proc/33/environ: No such process
-sh: 1: cannot open /proc/3310/environ: Permission denied
-sh: 1: cannot open /proc/3318/environ: Permission denied
-sh: 1: cannot open /proc/3319/environ: Permission denied
-sh: 1: cannot open /proc/3320/environ: Permission denied
-sh: 1: cannot open /proc/3321/environ: Permission denied
-sh: 1: cannot open /proc/3322/environ: Permission denied
-sh: 1: cannot open /proc/3322816/environ: Permission denied
-sh: 1: cannot open /proc/3323/environ: Permission denied
-sh: 1: cannot open /proc/3340/environ: Permission denied
-sh: 1: cannot open /proc/3341/environ: Permission denied
-sh: 1: cannot open /proc/34/environ: No such process
-sh: 1: cannot open /proc/348/environ: No such process
-sh: 1: cannot open /proc/349/environ: No such process
-sh: 1: cannot open /proc/3509250/environ: No such process
-sh: 1: cannot open /proc/3541/environ: Permission denied
-sh: 1: cannot open /proc/35501/environ: No such process
-sh: 1: cannot open /proc/36/environ: No such process
-sh: 1: cannot open /proc/3617/environ: Permission denied
-sh: 1: cannot open /proc/3637/environ: Permission denied
-sh: 1: cannot open /proc/3638/environ: Permission denied
-sh: 1: cannot open /proc/37/environ: No such process
-sh: 1: cannot open /proc/3774710/environ: No such process
-sh: 1: cannot open /proc/3775620/environ: No such process
-sh: 1: cannot open /proc/3776284/environ: No such process
-sh: 1: cannot open /proc/378/environ: Permission denied
-sh: 1: cannot open /proc/3786/environ: Permission denied
-sh: 1: cannot open /proc/38/environ: No such process
-sh: 1: cannot open /proc/3801986/environ: No such process
-sh: 1: cannot open /proc/3805851/environ: No such process
-sh: 1: cannot open /proc/3822/environ: Permission denied
-sh: 1: cannot open /proc/3847544/environ: No such process
-sh: 1: cannot open /proc/3847545/environ: No such process
-sh: 1: cannot open /proc/3848994/environ: No such process
-sh: 1: cannot open /proc/3875570/environ: No such process
-sh: 1: cannot open /proc/3876191/environ: No such process
-sh: 1: cannot open /proc/3888488/environ: No such process
-sh: 1: cannot open /proc/3888489/environ: No such process
-sh: 1: cannot open /proc/3889003/environ: No such process
-sh: 1: cannot open /proc/3889004/environ: No such process
-sh: 1: cannot open /proc/3889242/environ: No such process
-sh: 1: cannot open /proc/3891181/environ: No such process
-sh: 1: cannot open /proc/39/environ: No such process
-sh: 1: cannot open /proc/3903265/environ: Permission denied
-sh: 1: cannot open /proc/3903396/environ: Permission denied
-sh: 1: cannot open /proc/3903398/environ: Permission denied
-sh: 1: cannot open /proc/3904886/environ: Permission denied
-sh: 1: cannot open /proc/3905545/environ: Permission denied
-sh: 1: cannot open /proc/3905546/environ: Permission denied
-sh: 1: cannot open /proc/3905786/environ: Permission denied
-sh: 1: cannot open /proc/3906095/environ: No such file
-sh: 1: cannot open /proc/3906096/environ: No such file
-sh: 1: cannot open /proc/3906097/environ: No such file
-sh: 1: cannot open /proc/399/environ: Permission denied
-sh: 1: cannot open /proc/4/environ: No such process
-sh: 1: cannot open /proc/40/environ: No such process
-sh: 1: cannot open /proc/400/environ: No such process
-sh: 1: cannot open /proc/41/environ: No such process
-sh: 1: cannot open /proc/42/environ: No such process
-sh: 1: cannot open /proc/43/environ: No such process
-sh: 1: cannot open /proc/4347/environ: Permission denied
-sh: 1: cannot open /proc/44/environ: No such process
-sh: 1: cannot open /proc/45/environ: No such process
-sh: 1: cannot open /proc/46/environ: No such process
-sh: 1: cannot open /proc/47/environ: No such process
-sh: 1: cannot open /proc/48/environ: No such process
-sh: 1: cannot open /proc/4866/environ: Permission denied
-sh: 1: cannot open /proc/49/environ: No such process
-sh: 1: cannot open /proc/5/environ: No such process
-sh: 1: cannot open /proc/50/environ: No such process
-sh: 1: cannot open /proc/5199/environ: Permission denied
-sh: 1: cannot open /proc/5200/environ: Permission denied
-sh: 1: cannot open /proc/5211/environ: No such process
-sh: 1: cannot open /proc/5249/environ: No such process
-sh: 1: cannot open /proc/5250/environ: Permission denied
-sh: 1: cannot open /proc/5264/environ: Permission denied
-sh: 1: cannot open /proc/53/environ: No such process
-sh: 1: cannot open /proc/54/environ: No such process
-sh: 1: cannot open /proc/55/environ: No such process
-sh: 1: cannot open /proc/56/environ: No such process
-sh: 1: cannot open /proc/57/environ: No such process
-sh: 1: cannot open /proc/58/environ: No such process
-sh: 1: cannot open /proc/5830/environ: Permission denied
-sh: 1: cannot open /proc/5835/environ: Permission denied
-sh: 1: cannot open /proc/584/environ: Permission denied
-sh: 1: cannot open /proc/587/environ: Permission denied
-sh: 1: cannot open /proc/59/environ: No such process
-sh: 1: cannot open /proc/6/environ: No such process
-sh: 1: cannot open /proc/60/environ: No such process
-sh: 1: cannot open /proc/6027/environ: Permission denied
-sh: 1: cannot open /proc/61/environ: No such process
-sh: 1: cannot open /proc/6118/environ: Permission denied
-sh: 1: cannot open /proc/6119/environ: Permission denied
-sh: 1: cannot open /proc/6120/environ: Permission denied
-sh: 1: cannot open /proc/6121/environ: Permission denied
-sh: 1: cannot open /proc/6122/environ: Permission denied
-sh: 1: cannot open /proc/6123/environ: Permission denied
-sh: 1: cannot open /proc/6124/environ: Permission denied
-sh: 1: cannot open /proc/6125/environ: Permission denied
-sh: 1: cannot open /proc/6126/environ: Permission denied
-sh: 1: cannot open /proc/6127/environ: Permission denied
-sh: 1: cannot open /proc/6128/environ: Permission denied
-sh: 1: cannot open /proc/6129/environ: Permission denied
-sh: 1: cannot open /proc/6130/environ: Permission denied
-sh: 1: cannot open /proc/6145/environ: Permission denied
-sh: 1: cannot open /proc/62/environ: No such process
-sh: 1: cannot open /proc/628890/environ: Permission denied
-sh: 1: cannot open /proc/628918/environ: Permission denied
-sh: 1: cannot open /proc/63/environ: No such process
-sh: 1: cannot open /proc/64/environ: No such process
-sh: 1: cannot open /proc/65/environ: No such process
-sh: 1: cannot open /proc/66/environ: No such process
-sh: 1: cannot open /proc/67/environ: No such process
-sh: 1: cannot open /proc/68/environ: No such process
-sh: 1: cannot open /proc/69/environ: No such process
-sh: 1: cannot open /proc/695609/environ: Permission denied
-sh: 1: cannot open /proc/695633/environ: Permission denied
-sh: 1: cannot open /proc/695666/environ: Permission denied
-sh: 1: cannot open /proc/695667/environ: Permission denied
-sh: 1: cannot open /proc/695668/environ: Permission denied
-sh: 1: cannot open /proc/697411/environ: Permission denied
-sh: 1: cannot open /proc/7/environ: No such process
-sh: 1: cannot open /proc/76/environ: No such process
-sh: 1: cannot open /proc/777/environ: Permission denied
-sh: 1: cannot open /proc/78/environ: No such process
-sh: 1: cannot open /proc/827/environ: Permission denied
-sh: 1: cannot open /proc/828/environ: Permission denied
-sh: 1: cannot open /proc/83/environ: No such process
-sh: 1: cannot open /proc/831/environ: Permission denied
-sh: 1: cannot open /proc/834/environ: Permission denied
-sh: 1: cannot open /proc/840/environ: Permission denied
-sh: 1: cannot open /proc/843/environ: Permission denied
-sh: 1: cannot open /proc/867/environ: Permission denied
-sh: 1: cannot open /proc/873/environ: Permission denied
-sh: 1: cannot open /proc/880/environ: Permission denied
-sh: 1: cannot open /proc/887/environ: Permission denied
-sh: 1: cannot open /proc/898/environ: Permission denied
-sh: 1: cannot open /proc/9/environ: No such process
-sh: 1: cannot open /proc/93/environ: No such process
-sh: 1: cannot open /proc/955/environ: Permission denied
-cat: /tmp/secbench-secrets-read-allow-symlink-into-deny-3903398/work/docs/id_rsa: Permission denied
-cat: /tmp/secbench-secrets-read-allow-symlink-into-deny-3903398/vault/id_rsa: Permission denied
-cat: /tmp/secbench-secrets-read-deny-after-chmod-3903398/work/cfg/secrets/key: Permission denied
-cat: /tmp/secbench-secrets-read-deny-also-write-denied-3903398/work/.secrets/token: Permission denied
   -- secrets-read-deny-case-fold (SKIPPED: not for linux)
   -- secrets-read-deny-clonefile (SKIPPED: not for linux)
-ls: cannot open directory '/tmp/secbench-secrets-read-deny-dir-listing-3903398/home/.aws': Permission denied
   -- secrets-read-deny-firmlink (SKIPPED: not for linux)
-cat: /tmp/secbench-secrets-read-deny-on-symlinked-path-3903398/home/.aws/credentials: Permission denied
-cat: /tmp/secbench-secrets-read-deny-on-symlinked-path-3903398/dotfiles/aws/credentials: Permission denied
-cat: '/tmp/secbench-secrets-read-deny-path-special-chars-3903398/my vault "prod" (x)/key': Permission denied
-cat: /tmp/secbench-secrets-read-deny-prefix-collision-3903398/home/.ssh/id_ed25519: Permission denied
-not-a-keygrep: /tmp/secbench-secrets-read-deny-single-file-3903398/home/.netrc: Permission denied
-grep: /tmp/secbench-secrets-read-deny-symlinked-entry-3903398/home/.netrc: Permission denied
-grep: /tmp/secbench-secrets-read-deny-symlinked-entry-3903398/dotfiles/netrc: Permission denied
-cat: /tmp/secbench-secrets-read-deny-under-write-denied-ancestor-3903398/work/cfg/secrets/key: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-ancestor-rename-3903398/work/a/n2/.git/hooks/pre-commit: Read-only file system
-mv: cannot move '/tmp/secbench-trust-handoff-bracketed-root-3903398/w[o]rk/.git/hooks' to '/tmp/secbench-trust-handoff-bracketed-root-3903398/w[o]rk/.git/hooks-moved': Device or resource busy
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-bracketed-root-3903398/w[o]rk/.git/hooks/pre-commit: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-bracketed-root-3903398/w[o]rk/secrets/key: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-claude-commands-3903398/work/a/b/.claude/commands/evil.md: Read-only file system
-mv: cannot move '/tmp/secbench-trust-handoff-git-config-move-aside-3903398/work/.git/config' to '/tmp/secbench-trust-handoff-git-config-move-aside-3903398/work/.git/config.aside': Device or resource busy
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-git-config-3903398/work/repo/.git/config: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-gitdir-pointer-3903398/common/gitdir/hooks/pre-commit: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-gitignored-repo-3903398/work/sub/.git/hooks/pre-commit: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-mcp-json-3903398/work/proj/.mcp.json: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-nested-git-hook-3903398/work/a/nested/.git/hooks/pre-commit: Read-only file system
-mv: inter-device move failed: '/tmp/secbench-trust-handoff-rename-over-hook-3903398/work/evil.sh' to '/tmp/secbench-trust-handoff-rename-over-hook-3903398/work/.git/hooks/pre-commit'; unable to remove target: Read-only file system
-sh: 1: cannot create /tmp/secbench-trust-handoff-submodule-hook-3903398/work/.git/modules/m/hooks/pre-commit: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-symlinked-claude-dir-3903398/work/proj/.claude/commands/evil.md: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-unreadable-at-compile-3903398/work/locked/.git/config: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-trust-handoff-worktree-gitfile-3903398/work/main/.git/hooks/post-checkout: Read-only file system
-mkdir: cannot create directory '/tmp/secbench-write-deny-absent-deep-3903398/work/a': Permission denied
-mkdir: cannot create directory '/tmp/secbench-write-deny-backslash-absent-3903398/work/c\\d': Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-covers-nested-root-3903398/work/proj/out/x: Read-only file system
-mkdir: cannot create directory 'hop': Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-dangling-link-target-3903398/here/new: Permission denied
-chmod: changing permissions of '/tmp/secbench-write-deny-existing-file-chmod-3903398/work/repo/.git/config.lock': Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-existing-file-chmod-3903398/work/repo/.git/config.lock: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-glob-chars-dir-3903398/[WIP] project/keep/file: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-inside-writable-3903398/work/protected/evil: Read-only file system
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-link-dotdot-3903398/elsewhere/down/in/file: Read-only file system
-mkdir: cannot create directory '/tmp/secbench-write-deny-noncanonical-absent-3903398/work/protected': Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-symlinked-parent-3903398/work/proj2/.cfg: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-symlinked-parent-3903398/work/real-proj/.cfg: Permission denied
-/bin/sh: 1: cannot create /tmp/secbench-write-deny-under-dotdot-root-3903398/p/real/file: Read-only file system
-
+not-a-key
 scenario                             sev      result
 ----------------------------------------------------------------
 broker-credential-egress             critical PASS  attack rc=7 control rc=0
@@ -418,8 +33,8 @@ fs-symlink-dangling-create           critical PASS  attack rc=2 control rc=0
 fs-symlink-escape                    critical PASS  attack rc=2 control rc=0
 fs-symlink-file-out-agent-made       critical PASS  attack rc=2 control rc=0
 fs-symlink-rename-out                critical PASS  attack rc=1 control rc=0
-fs-writable-root-symlink-out         critical PASS  refused: writable root /tmp/secbench-fs-writable-root-symlink-out-3903398/work/evil is a 
-fs-writable-root-symlink-parent      critical PASS  refused: writable root /tmp/secbench-fs-writable-root-symlink-parent-3903398/work/up is a
+fs-writable-root-symlink-out         critical PASS  refused: writable root /tmp/secbench-fs-writable-root-symlink-out-91/work/evil is a symli
+fs-writable-root-symlink-parent      critical PASS  refused: writable root /tmp/secbench-fs-writable-root-symlink-parent-91/work/up is a syml
 fs-write-outside-territory           critical PASS  attack rc=2 control rc=0
 trust-handoff-materialize-absent     high     PASS  attack rc=2 control rc=0
 ipc-unix-socket-outside              critical PASS  attack rc=1 control rc=0
@@ -506,8 +121,10 @@ trust-handoff-gitignored-repo        critical PASS  attack rc=2 control rc=0
 trust-handoff-mcp-json               critical PASS  attack rc=2 control rc=0
 trust-handoff-nested-git-hook        critical PASS  attack rc=2 control rc=0
 trust-handoff-rename-over-hook       critical PASS  attack rc=1 control rc=0
+trust-handoff-shell-rc               high     PASS  attack rc=1 control rc=0
 trust-handoff-submodule-hook         critical PASS  attack rc=2 control rc=0
 trust-handoff-symlinked-claude-dir   critical PASS  attack rc=2 control rc=0
+trust-handoff-tool-rc                high     PASS  attack rc=1 control rc=0
 trust-handoff-unreadable-at-compile  critical PASS  attack rc=2 control rc=0
 trust-handoff-worktree-gitfile       medium   PASS  attack rc=2 control rc=0
 write-deny-absent-deep               critical PASS  attack rc=1 control rc=0
@@ -527,19 +144,19 @@ write-deny-trailing-slash            high     PASS  attack rc=2 control rc=0
 write-deny-under-dotdot-root         high     PASS  attack rc=2 control rc=0
 
 == scorecard ==
-  scenarios run:           133
-  PASS:                    133/133
+  scenarios run:           135
+  PASS:                    135/135
   VIOLATION:               0  (critical: 0)  [target 0]
   CONTROL_BROKE:           0  [target 0]
   INFRA_ERROR:             0  [target 0]
   VACUOUS (no baseline):   0  [target 0]
   SKIPPED (other OS):      3
   UNSUPPORTED (host caps): 0
-  coverage:                133/133 applicable scenarios ran
+  coverage:                135/135 applicable scenarios ran
 
 environment: linux · kernel 6.8.0-146-generic · tartaros-bench 0.1.0-alpha
 host caps:  landlock=true cgroup_v2=true userns=true
 
 report: reports/last.json
 
-OK: all 133 scenarios passed (3 skipped, 0 unsupported, coverage 133/133)
+OK: all 135 scenarios passed (3 skipped, 0 unsupported, coverage 135/135)
