@@ -5,6 +5,18 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`--settings`: honor srt's loopback-port convention.** An `allowedDomains`
+  entry that is a loopback literal with an explicit port (`localhost:N`,
+  `127.0.0.1:N`, `[::1]:N`) now grants that local service via `local_ports` (the
+  same path as `--port N`: a kernel grant plus a broker loopback-port forward),
+  instead of being copied as an external domain the egress broker then refused with
+  `403 host not allowed`. A bare loopback host (no port) or a loopback wildcard
+  (`localhost:*`, `*.localhost`) is refused (exit 2, apply-fully-or-refuse), as srt
+  does; every other `allowedDomains` entry still maps to the broker (HTTPS/443 via
+  CONNECT, SSRF defense). `tartaros explain --settings` lists these as
+  `loopback ports: [N]`.
+
 ### Added
 - **`--protect-home-handoff` (opt-in).** Also denies the per-user home-handoff
   surface under the writable roots — shell rc files (`.bashrc`, `.bash_profile`,
