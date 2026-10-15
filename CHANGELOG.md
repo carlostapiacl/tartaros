@@ -5,6 +5,27 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] — 2026-10-15
+
+### Fixed
+- **Trust-handoff cost is now independent of the writable tree size (macOS).**
+  Building the Seatbelt profile walked every directory under each writable root to
+  enumerate existing handoff surfaces, so a large root (a 22 GB cache, a repo with
+  `node_modules/`) took tens of seconds — `explain --write ~/.cache` ~99 s — and
+  emitted hundreds of literal rules, which also overflowed `ARG_MAX` when the
+  profile rode `sandbox-exec` on argv ("Argument list too long"). The named handoff
+  surfaces (`.git`, `.claude`, `.vscode`, …) are already covered at any depth, and
+  for paths created during the run, by the Seatbelt **pattern** rules — the
+  enumeration was redundant. `gitdir_pointer_handoff` now resolves the one case a
+  pattern can't express (a worktree/submodule checkout whose own `.git` is a
+  pointer file to a relocated gitdir) **anchored at each writable root**, O(roots)
+  rather than O(tree) — the same approach as Codex/sandbox-runtime. `explain
+  --write ~/.cache` / `/private/tmp` now run in well under a second with the same
+  guarantee.
+- **The Seatbelt profile is delivered by file (`sandbox-exec -f`), not argv.** A
+  large profile no longer hits `ARG_MAX`; the profile is written to a private 0600
+  temp file, deleted when the run ends.
+
 ## [0.1.0-alpha.3] — 2026-10-15
 
 ### Fixed
