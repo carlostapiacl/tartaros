@@ -218,9 +218,17 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
     for r in policy.fs_rules.iter().filter(|r| r.access == tartaros_core::Access::Deny) {
         paths.push(r.path.clone());
     }
+    let mut paths: Vec<PathBuf> = paths.iter().map(|p| tartaros_core::resolve_best_effort(p)).collect();
     paths.retain(|p| p.exists());
     paths.sort();
     paths.dedup();
+    // An explicit deny on a path that does not exist yet can't be bound
+    // read-only (there is nothing to bind) and the whole-root grant would let it
+    // be created, so such a policy uses the carve, which withholds the nearest
+    // existing ancestor instead.
+    if !policy.absent_write_denies().is_empty() {
+        return Vec::new();
+    }
     // Nothing to protect, or no way to create a mount namespace on this host: fall
     // back to the Landlock carve (the probe forks, so gate it on paths first).
     if paths.is_empty() || !namespace::mount_ns_capable() {
