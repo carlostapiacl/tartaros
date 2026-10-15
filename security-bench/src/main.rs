@@ -18,12 +18,67 @@ type Be = tartaros_linux::LandlockBackend;
 #[cfg(target_os = "macos")]
 type Be = tartaros_macos::SeatbeltBackend;
 
+#[cfg(windows)]
+type Be = tartaros_windows::AppContainerBackend;
+
 #[cfg(target_os = "linux")]
 const BACKEND: Be = tartaros_linux::LandlockBackend;
 #[cfg(target_os = "macos")]
 const BACKEND: Be = tartaros_macos::SeatbeltBackend;
+#[cfg(windows)]
+const BACKEND: Be = tartaros_windows::AppContainerBackend;
 
-const OS: &str = if cfg!(target_os = "linux") { "linux" } else { "macos" };
+const OS: &str = if cfg!(target_os = "linux") {
+    "linux"
+} else if cfg!(windows) {
+    "windows"
+} else {
+    "macos"
+};
+
+/// The shell the contracts' `cmd` strings run in. Windows has no /bin/sh: the
+/// bench uses busybox-w32 (or any POSIX sh) named by `TARTAROS_SH`, an absolute
+/// path, so the same TOML contracts run unchanged.
+fn shell() -> String {
+    if cfg!(windows) {
+        std::env::var("TARTAROS_SH").unwrap_or_else(|_| {
+            eprintln!("TARTAROS_SH must name a POSIX sh (e.g. C:\\tools\\busybox.exe sh) on Windows");
+            std::process::exit(2);
+        })
+    } else {
+        "/bin/sh".into()
+    }
+}
+
+/// argv for running `cmd` through the shell. `TARTAROS_SH` may carry a leading
+/// applet name ("busybox.exe sh"), so it is split on the first space after `.exe`.
+fn shell_argv(cmd: &str) -> Vec<String> {
+    let sh = shell();
+    let mut argv: Vec<String> = match sh.to_ascii_lowercase().find(".exe ") {
+        Some(i) => vec![sh[..i + 4].to_string(), sh[i + 5..].to_string()],
+        None => vec![sh],
+    };
+    argv.push("-c".into());
+    // Windows: when the whole `-c` string is ONE command, busybox-w32 emulates
+    // `exec` for it; inside an AppContainer that emulation returns 0 without
+    // waiting, and the job then kills the child (measured: `sh -c "sh -c 'exit 5'"`
+    // → rc 0, nothing runs). A trailing `exit $?` keeps the shell waiting, so the
+    // contract's real exit status comes back. Tracked as a compat finding (W-Q3).
+    argv.push(if cfg!(windows) { format!("{cmd}\nexit $?") } else { cmd.into() });
+    argv
+}
+
+/// Windows: an AppContainer cannot open NUL on Windows 10, so a contract's
+/// `/dev/null` is redirected to a scratch file in `$TEMP`, which the backend points
+/// at the container's own folder (writable by it, outside the workspace). The same
+/// rewrite applies to the unsandboxed baseline, so both runs see the same command.
+fn devnull_fix(cmd: &str, _root: &str) -> String {
+    if cfg!(windows) {
+        cmd.replace("/dev/null", "\"$TEMP/tartaros-devnull\"")
+    } else {
+        cmd.to_string()
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -145,6 +200,8 @@ struct ServerSpec {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UnixServerSpec {
+    // Read only where unix sockets are built (not on Windows).
+    #[cfg_attr(windows, allow(dead_code))]
     path: String,
 }
 
@@ -283,9 +340,21 @@ fn main() {
         "userns" => env.userns,
         "root" => is_root(),
         "nonroot" => !is_root(),
+        "admin" => is_root(),
+        "windows-symlink" => OS == "windows" && can_symlink(),
+        "network" => has_network(),
         _ => false,
     };
-    let known_cap = |name: &str| matches!(name, "landlock" | "landlock-net" | "cgroup" | "userns" | "root" | "nonroot");
+    let known_cap = |name: &str| {
+        matches!(name, "landlock" | "landlock-net" | "cgroup" | "userns" | "root" | "nonroot" | "admin" | "windows-symlink" | "network")
+    };
+    // --ignore-os: exploration only. Runs every contract regardless of its `os`
+    // list, to discover which ones hold on a new backend. Never a certification.
+    let ignore_os = args.iter().any(|a| a == "--ignore-os");
+    if ignore_os {
+        println!("note: --ignore-os — contracts run regardless of their os list (exploration, not certification)");
+    }
+    let probe_root = std::env::temp_dir().to_string_lossy().replace('\\', "/");
     let mut outcomes = Vec::new();
     let mut infra_errors = 0usize; // invalid/unreadable contracts
     let mut skipped = 0usize;      // not for this OS
@@ -303,7 +372,7 @@ fn main() {
                 continue;
             }
         };
-        if !c.os.is_empty() && !c.os.iter().any(|o| o == OS) {
+        if !ignore_os && !c.os.is_empty() && !c.os.iter().any(|o| o == OS) {
             println!("  -- {} (SKIPPED: not for {OS})", c.id);
             skipped += 1;
             continue;
@@ -319,6 +388,21 @@ fn main() {
             println!("  ~~ {} (UNSUPPORTED: host lacks {missing})", c.id);
             unsupported += 1;
             continue;
+        }
+        // A policy the backend refuses up front (a guarantee it cannot enforce on
+        // this OS, e.g. a PID namespace on Windows) is UNSUPPORTED, not an infra
+        // error — unless refusing is exactly what the contract expects.
+        if OS == "windows" && !c.unix_server.is_empty() {
+            println!("  ~~ {} (UNSUPPORTED: unix_server fixtures not built on Windows)", c.id);
+            unsupported += 1;
+            continue;
+        }
+        if !c.expect_refusal {
+            if let Err(e) = BACKEND.validate(&policy_for(&c, &probe_root)) {
+                println!("  ~~ {} (UNSUPPORTED: backend refuses: {})", c.id, e.reason.chars().take(100).collect::<String>());
+                unsupported += 1;
+                continue;
+            }
         }
         outcomes.push(run_scenario(c));
     }
@@ -503,8 +587,9 @@ struct Env {
 }
 
 fn environment() -> Env {
-    let kernel = std::process::Command::new("uname")
-        .arg("-r")
+    let (prog, args): (&str, &[&str]) = if cfg!(windows) { ("cmd", &["/d", "/c", "ver"]) } else { ("uname", &["-r"]) };
+    let kernel = std::process::Command::new(prog)
+        .args(args)
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -555,6 +640,10 @@ fn environment() -> Env {
 /// Times `/bin/true` unsandboxed vs under a minimal policy vs under the hardened
 /// (hostile-code) tier, and reports p50/p95. Read-only, no corpus.
 fn run_perf(n: usize) {
+    if cfg!(windows) {
+        println!("--perf: not built for Windows yet (it times /bin/true)");
+        return;
+    }
     use std::time::Instant;
     let env = environment();
     let root = std::env::temp_dir().join(format!("tartaros-perf-{}", std::process::id()));
@@ -684,7 +773,10 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         let r = std::env::temp_dir().join(format!("secbench-{}{tag}-{}", c.id, std::process::id()));
         let _ = std::fs::remove_dir_all(&r);
         std::fs::create_dir_all(&r).unwrap();
-        r.canonicalize().unwrap().to_string_lossy().into_owned()
+        let s = r.canonicalize().unwrap().to_string_lossy().into_owned();
+        // Windows: drop the verbatim prefix and use '/' so `{root}` expands to a
+        // path busybox sh and the Win32 APIs both accept.
+        if cfg!(windows) { s.trim_start_matches(r"\\?\").replace('\\', "/") } else { s }
     };
     // Materialize the fixtures and unix-socket servers under `rs`. Returns the
     // written file contents (for `unchanged`) and the socket paths to clean up.
@@ -699,6 +791,12 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
             if let Some(target) = &fi.symlink_to {
                 #[cfg(unix)]
                 let _ = std::os::unix::fs::symlink(sub(target), &p);
+                #[cfg(windows)]
+                let _ = if Path::new(&sub(target)).is_dir() {
+                    std::os::windows::fs::symlink_dir(sub(target), &p)
+                } else {
+                    std::os::windows::fs::symlink_file(sub(target), &p)
+                };
             } else if fi.dir {
                 let _ = std::fs::create_dir_all(&p);
             } else {
@@ -707,7 +805,9 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
                 contents.insert(p, body);
             }
         }
+        #[allow(unused_mut)]
         let mut socks = Vec::new();
+        #[cfg(unix)]
         for u in &c.unix_server {
             let path = sub(&u.path);
             let _ = std::fs::remove_file(&path);
@@ -796,33 +896,7 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     }
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    let mut policy = Policy {
-        role: "bench".into(),
-        writable_roots: c.policy.writable_roots.iter().map(|s| PathBuf::from(sub(s))).collect(),
-        read_denies: c.policy.read_denies.iter().map(|s| PathBuf::from(sub(s))).collect(),
-        read_allows: c.policy.read_allows.iter().map(|s| PathBuf::from(sub(s))).collect(),
-        fs_rules: c.policy.write_denies.iter().map(|s| tartaros_core::FsRule { path: PathBuf::from(sub(s)), access: tartaros_core::Access::Deny, even_if_absent: true }).collect(),
-        local_ports: c.policy.local_ports.clone(),
-        network: match c.policy.network.as_deref() {
-            Some("allowed") => Some(Network::Allowed),
-            _ => Some(Network::Denied),
-        },
-        materialize_absent_handoff: c.policy.materialize_absent_handoff,
-        protect_home_handoff: c.policy.protect_home_handoff,
-        isolate_process_info: c.policy.isolate_process_info,
-        timeout: c.policy.timeout_secs.map(std::time::Duration::from_secs),
-        max_memory_bytes: c.policy.max_memory_bytes,
-        max_processes: c.policy.max_processes,
-        max_cpu_secs: c.policy.max_cpu_secs,
-        deny_unix_sockets: c.policy.deny_unix_sockets,
-        isolate_pids: c.policy.isolate_pids,
-        isolate_network: c.policy.isolate_network,
-        harden_syscalls: c.policy.harden_syscalls,
-        strict: c.policy.strict,
-        inherit_env: c.policy.inherit_env,
-        env_passthrough: c.policy.env_passthrough.clone(),
-        ..Default::default()
-    };
+    let mut policy = policy_for(&c, &root_s);
     // Set the launcher-side env the scenario wants visible to the backend's snapshot
     // (F-13). Sequential execution makes this safe; we clear them after the run.
     for kv in &c.launcher_env {
@@ -846,7 +920,7 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     if baseline_on && mutate.is_none() && c.baseline.skip.is_none() && !unsafe_unconfined && c.broker.is_none() {
         let rb = make_root("-baseline");
         let (bc, bsocks) = prepare(&rb);
-        let rc = run_unsandboxed(&c.attack.cmd.replace("{root}", &rb), std::time::Duration::from_secs(30));
+        let rc = run_unsandboxed(&devnull_fix(&c.attack.cmd.replace("{root}", &rb), &rb), std::time::Duration::from_secs(30));
         let worked = rc.map(attack_criterion).unwrap_or(false) || effect_broken(&rb, &bc).is_some();
         for p in &bsocks {
             let _ = std::fs::remove_file(p);
@@ -875,7 +949,7 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     // conflated: a backend failure is infrastructure, not a blocked attack.
     let run = |cmd: &str| -> Result<i32, String> {
         BACKEND
-            .run(&policy, &["/bin/sh".into(), "-c".into(), sub(cmd)])
+            .run(&policy, &shell_argv(&devnull_fix(&sub(cmd), &root_s)))
             .map(|o| o.exit_code)
             .map_err(|e| e.reason)
     };
@@ -989,6 +1063,38 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     Outcome { id: c.id, category: c.category, severity: c.severity, violation, control_broke, infra_error: false, vacuous: false, passed, detail, source: c.source }
 }
 
+/// The `Policy` a contract compiles to, with `{root}` expanded.
+fn policy_for(c: &Contract, root_s: &str) -> Policy {
+    let sub = |s: &str| s.replace("{root}", root_s);
+    Policy {
+        role: "bench".into(),
+        writable_roots: c.policy.writable_roots.iter().map(|s| PathBuf::from(sub(s))).collect(),
+        read_denies: c.policy.read_denies.iter().map(|s| PathBuf::from(sub(s))).collect(),
+        read_allows: c.policy.read_allows.iter().map(|s| PathBuf::from(sub(s))).collect(),
+        fs_rules: c.policy.write_denies.iter().map(|s| tartaros_core::FsRule { path: PathBuf::from(sub(s)), access: tartaros_core::Access::Deny, even_if_absent: true }).collect(),
+        local_ports: c.policy.local_ports.clone(),
+        network: match c.policy.network.as_deref() {
+            Some("allowed") => Some(Network::Allowed),
+            _ => Some(Network::Denied),
+        },
+        materialize_absent_handoff: c.policy.materialize_absent_handoff,
+        protect_home_handoff: c.policy.protect_home_handoff,
+        isolate_process_info: c.policy.isolate_process_info,
+        timeout: c.policy.timeout_secs.map(std::time::Duration::from_secs),
+        max_memory_bytes: c.policy.max_memory_bytes,
+        max_processes: c.policy.max_processes,
+        max_cpu_secs: c.policy.max_cpu_secs,
+        deny_unix_sockets: c.policy.deny_unix_sockets,
+        isolate_pids: c.policy.isolate_pids,
+        isolate_network: c.policy.isolate_network,
+        harden_syscalls: c.policy.harden_syscalls,
+        strict: c.policy.strict,
+        inherit_env: c.policy.inherit_env,
+        env_passthrough: c.policy.env_passthrough.clone(),
+        ..Default::default()
+    }
+}
+
 /// A JSON string literal (the report is hand-written; keep it valid for any text).
 fn json_str(s: &str) -> String {
     let mut o = String::from("\"");
@@ -1005,6 +1111,7 @@ fn json_str(s: &str) -> String {
     o
 }
 
+#[cfg(unix)]
 fn is_root() -> bool {
     extern "C" {
         fn geteuid() -> u32;
@@ -1012,12 +1119,41 @@ fn is_root() -> bool {
     unsafe { geteuid() == 0 }
 }
 
+/// Windows: "root" means an elevated (admin) token.
+#[cfg(windows)]
+fn is_root() -> bool {
+    tartaros_windows::is_elevated()
+}
+
+/// Whether this process may create symlinks (Windows needs a privilege or
+/// Developer Mode). Probed by creating one in the temp dir.
+fn can_symlink() -> bool {
+    #[cfg(windows)]
+    {
+        let d = std::env::temp_dir().join(format!("tartaros-symlink-probe-{}", std::process::id()));
+        let ok = std::os::windows::fs::symlink_file(std::env::temp_dir(), &d).is_ok();
+        let _ = std::fs::remove_file(&d);
+        ok
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
+/// Whether the host itself reaches the internet (so a network contract's
+/// baseline means something). TCP connect to 1.1.1.1:443, 3 s.
+fn has_network() -> bool {
+    let addr: std::net::SocketAddr = ([1, 1, 1, 1], 443).into();
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)).is_ok()
+}
+
 /// Run `cmd` with /bin/sh WITHOUT any sandbox, bounded by `limit`. Used only for
 /// the baseline check; returns the exit code, or None if it had to be killed.
 fn run_unsandboxed(cmd: &str, limit: std::time::Duration) -> Option<i32> {
-    let mut child = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(cmd)
+    let argv = shell_argv(cmd);
+    let mut child = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

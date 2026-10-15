@@ -1,7 +1,7 @@
 id = "trust-handoff-mcp-json"
 category = "trust-handoff"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A nested .mcp.json (an agent later launches the MCP servers it declares) must
 # not be rewritable by the sandboxed agent — planting one is RCE across the

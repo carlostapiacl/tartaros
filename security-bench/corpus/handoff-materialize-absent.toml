@@ -1,6 +1,10 @@
 id = "trust-handoff-materialize-absent"
 category = "trust-handoff"
 severity = "high"
+# Not on Windows yet: busybox-w32 `mkdir -p` of an absolute path fails inside an
+# AppContainer (mkdir "C:/" returns access denied, not "exists"), so the attack
+# dies before it tests anything and the pass would be vacuous. The guarantee is
+# covered on Windows by the backend's materialize + protect, verified separately.
 os = ["linux"]
 
 # with materialization, the agent cannot create an absent trust-handoff config

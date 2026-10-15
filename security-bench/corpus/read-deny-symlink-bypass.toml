@@ -1,7 +1,7 @@
 id = "read-deny-symlink-bypass"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A classic read-deny bypass: the agent CAN create files in its writable root, so
 # it plants a symlink there pointing at a read-denied secret and reads through it.

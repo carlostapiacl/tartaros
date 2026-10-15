@@ -5,6 +5,7 @@ members = [
     "backends/macos",
     "backends/linux",
     "backends/microvm",
+    "backends/windows",
     "collect",
     "broker",
     "security-bench",
