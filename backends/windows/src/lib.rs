@@ -326,6 +326,20 @@ impl Backend for AppContainerBackend {
     }
 }
 
+/// Entry point of `tartaros-sbx-runner.exe`, the sandbox-user tier's second
+/// hop (see `sys::sandbox_runner_main`). Never returns.
+pub fn sandbox_runner_main() -> ! {
+    #[cfg(windows)]
+    {
+        sys::sandbox_runner_main()
+    }
+    #[cfg(not(windows))]
+    {
+        eprintln!("tartaros-sbx-runner only runs on Windows");
+        std::process::exit(125)
+    }
+}
+
 /// Whether the current process runs elevated (an admin token). The bench uses it
 /// for the `admin` requirement.
 pub fn is_elevated() -> bool {

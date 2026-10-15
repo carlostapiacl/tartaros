@@ -22,6 +22,7 @@ use windows_sys::Win32::Security::Isolation::{
     GetAppContainerFolderPath,
 };
 use windows_sys::Win32::Security::{
+    CreateRestrictedToken, SetTokenInformation, TokenDefaultDacl, TokenUser, TOKEN_DEFAULT_DACL, DISABLE_MAX_PRIVILEGE, SID_AND_ATTRIBUTES, TOKEN_ALL_ACCESS, TOKEN_USER, WRITE_RESTRICTED,
     FreeSid, GetSecurityDescriptorDacl, GetTokenInformation, TokenElevation, ACL,
     DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION, PSID,
     SECURITY_CAPABILITIES, TOKEN_ELEVATION, TOKEN_QUERY, UNPROTECTED_DACL_SECURITY_INFORMATION,
@@ -40,8 +41,8 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     GetUserObjectInformationW, SetProcessWindowStation, UOI_NAME,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, CreateProcessWithLogonW, GetCurrentProcess, LOGON_WITH_PROFILE, STARTUPINFOW, GetExitCodeProcess, InitializeProcThreadAttributeList,
-    OpenProcessToken, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
+    CreateProcessAsUserW, CreateProcessW, CreateProcessWithLogonW, GetCurrentProcess, LOGON_WITH_PROFILE, STARTUPINFOW, GetExitCodeProcess, InitializeProcThreadAttributeList,
+    OpenProcessToken, ResumeThread, TerminateProcess, UpdateProcThreadAttribute, CREATE_NO_WINDOW,
     WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
     STARTF_USESTDHANDLES, STARTUPINFOEXW,
@@ -362,7 +363,7 @@ impl Desk {
 /// one it may use. First choice is a private window station too (separate
 /// clipboard and atoms); a non-interactive logon (sshd, a service) may not create
 /// one, and then the desktop goes on the caller's window station.
-unsafe fn private_desktop(sid: PSID, tag: &str) -> Result<Desk, String> {
+unsafe fn private_desktop(sid: PSID, tag: &str, shared_winsta_mask: u32) -> Result<Desk, String> {
     let original = GetProcessWindowStation();
     let created = CreateWindowStationW(null(), 0, WINSTA_CREATE, null());
     let (winsta, own_winsta) = if created.is_null() { (original, false) } else { (created, true) };
@@ -382,9 +383,8 @@ unsafe fn private_desktop(sid: PSID, tag: &str) -> Result<Desk, String> {
         }
         return Err(format!("CreateDesktop: {desk_err}"));
     }
-    // Own window station: full access. Shared one: enumerate, read attributes,
-    // global atoms (what user32 init needs), nothing else.
-    let winsta_mask = if own_winsta { GENERIC_ALL } else { 0x1 | 0x2 | 0x20 | READ_CONTROL };
+    // Own window station: full access. Shared one: what the caller passes.
+    let winsta_mask = if own_winsta { GENERIC_ALL } else { shared_winsta_mask };
     let mut d = Desk { winsta, own_winsta, winsta_saved: None, desk, lp: Vec::new() };
     match grant_handle(winsta, sid, winsta_mask) {
         Ok(saved) if own_winsta => {
@@ -466,11 +466,18 @@ impl Drop for Container {
 
 /// `temp`: TEMP/TMP for the child. `profile`: the sandbox user's profile, which
 /// replaces the caller's USERPROFILE/APPDATA/LOCALAPPDATA (and TEMP/TMP).
-fn env_block(policy: &Policy, temp: Option<&Path>, profile: Option<&Path>) -> Option<Vec<u16>> {
+/// `extra`: one more variable, set even under `inherit_env`.
+fn env_block(policy: &Policy, temp: Option<&Path>, profile: Option<&Path>, extra: Option<(&str, &str)>) -> Option<Vec<u16>> {
     let mut vars: Vec<(String, String)> = match policy.child_env() {
-        None => return None, // inherit_env: the caller opted into full passthrough
+        // inherit_env: the caller opted into full passthrough.
+        None if extra.is_none() => return None,
+        None => std::env::vars().collect(),
         Some(v) => v,
     };
+    if let Some((k, v)) = extra {
+        vars.retain(|(n, _)| !n.eq_ignore_ascii_case(k));
+        vars.push((k.to_string(), v.to_string()));
+    }
     let has = |vars: &[(String, String)], k: &str| vars.iter().any(|(n, _)| n.eq_ignore_ascii_case(k));
     // The Unix allowlist matches names case-sensitively; Windows names are
     // case-insensitive (`Path`, `TEMP`), so bring those over too.
@@ -633,7 +640,9 @@ unsafe fn spawn(policy: &Policy, command: &[String], c: &Container, tag: &str) -
     // so nothing executes outside the caps.
     let job = make_job(policy)?;
 
-    let mut desk = match private_desktop(c.sid, tag) {
+    // Shared window station: enumerate, read attributes, global atoms (what
+    // user32 init needs), nothing else.
+    let mut desk = match private_desktop(c.sid, tag, 0x1 | 0x2 | 0x20 | READ_CONTROL) {
         Ok(d) => d,
         Err(e) => {
             CloseHandle(job);
@@ -680,7 +689,7 @@ unsafe fn spawn(policy: &Policy, command: &[String], c: &Container, tag: &str) -
     }
     let mut cmdline_w = wide(OsStr::new(&cmdline));
     let temp = c.folder().map(|f| f.join("Temp")).filter(|t| t.is_dir());
-    let env = env_block(policy, temp.as_deref(), None);
+    let env = env_block(policy, temp.as_deref(), None, None);
     let cwd = working_dir(policy);
 
     let mut pi: PROCESS_INFORMATION = zeroed();
@@ -894,7 +903,10 @@ unsafe fn wait_exit(policy: &Policy, job: HANDLE, process: HANDLE) -> i32 {
 /// job before it runs a single instruction.
 unsafe fn spawn_user(policy: &Policy, command: &[String], user: &SandboxUser, tag: &str) -> Result<RunOutcome, RunError> {
     let job = make_job(policy)?;
-    let mut desk = match private_desktop(user.sid, tag) {
+    // A process of another user, created through seclogon, also needs
+    // WINSTA_EXITWINDOWS (0x40) on the shared window station or its user32 init
+    // fails with 0xC0000142 (measured; the AppContainer does not).
+    let mut desk = match private_desktop(user.sid, tag, 0x1 | 0x2 | 0x20 | 0x40 | READ_CONTROL) {
         Ok(d) => d,
         Err(e) => {
             CloseHandle(job);
@@ -917,12 +929,31 @@ unsafe fn spawn_user(policy: &Policy, command: &[String], user: &SandboxUser, ta
     }
     si.lpDesktop = desk.lp.as_mut_ptr();
 
-    let cmdline = command_line(command);
+    // First hop: the runner, as the sandbox user. It re-launches the command
+    // under a write-restricted token (see `sandbox_runner_main`).
+    let runner = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join(RUNNER_EXE)))
+        .filter(|r| r.is_file())
+        .ok_or_else(|| err(format!("{RUNNER_EXE} not found next to the current executable")));
+    let runner = match runner {
+        Ok(r) => r,
+        Err(e) => {
+            desk.close();
+            CloseHandle(job);
+            return Err(e);
+        }
+    };
+    // CreateProcessWithLogonW caps the command line at 1024 characters, so the
+    // command travels to the runner in RUNNER_CMDLINE_VAR (the runner takes it
+    // out of its environment before starting the command).
+    let cmdline = command_line(&[runner.to_string_lossy().into_owned(), "--".to_string()]);
     if std::env::var_os("TARTAROS_DEBUG").is_some() {
         eprintln!("[cmdline] {cmdline} (as {})", user.sid_str);
     }
+    let runner_w = native(&runner);
     let mut cmdline_w = wide(OsStr::new(&cmdline));
-    let env = env_block(policy, None, user.profile.as_deref());
+    let env = env_block(policy, None, user.profile.as_deref(), Some((RUNNER_CMDLINE_VAR, &command_line(command))));
     let cwd = working_dir(policy);
     let domain = wide(OsStr::new("."));
     let mut pi: PROCESS_INFORMATION = zeroed();
@@ -931,9 +962,11 @@ unsafe fn spawn_user(policy: &Policy, command: &[String], user: &SandboxUser, ta
         domain.as_ptr(),
         user.password.as_ptr(),
         LOGON_WITH_PROFILE,
-        null(),
+        runner_w.as_ptr(),
         cmdline_w.as_mut_ptr(),
-        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+        // No console of its own: a console program started as another user
+        // cannot create one here; stdio goes through the inherited handles.
+        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
         env.as_ref().map_or(null(), |e| e.as_ptr() as *const c_void),
         cwd.as_ref().map_or(null(), |c| c.as_ptr()),
         &si,
@@ -962,6 +995,140 @@ unsafe fn spawn_user(policy: &Policy, command: &[String], user: &SandboxUser, ta
     CloseHandle(job);
     desk.close();
     Ok(RunOutcome { exit_code })
+}
+
+/// The runner binary, installed next to whatever embeds this backend.
+pub(crate) const RUNNER_EXE: &str = "tartaros-sbx-runner.exe";
+/// The command line the runner starts (see `spawn_user`).
+const RUNNER_CMDLINE_VAR: &str = "TARTAROS_SBX_CMDLINE";
+
+/// Second hop, running as the sandbox user inside the job: start the command
+/// with a WRITE_RESTRICTED copy of this token whose restricting SIDs are the
+/// sandbox user's own and Everyone. Every write must then also be granted to
+/// one of them; only the per-run grants (and the user's own profile) name the
+/// user, so a directory that Authenticated Users or Users may write stays
+/// read-only to the agent (one writable by Everyone does not). Reads are untouched (WRITE_RESTRICTED checks restricting SIDs on writes
+/// only). Never returns: exits with the command's exit code.
+pub(crate) fn sandbox_runner_main() -> ! {
+    // The command line comes in RUNNER_CMDLINE_VAR (taken out of the
+    // environment the command inherits), or after `--` when run by hand.
+    let cmdline = match std::env::var(RUNNER_CMDLINE_VAR) {
+        Ok(c) => {
+            std::env::remove_var(RUNNER_CMDLINE_VAR);
+            c
+        }
+        Err(_) => {
+            let args: Vec<String> = std::env::args().collect();
+            match args.iter().position(|a| a == "--") {
+                Some(sep) => command_line(&args[sep + 1..]),
+                None => String::new(),
+            }
+        }
+    };
+    if cmdline.is_empty() {
+        eprintln!("tartaros-sbx-runner: usage: tartaros-sbx-runner -- COMMAND [ARGS]...");
+        std::process::exit(125);
+    }
+    match unsafe { run_restricted(&cmdline) } {
+        Ok(code) => std::process::exit(code),
+        Err(e) => {
+            eprintln!("tartaros-sbx-runner: {e}");
+            std::process::exit(125);
+        }
+    }
+}
+
+unsafe fn run_restricted(cmdline: &str) -> Result<i32, String> {
+    let mut token: HANDLE = null_mut();
+    if OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &mut token) == 0 {
+        return Err(format!("OpenProcessToken: {}", std::io::Error::last_os_error()));
+    }
+    // This token's user SID: a restricting SID, and the default DACL's owner.
+    let mut len = 0u32;
+    GetTokenInformation(token, TokenUser, null_mut(), 0, &mut len);
+    let mut buf = vec![0u8; len as usize];
+    if GetTokenInformation(token, TokenUser, buf.as_mut_ptr() as *mut c_void, len, &mut len) == 0 {
+        CloseHandle(token);
+        return Err(format!("GetTokenInformation(TokenUser): {}", std::io::Error::last_os_error()));
+    }
+    let user = &*(buf.as_ptr() as *const TOKEN_USER);
+    // Restricting SIDs: the sandbox user, and Everyone, without which the
+    // loader cannot start a process at all (measured: user alone or user +
+    // logon SID fail with 0xC0000142). Consequence: a path writable by Everyone
+    // stays writable; one writable only by Authenticated Users or Users does not.
+    let w = wide(OsStr::new("S-1-1-0"));
+    let mut everyone: PSID = null_mut();
+    if ConvertStringSidToSidW(w.as_ptr(), &mut everyone) == 0 {
+        CloseHandle(token);
+        return Err(format!("Everyone SID: {}", std::io::Error::last_os_error()));
+    }
+    let restrict = [
+        SID_AND_ATTRIBUTES { Sid: user.User.Sid, Attributes: 0 },
+        SID_AND_ATTRIBUTES { Sid: everyone, Attributes: 0 },
+    ];
+    let mut restricted: HANDLE = null_mut();
+    let ok = CreateRestrictedToken(token, WRITE_RESTRICTED | DISABLE_MAX_PRIVILEGE, 0, null(), 0, null(), 2, restrict.as_ptr(), &mut restricted);
+    LocalFree(everyone);
+    CloseHandle(token);
+    if ok == 0 {
+        return Err(format!("CreateRestrictedToken: {}", std::io::Error::last_os_error()));
+    }
+    // Objects the command creates for itself (its process, threads, sections)
+    // take the token's default DACL. Under WRITE_RESTRICTED a write to them must
+    // also pass for a restricting SID, so the default DACL must name the user,
+    // or the loader cannot initialize (0xC0000142, measured).
+    let mut sid_s: *mut u16 = null_mut();
+    ConvertSidToStringSidW(user.User.Sid, &mut sid_s);
+    let sddl = format!("D:(A;;GA;;;{})(A;;GA;;;SY)", from_wide(sid_s));
+    LocalFree(sid_s as *mut c_void);
+    let ws = wide(OsStr::new(&sddl));
+    let mut sd: *mut c_void = null_mut();
+    if ConvertStringSecurityDescriptorToSecurityDescriptorW(ws.as_ptr(), SDDL_REVISION_1, &mut sd, null_mut()) == 0 {
+        CloseHandle(restricted);
+        return Err(format!("default DACL: {}", std::io::Error::last_os_error()));
+    }
+    let (mut present, mut defaulted) = (0, 0);
+    let mut dacl: *mut ACL = null_mut();
+    GetSecurityDescriptorDacl(sd, &mut present, &mut dacl, &mut defaulted);
+    let dd = TOKEN_DEFAULT_DACL { DefaultDacl: dacl };
+    let set = SetTokenInformation(restricted, TokenDefaultDacl, &dd as *const _ as *const c_void, size_of::<TOKEN_DEFAULT_DACL>() as u32);
+    LocalFree(sd);
+    if set == 0 {
+        let e = std::io::Error::last_os_error();
+        CloseHandle(restricted);
+        return Err(format!("SetTokenInformation(TokenDefaultDacl): {e}"));
+    }
+
+    let mut si: STARTUPINFOW = zeroed();
+    si.cb = size_of::<STARTUPINFOW>() as u32;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    for (which, slot) in [
+        (STD_INPUT_HANDLE, &mut si.hStdInput),
+        (STD_OUTPUT_HANDLE, &mut si.hStdOutput),
+        (STD_ERROR_HANDLE, &mut si.hStdError),
+    ] {
+        let h = GetStdHandle(which);
+        if !h.is_null() && h as isize != -1 {
+            SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        }
+        *slot = h;
+    }
+    let mut cmdline_w = wide(OsStr::new(cmdline));
+    let mut pi: PROCESS_INFORMATION = zeroed();
+    // Same desktop, environment, directory and job as this runner; no console of
+    // its own (the runner has none to share), stdio through the handles.
+    let created = CreateProcessAsUserW(restricted, null(), cmdline_w.as_mut_ptr(), null(), null(), 1, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, null(), null(), &si, &mut pi);
+    let e = std::io::Error::last_os_error();
+    CloseHandle(restricted);
+    if created == 0 {
+        return Err(format!("CreateProcessAsUser {cmdline}: {e}"));
+    }
+    CloseHandle(pi.hThread);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    let mut code: u32 = 0;
+    GetExitCodeProcess(pi.hProcess, &mut code);
+    CloseHandle(pi.hProcess);
+    Ok(code as i32)
 }
 
 pub(crate) fn is_elevated() -> bool {

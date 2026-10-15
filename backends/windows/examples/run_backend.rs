@@ -2,7 +2,7 @@
 //! equivalent of `tartaros run`, for debugging on a Windows host.
 //!
 //! ```text
-//! run_backend [--write DIR]... [--read DIR]... [--read-deny DIR]... [--inherit-env] -- CMD [ARGS]...
+//! run_backend [--write DIR]... [--read DIR]... [--read-deny DIR]... [--env KEY[=VALUE]]... [--inherit-env] -- CMD [ARGS]...
 //! ```
 
 use std::path::PathBuf;
@@ -18,6 +18,7 @@ fn main() {
             "--read" => p.read_allows.push(PathBuf::from(it.next().expect("--read DIR"))),
             "--read-deny" => p.read_denies.push(PathBuf::from(it.next().expect("--read-deny DIR"))),
             "--inherit-env" => p.inherit_env = true,
+            "--env" => p.env_passthrough.push(it.next().expect("--env KEY[=VALUE]")),
             "--" => {
                 cmd = it.collect();
                 break;
