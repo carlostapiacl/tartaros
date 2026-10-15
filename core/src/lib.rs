@@ -75,10 +75,12 @@ pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
     // Codex CLI config/prompts a trusted Codex run later loads and acts on —
     // the same passive-RCE surface as .claude, protected as a whole directory.
     ".codex",
-    // Editor auto-run surfaces.
-    ".vscode/tasks.json",
-    ".vscode/launch.json",
-    ".vscode/settings.json",
+    // Editor auto-run surfaces: tasks/launch/extensions and workspace files a
+    // trusted editor runs or trusts on open. Protected as whole directories, since
+    // the auto-run surface is more than three JSON files (extensions.json,
+    // *.code-workspace, .idea/runConfigurations, …).
+    ".vscode",
+    ".idea",
     // Git hooks relocated via core.hooksPath (Husky and friends).
     ".husky",
     // Git handoff beyond hooks/config: clean/smudge filters, submodule URLs.
@@ -438,6 +440,32 @@ impl Policy {
         out
     }
 
+    /// Resolved handoff surfaces (`hooks/`, `config`, submodule `modules/`) of any
+    /// git repo whose `.git` is a POINTER FILE (`gitdir: <path>`) and whose target
+    /// lands under a writable root. A regex/pattern deny can't express these: the
+    /// target directory has no `.git` of its own and its name is arbitrary, so it
+    /// is found only by reading the pointer. The macOS backend (pattern-based) adds
+    /// these as literal denies; on Linux the walk already covers them.
+    pub fn gitdir_pointer_handoff(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for r in self.trust_handoff_rules() {
+            // trust_handoff_rules already resolves pointers; keep the deny paths
+            // that fall under a writable root but are NOT under a `.git` directory
+            // named in the tree (those are the pointer targets).
+            let under_root = self
+                .writable_roots
+                .iter()
+                .any(|w| r.path.starts_with(&resolve_best_effort(w)));
+            let is_dotgit_path = r.path.components().any(|c| c.as_os_str() == ".git");
+            if under_root && !is_dotgit_path {
+                out.push(r.path);
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// Expand the trust-handoff set into concrete deny rules under every
     /// writable root, **at any depth** — this is what the measured competitors
     /// miss (they protect only the first level).
@@ -730,9 +758,17 @@ fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
         if dotgit.is_file() {
             // Worktree / submodule: `.git` is a FILE holding `gitdir: <path>`.
             // Rewriting it repoints the repo at attacker-controlled hooks, so deny
-            // writing the pointer itself (the real gitdir elsewhere is protected
-            // when it falls under a writable root, or is simply out of territory).
-            out.push(deny(dotgit, true));
+            // writing the pointer itself...
+            out.push(deny(dotgit.clone(), true));
+            // ...and follow the pointer: if the real gitdir falls under a writable
+            // root, its hooks/config are a live handoff surface that nothing else
+            // protects (that directory has no `.git` of its own, so the walk never
+            // sees it as a repo). Deny them at the resolved location.
+            if let Some(gitdir) = read_gitdir_pointer(&dotgit, dir) {
+                out.push(deny(gitdir.join("hooks"), true));
+                out.push(deny(gitdir.join("config"), true));
+                deny_git_modules_handoff(&gitdir.join("modules"), 0, out);
+            }
         } else {
             for name in HANDOFF_GIT_NAMES {
                 out.push(deny(dir.join(name), true));
@@ -744,11 +780,13 @@ fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
         }
     }
     if !is_root {
+        // Nested config-handoff names are denied even when absent, like the
+        // top-level ones: the agent must not be able to CREATE one a trusted tool
+        // later runs. (On Linux an absent nested path can only be withheld where a
+        // mount namespace is unavailable — the carve covers it; the bind-mount
+        // strategy and macOS regex both cover absent paths.)
         for name in HANDOFF_CONFIG_NAMES {
-            let p = dir.join(name);
-            if p.exists() {
-                out.push(deny(p, false));
-            }
+            out.push(deny(dir.join(name), true));
         }
     }
 
@@ -772,6 +810,16 @@ fn walk(dir: &Path, depth: usize, is_root: bool, out: &mut Vec<FsRule>) {
         }
         walk(&path, depth + 1, false, out);
     }
+}
+
+/// Read a `.git` pointer file (`gitdir: <path>`) and resolve it to an absolute,
+/// symlink-resolved directory. A relative pointer is taken from the repo dir.
+fn read_gitdir_pointer(dotgit: &Path, repo_dir: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(dotgit).ok()?;
+    let rest = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:"))?;
+    let raw = PathBuf::from(rest.trim());
+    let abs = if raw.is_absolute() { raw } else { repo_dir.join(raw) };
+    Some(resolve_best_effort(&abs))
 }
 
 /// A git repo is a directory containing `.git` (a dir, or a file for submodules

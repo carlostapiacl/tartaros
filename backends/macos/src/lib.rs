@@ -501,6 +501,13 @@ fn build_profile(policy: &Policy) -> String {
     for root in &policy.writable_roots {
         emit_handoff_regex(&mut p, root);
     }
+    // A `.git` pointer file (worktree/submodule) can repoint the repo at a gitdir
+    // elsewhere under a writable root; its hooks/config have no `.git` ancestor, so
+    // the regex patterns above miss them. Emit them as literal denies (resolved by
+    // reading the pointer in core).
+    for gitdir_surface in policy.gitdir_pointer_handoff() {
+        emit_deny(&mut p, &gitdir_surface, &policy.writable_roots);
+    }
 
     // Read carve: deny-reads and re-allow-reads interleave by SPECIFICITY — the
     // most specific (deepest) path wins, which is the sandbox-runtime rule. A naive
