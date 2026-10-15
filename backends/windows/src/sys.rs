@@ -491,6 +491,15 @@ pub(crate) fn run(policy: &Policy, command: &[String]) -> Result<RunOutcome, Run
     );
     unsafe {
         let container = Container::create(&tag).map_err(err)?;
+        let absent = crate::absent_write_denies(policy);
+        if !absent.is_empty() {
+            let list: Vec<String> = absent.iter().map(|p| p.display().to_string()).collect();
+            return Err(err(format!(
+                "unsupported on Windows: write-deny on a path that does not exist yet ({}); \
+                 an ACL cannot name a missing file, so the run is refused instead of left able to create it",
+                list.join(", ")
+            )));
+        }
         if policy.materialize_absent_handoff {
             materialize(policy).map_err(err)?;
         }
@@ -662,7 +671,15 @@ unsafe fn spawn(policy: &Policy, command: &[String], c: &Container, tag: &str) -
     let mut cmdline_w = wide(OsStr::new(&cmdline));
     let temp = c.folder().map(|f| f.join("Temp")).filter(|t| t.is_dir());
     let env = env_block(policy, temp.as_deref());
-    let cwd = policy.writable_roots.first().map(|p| native(p));
+    // The working directory: the first writable root that is a directory (a
+    // root may be a single file; then its parent).
+    let cwd = policy
+        .writable_roots
+        .iter()
+        .find(|p| p.is_dir())
+        .cloned()
+        .or_else(|| policy.writable_roots.first().and_then(|p| p.parent().map(Path::to_path_buf)))
+        .map(|p| native(&p));
 
     let mut pi: PROCESS_INFORMATION = zeroed();
     let created = CreateProcessW(
