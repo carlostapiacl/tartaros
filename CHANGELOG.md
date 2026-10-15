@@ -5,6 +5,37 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Hardening found by the cross-sandbox corpus
+Running the conformance corpus against the public test suites of other sandboxes
+(sandbox-runtime, nono, Codex, bubblewrap) surfaced real gaps. Fixed, each with a
+scenario and measured on Linux 6.8 and macOS 15.7:
+- **Symlinked deny/allow rules.** On Linux the read and write allow-lists compared
+  rules as text and the carve granted symlink entries, so a deny written through a
+  symlinked directory (or whose last component was a symlink) left the real file
+  readable, and a symlink inside a carved directory re-granted its target. Rules are
+  now resolved to real paths and a symlink entry is never granted; a writable root
+  that is a symlink out of bounds is refused, not followed.
+- **Explicit write-deny on an absent path (Linux).** Was dropped silently; now
+  enforced by withholding the nearest existing ancestor (documented cost in
+  `docs/limits.md`).
+- **Trust-handoff surface.** `.vscode` and `.idea` are protected as whole
+  directories; a `.git` pointer file is followed so a gitdir relocated under a
+  writable root keeps its hooks/config/modules protected; nested config-handoff
+  names are denied even when absent (macOS; the absent-nested case under the Linux
+  bind-mount strategy is a documented limit).
+
+### Conformance runner
+- A scenario that does not prove anything can no longer certify green: unknown TOML
+  keys and unknown `requires` are contract errors; a `root`/`nonroot` requirement is
+  a real host check; before a confined run the attack is checked to succeed WITHOUT
+  the sandbox (VACUOUS otherwise), skipped for resource/lifecycle/broker scenarios
+  and with `baseline.skip`; `--no-baseline` disables it for re-verification.
+- Landlock is detected with a ruleset probe, so it is seen inside containers where
+  securityfs is not mounted.
+- Contracts can carry a `source` for attribution, and `expect_refusal` for policies
+  whose correct outcome is that the sandbox refuses to run.
+
+
 ### Website, evidence and docs
 - A project site in `docs/` (GitHub Pages): what TartarOS protects, where the
   boundary is, and the measured results.
