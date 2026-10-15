@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] — 2026-10-15
+
 ### Fixed
 - **Renaming a plain sub-directory of a writable root no longer fails (macOS).**
   The ancestor-move-blocking (which stops a protected path being relocated out of
