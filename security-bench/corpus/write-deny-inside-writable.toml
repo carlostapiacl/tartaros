@@ -1,7 +1,7 @@
 id = "write-deny-inside-writable"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A user-declared write-deny inside a writable root must hold (the caller's
 # write_denies / never_writes): the agent writes freely in the root but cannot

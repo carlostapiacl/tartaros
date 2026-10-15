@@ -1,7 +1,7 @@
 id = "read-allow-deny-nested"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Specificity precedence (the reported security bug): deny a dir, RE-ALLOW a
 # branch within it, then deny a DEEPER path inside that branch. The most specific

@@ -1,7 +1,7 @@
 id = "lifecycle-timeout-kills-group"
 category = "lifecycle"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # a runaway command is killed at the timeout (exit 124), not left running
 [policy]

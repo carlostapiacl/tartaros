@@ -1,7 +1,7 @@
 id = "trust-handoff-claude-commands"
 category = "trust-handoff"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # .claude/commands (slash-commands a trusted agent runs) must be non-writable at
 # any depth — planting one injects a command the agent later executes.

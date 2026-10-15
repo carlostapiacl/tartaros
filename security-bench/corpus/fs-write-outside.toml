@@ -1,7 +1,7 @@
 id = "fs-write-outside-territory"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 [policy]
 writable_roots = ["{root}/work"]
