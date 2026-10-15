@@ -237,7 +237,8 @@ pub struct Policy {
     /// governed by Landlock/Seatbelt, so passing them through would leak them to a
     /// possibly-compromised agent (and via `/proc/self/environ`). `env_passthrough`
     /// names vars to carry through (`KEY`) or set (`KEY=VALUE`); `inherit_env`
-    /// restores full passthrough (opt into the leak, for trusted local use). The
+    /// restores full passthrough (opt into the leak, for trusted local use) minus
+    /// the loader/interpreter injection vars (`LD_*`, `BASH_ENV`, …). The
     /// CLI applies this to the process environment before spawning.
     pub inherit_env: bool,
     pub env_passthrough: Vec<String>,
@@ -318,17 +319,41 @@ pub const ENV_ALLOWLIST: &[&str] = &[
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
 ];
 
+/// Loader and interpreter injection vars: inherited, each one makes every child
+/// the agent starts load or run code it names (a preload library, a startup
+/// script, extra interpreter flags or module paths). Dropped even under
+/// `inherit_env`. The list follows nono's `is_dangerous_env_var` (Apache-2.0).
+pub const INJECTION_ENV_PREFIXES: &[&str] = &["LD_", "DYLD_", "BASH_FUNC_"];
+pub const INJECTION_ENV_VARS: &[&str] = &[
+    "BASH_ENV", "ENV", "CDPATH", "GLOBIGNORE", "PROMPT_COMMAND", "IFS",
+    "PYTHONSTARTUP", "PYTHONPATH",
+    "NODE_OPTIONS", "NODE_PATH",
+    "PERL5OPT", "PERL5LIB",
+    "RUBYOPT", "RUBYLIB", "GEM_PATH", "GEM_HOME",
+    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
+    "DOTNET_STARTUP_HOOKS",
+    "GOFLAGS",
+];
+
+pub fn is_injection_env_var(name: &str) -> bool {
+    INJECTION_ENV_PREFIXES.iter().any(|p| name.starts_with(p)) || INJECTION_ENV_VARS.contains(&name)
+}
+
 impl Policy {
     /// Compute the exact environment the agent should be spawned with (F-13).
     ///
-    /// Returns `None` when `inherit_env` is set — the caller opts into full
-    /// passthrough (secrets and all), so the backend should leave the inherited
-    /// environment untouched. Otherwise returns `Some(env)`: the current process
-    /// environment filtered to [`ENV_ALLOWLIST`] (plus `LC_*`), then with
-    /// `env_passthrough` applied — `KEY` carries the launcher's value through,
-    /// `KEY=VALUE` sets it explicitly (overrides win over the allowlist). The
-    /// backend applies this with `env_clear()` + `envs(..)`, so enforcement does
-    /// not depend on the CLI pre-scrubbing its own process env.
+    /// By default the current process environment is filtered to
+    /// [`ENV_ALLOWLIST`] (plus `LC_*`). With `inherit_env` the whole environment
+    /// passes through (secrets and all, the caller opted in) EXCEPT the
+    /// loader/interpreter injection vars of [`is_injection_env_var`]: those turn
+    /// an inherited env into code execution in every child the agent starts, and
+    /// no workflow needs them inherited silently. Then `env_passthrough` is
+    /// applied — `KEY` carries the launcher's value through, `KEY=VALUE` sets it
+    /// explicitly (overrides win over the allowlist, and naming an injection var
+    /// there is explicit operator intent, so it is honoured). The backend applies
+    /// the result with `env_clear()` + `envs(..)`, so enforcement does not depend
+    /// on the CLI pre-scrubbing its own process env. Always `Some` today; the
+    /// `Option` is kept for backends that may one day leave the env untouched.
     pub fn child_env(&self) -> Option<Vec<(String, String)>> {
         let original: Vec<(String, String)> = std::env::vars().collect();
         self.child_env_from(&original)
@@ -338,12 +363,15 @@ impl Policy {
     /// compute the child's. Split out so the allowlist/passthrough logic is
     /// deterministically testable without touching the process environment.
     pub fn child_env_from(&self, original: &[(String, String)]) -> Option<Vec<(String, String)>> {
-        if self.inherit_env {
-            return None;
-        }
         let mut out: Vec<(String, String)> = original
             .iter()
-            .filter(|(k, _)| ENV_ALLOWLIST.contains(&k.as_str()) || k.starts_with("LC_"))
+            .filter(|(k, _)| {
+                if self.inherit_env {
+                    !is_injection_env_var(k)
+                } else {
+                    ENV_ALLOWLIST.contains(&k.as_str()) || k.starts_with("LC_")
+                }
+            })
             .cloned()
             .collect();
         let set = |out: &mut Vec<(String, String)>, k: &str, v: String| {
@@ -1043,8 +1071,33 @@ mod tests {
     fn child_env_inherit_opts_into_full_passthrough() {
         let launcher = vec![("AWS_SECRET_ACCESS_KEY".into(), "leak".into())];
         let p = Policy { inherit_env: true, ..Default::default() };
-        // None = backend leaves the inherited environment untouched (secrets and all)
-        assert!(p.child_env_from(&launcher).is_none());
+        // inherit_env passes secrets through (the caller opted in)
+        let env = p.child_env_from(&launcher).unwrap();
+        assert_eq!(get(&env, "AWS_SECRET_ACCESS_KEY"), Some("leak"));
+    }
+
+    #[test]
+    fn child_env_inherit_still_drops_loader_injection() {
+        let launcher = vec![
+            ("PATH".into(), "/usr/bin".into()),
+            ("LD_PRELOAD".into(), "/evil.so".into()),
+            ("DYLD_INSERT_LIBRARIES".into(), "/evil.dylib".into()),
+            ("BASH_ENV".into(), "/evil.sh".into()),
+            ("BASH_FUNC_ls%%".into(), "() { evil; }".into()),
+            ("NODE_OPTIONS".into(), "--require /evil.js".into()),
+            ("MY_APP_CONFIG".into(), "kept".into()),
+        ];
+        let p = Policy { inherit_env: true, ..Default::default() };
+        let env = p.child_env_from(&launcher).unwrap();
+        for k in ["LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "BASH_FUNC_ls%%", "NODE_OPTIONS"] {
+            assert_eq!(get(&env, k), None, "{k} must not be inherited");
+        }
+        assert_eq!(get(&env, "PATH"), Some("/usr/bin"));
+        assert_eq!(get(&env, "MY_APP_CONFIG"), Some("kept"));
+        // naming one explicitly is operator intent and is honoured
+        let p = Policy { inherit_env: true, env_passthrough: vec!["NODE_OPTIONS".into()], ..Default::default() };
+        let env = p.child_env_from(&launcher).unwrap();
+        assert_eq!(get(&env, "NODE_OPTIONS"), Some("--require /evil.js"));
     }
 
     #[test]
