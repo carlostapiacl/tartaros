@@ -1,0 +1,34 @@
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-gitignored-repo"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The scan that finds nested repos must not honor .gitignore/.ignore: an agent
+# (or the repo) can write "sub/" into .gitignore to hide a nested repo from a
+# walk that respects ignore files.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.gitignore"
+content = "sub/\n"
+[[fixture]]
+path = "{root}/work/.ignore"
+content = "*\n"
+[[fixture]]
+path = "{root}/work/sub/.git/hooks"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "echo '#!/bin/sh' > {root}/work/sub/.git/hooks/pre-commit"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "{root}/work/sub/.git/hooks/pre-commit"

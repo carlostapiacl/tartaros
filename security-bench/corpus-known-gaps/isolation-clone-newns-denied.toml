@@ -1,0 +1,29 @@
+# STATUS 2026-10-15 (known gap): linux=violation
+# derived from anthropics/sandbox-runtime test/docker-weak-sandbox.test.ts (Apache-2.0)
+id = "isolation-clone-newns-denied"
+source = "anthropics/sandbox-runtime test/docker-weak-sandbox.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+requires = ["userns"]
+
+# The hardening filter must refuse namespace creation through EVERY entry point.
+# A filter that only matches unshare() can be dodged with a raw clone() (or
+# clone3) carrying the same flags. CLONE_NEWUSER is set along with CLONE_NEWNS so
+# the attempt also succeeds for an unprivileged user on a userns host. Without
+# it, a non-root run fails with EPERM whatever the filter does, and the test
+# proves nothing. Both unshare and raw clone are tried; the attack succeeds if
+# either one does.
+[policy]
+writable_roots = ["{root}/work"]
+harden_syscalls = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,os,platform,sys\nlibc=ctypes.CDLL(None,use_errno=True)\nF=0x10000000|0x00020000\nnr={\"x86_64\":56,\"aarch64\":220}[platform.machine()]\npid=libc.syscall(nr,ctypes.c_ulong(F|17),None,None,None,None)\nif pid==0: os._exit(0)\nif pid>0: os.waitpid(pid,0); sys.exit(0)\nr=os.fork()\nif r==0: os._exit(0 if libc.unshare(F)==0 else 1)\nsys.exit(os.waitpid(r,0)[1]>>8)'"
+
+[control]
+cmd = "python3 -c 'import os; os.listdir(\"/\")' && echo ok > {root}/work/src/f.txt"

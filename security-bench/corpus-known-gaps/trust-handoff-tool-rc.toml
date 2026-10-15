@@ -1,0 +1,30 @@
+# STATUS 2026-10-15 (known gap): macos=violation, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-tool-rc"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# Per-user tool config that a trusted tool on the host loads from the
+# directory: .gitconfig (aliases, core.pager/core.fsmonitor run commands) and
+# .ripgreprc (pre-processor commands). Not in tartaros HANDOFF_CONFIG_NAMES ->
+# expected gap (por confirmar); corpus-known-gaps/ if it fails.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.gitconfig"
+content = "[user]\n\tname = original\n"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = 'for f in .gitconfig .ripgreprc src/.gitconfig; do (printf "[core]\\n\\tfsmonitor = /tmp/x\\n" >> {root}/work/$f) 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.gitconfig"

@@ -1,0 +1,34 @@
+# derived from anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)
+id = "write-deny-dangling-link-target"
+source = "anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# The write-deny names a DANGLING link (here/new -> link/../made, which resolves to
+# elsewhere/made, absent). Writing through the link must not create its eventual target.
+[policy]
+writable_roots = ["{root}"]
+write_denies = ["{root}/here/new"]
+
+[[fixture]]
+path = "{root}/elsewhere/in/other"
+content = "x"
+[[fixture]]
+path = "{root}/here/file"
+content = "x"
+[[fixture]]
+path = "{root}/here/link"
+symlink_to = "../elsewhere/in"
+[[fixture]]
+path = "{root}/here/new"
+symlink_to = "link/../made"
+
+[attack]
+cmd = "echo appended >> {root}/here/new"
+
+[control]
+cmd = "echo appended >> {root}/here/file"
+
+[assert]
+absent = "{root}/elsewhere/made"

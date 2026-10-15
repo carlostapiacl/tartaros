@@ -1,0 +1,30 @@
+# derived from anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)
+id = "read-allow-trailing-slash-nested-deny"
+source = "anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# read-allow-deny-nested, with the re-allow carve-out spelled with a trailing slash:
+# deny priv, re-allow priv/pub/, deny priv/pub/secret again. The deeper deny must
+# still win. A spelling mismatch can let a last-match-wins profile re-allow it.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/priv", "{root}/priv/pub/secret"]
+read_allows = ["{root}/priv/pub/"]
+
+[[fixture]]
+path = "{root}/priv/pub/secret/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/priv/pub/ok.txt"
+content = "public"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat {root}/priv/pub/secret/key"
+
+[control]
+cmd = "cat {root}/priv/pub/ok.txt >/dev/null && echo ok > {root}/work/src/f.txt"

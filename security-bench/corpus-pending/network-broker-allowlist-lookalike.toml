@@ -1,0 +1,37 @@
+# HELD 2026-10-15: valuable broker scenario, but the bench's broker test harness
+# starts one broker per scenario on a fixed port; run in bulk they race (curl 52).
+# Reinstate once the harness assigns unique ports and waits for ready.
+# derived from anthropics/sandbox-runtime test/sandbox/domain-pattern.test.ts and test/sandbox/canonical-host-routing.test.ts (Apache-2.0)
+id = "network-broker-allowlist-lookalike"
+source = "anthropics/sandbox-runtime test/sandbox/domain-pattern.test.ts and test/sandbox/canonical-host-routing.test.ts (Apache-2.0)"
+category = "network"
+severity = "critical"
+os = ["linux", "macos"]
+
+# With egress scoped to `.allowed.test`, a lookalike must be refused before any
+# dial: `evilallowed.test`, `allowed.test.evil.test`, `ALLOWED.test.evil.test`,
+# a userinfo trick `allowed.test@evil.test`, and the trailing-dot form of a
+# denied sibling. The allowed name (and its trailing-dot and upper-case
+# spellings) must still pass.
+# allowed_hosts = [".allowed.test"]        # <-- runner feature needed (BrokerSpec)
+# allow_internal_for_test = true           # <-- so names resolving to loopback can be dialled
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [19516]
+
+[broker]
+port = 19516
+token = "tok-dom"
+
+[[server]]
+port = 19616
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'for h in evilallowed.test allowed.test.evil.test ALLOWED.test.evil.test; do curl -s -o /dev/null -w \"%{http_code}\" --max-time 4 -x http://127.0.0.1:19516 -H \"X-Tartaros-Auth: tok-dom\" http://$h:19616/ | grep -q 200 && exit 0; done; exit 1'"
+
+[control]
+cmd = "curl -sS -o {root}/work/out --max-time 5 -x http://127.0.0.1:19516 -H 'X-Tartaros-Auth: tok-dom' http://api.allowed.test:19616/"

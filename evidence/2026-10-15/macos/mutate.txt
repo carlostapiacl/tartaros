@@ -1,0 +1,19 @@
+tartaros-bench · MUTATION MODE · backend=macos
+
+Each mutation removes one protection; a healthy corpus flips >=1 scenario.
+
+mutation             flips      sensitive scenarios
+----------------------------------------------------------------------
+drop-read-denies     36/38      filesystem-write-reallow-inside-deny, read-allow-deny-nested, read-allow-inside-deny-writable-ancestor, read-allow-inside-deny, read-allow-symlink-into-deny, read-allow-symlink-no-reopen, read-allow-trailing-slash-nested-deny, read-allow-writable-carveout-trailing-slash, read-deny-alt-spelling, read-deny-backslash-name, read-deny-bracket-dir, read-deny-given-via-symlink, read-deny-link-dotdot, read-deny-not-reopened-by-nested-writable, read-deny-symlink-bypass, read-deny-symlink-entry, read-deny-symlinked-dir, read-deny-trailing-slash-nested-write-deny, read-deny-under-write-deny, read-deny-wins-exact-tie, secret-read-inside-writable, secret-read-deny, secrets-read-allow-symlink-into-deny, secrets-read-deny-after-chmod, secrets-read-deny-also-write-denied, secrets-read-deny-case-fold, secrets-read-deny-clonefile, secrets-read-deny-dir-listing, secrets-read-deny-firmlink, secrets-read-deny-on-symlinked-path, secrets-read-deny-path-special-chars, secrets-read-deny-prefix-collision, secrets-read-deny-rename-out, secrets-read-deny-single-file, secrets-read-deny-symlinked-entry, secrets-read-deny-under-write-denied-ancestor [ok]
+grant-network        4/4        broker-credential-egress, net-unauthorized-port, network-egress-public-denied, network-local-bind-denied [ok]
+drop-isolate-net     n/a        (no scenario uses this protection)
+drop-isolate-pids    n/a        (no scenario uses this protection)
+raise-proc-limit     n/a        (no scenario uses this protection)
+raise-mem-limit      n/a        (no scenario uses this protection)
+drop-env-scrub       4/4        env-secret-scrub, secrets-env-loader-injection-scrub, secrets-env-passthrough-selective, secrets-env-scrub-common-tokens [ok]
+
+== mutation scorecard ==
+  mutations with a blind spot: 0  [target 0]
+
+OK: every removable protection is caught by at least one scenario.
+mutate exit=0

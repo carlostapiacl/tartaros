@@ -1,0 +1,33 @@
+# derived from anthropics/sandbox-runtime test/sandbox/names-with-a-backslash.test.ts (Apache-2.0)
+id = "read-deny-backslash-name"
+source = "anthropics/sandbox-runtime test/sandbox/names-with-a-backslash.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "high"
+os = ["linux", "macos"]
+
+# Outside Windows a backslash is an ordinary character in a name. A read-deny on
+# tree/a\b covers exactly that one name, also when reached through a symlinked parent
+# (link -> tree), and leaves the different file tree/a/b readable. Escaping mistakes
+# in a profile compiler show up as the deny matching nothing, or matching a/b.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/link/a\\b"]
+
+[[fixture]]
+path = "{root}/tree/a\\b"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/tree/a/b"
+content = "public"
+[[fixture]]
+path = "{root}/link"
+symlink_to = "tree"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat '{root}/tree/a\\b'"
+
+[control]
+cmd = "cat '{root}/tree/a/b' >/dev/null && echo ok > {root}/work/src/f.txt"

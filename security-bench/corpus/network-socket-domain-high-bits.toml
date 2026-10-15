@@ -1,0 +1,24 @@
+# derived from anthropics/sandbox-runtime test/sandbox/seccomp-vsock-block.test.ts (Apache-2.0)
+id = "network-socket-domain-high-bits"
+source = "anthropics/sandbox-runtime test/sandbox/seccomp-vsock-block.test.ts (Apache-2.0)"
+category = "network"
+severity = "high"
+os = ["linux"]
+requires = ["landlock"]
+
+# The kernel reads socket()'s domain as a 32-bit int, so a raw syscall with bits
+# set above it still asks for AF_INET. A seccomp rule that compared all 64 bits
+# would miss it and re-open UDP egress. Raw socket(AF_INET|1<<32, SOCK_DGRAM)
+# must still be refused.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,platform,socket,sys\nnr={\"x86_64\":41,\"aarch64\":198}[platform.machine()]\nlibc=ctypes.CDLL(None,use_errno=True)\nfd=libc.syscall(ctypes.c_long(nr),ctypes.c_ulong(socket.AF_INET|(1<<32)),ctypes.c_ulong(socket.SOCK_DGRAM),ctypes.c_ulong(0))\nsys.exit(0 if fd>=0 else 1)'"
+
+[control]
+cmd = "python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM)' && echo ok > {root}/work/src/f.txt"

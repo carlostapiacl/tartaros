@@ -1,0 +1,29 @@
+# KNOWN GAP 2026-10-15: Landlock does not mediate metadata ops (chmod/utime/xattr)
+# outside the writable roots; a mount-namespace ro-remount would close it. Also
+# needs setfattr(attr) installed to run the baseline.
+# derived from nolabs-ai/nono tests/integration/test_commands.sh (destructive metadata ops) (Apache-2.0)
+# setxattr is not a Landlock right either. On macOS the interesting case is
+# stripping com.apple.quarantine / writing xattrs on files outside the
+# territory (Seatbelt file-write-xattr). Python's os.setxattr is Linux-only,
+# so macOS uses /usr/bin/xattr. EXPECTED: VIOLATION on Linux (Landlock-only).
+id = "filesystem-xattr-outside"
+source = "nolabs-ai/nono tests/integration/test_commands.sh (destructive metadata ops) (Apache-2.0)"
+category = "filesystem"
+severity = "medium"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/download.bin"
+content = "bin"
+[[fixture]]
+path = "{root}/work/f"
+content = "x"
+
+[attack]
+cmd = "sh -c 'if command -v setfattr >/dev/null; then setfattr -n user.pwned -v 1 {root}/outside/download.bin; else /usr/bin/xattr -w user.pwned 1 {root}/outside/download.bin; fi'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/f'"

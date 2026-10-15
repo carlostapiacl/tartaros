@@ -1,0 +1,29 @@
+# derived from anthropics/sandbox-runtime test/sandbox/literal-path-entries.test.ts (Apache-2.0)
+id = "write-deny-under-dotdot-root"
+source = "anthropics/sandbox-runtime test/sandbox/literal-path-entries.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# The write root is spelled with a parent reference (p/keep/../real). A write-deny
+# beneath its real location must still apply. Comparing by spelling would judge the
+# deny to be outside every root and drop it.
+[policy]
+writable_roots = ["{root}/p/keep/../real"]
+write_denies = ["{root}/p/real/file"]
+
+[[fixture]]
+path = "{root}/p/keep/file"
+content = "original"
+[[fixture]]
+path = "{root}/p/real/file"
+content = "original"
+
+[attack]
+cmd = "echo tampered > {root}/p/real/file"
+
+[control]
+cmd = "echo fine > {root}/p/real/other"
+
+[assert]
+unchanged = "{root}/p/real/file"

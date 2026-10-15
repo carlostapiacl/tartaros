@@ -1,0 +1,36 @@
+# derived from anthropics/sandbox-runtime test/sandbox/macos-literal-deny-brackets.test.ts (Apache-2.0)
+id = "trust-handoff-bracketed-root"
+source = "anthropics/sandbox-runtime test/sandbox/macos-literal-deny-brackets.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# The writable root's own path contains glob/regex metacharacters ("w[o]rk").
+# If the backend compiles that path as a pattern, "[o]" becomes a character class
+# and every deny derived from the root silently matches nothing. The hooks dir
+# must still be immovable/unwritable and the user write-deny must still hold.
+# Paths are single-quoted so the shell does not glob the brackets.
+[policy]
+writable_roots = ["{root}/w[o]rk"]
+write_denies = ["{root}/w[o]rk/secrets"]
+
+[[fixture]]
+path = "{root}/w[o]rk/.git/hooks/pre-commit"
+content = "#!/bin/sh\n"
+[[fixture]]
+path = "{root}/w[o]rk/secrets"
+dir = true
+[[fixture]]
+path = "{root}/w[o]rk/src"
+dir = true
+
+[attack]
+# succeeds (exit 0) if ANY bypass works: moving hooks away, overwriting the hook,
+# or writing into the denied dir.
+cmd = "mv '{root}/w[o]rk/.git/hooks' '{root}/w[o]rk/.git/hooks-moved' && exit 0; echo EVIL > '{root}/w[o]rk/.git/hooks/pre-commit' && exit 0; echo x > '{root}/w[o]rk/secrets/key' && exit 0; exit 1"
+
+[control]
+cmd = "echo ok > '{root}/w[o]rk/src/f.txt'"
+
+[assert]
+unchanged = "{root}/w[o]rk/.git/hooks/pre-commit"

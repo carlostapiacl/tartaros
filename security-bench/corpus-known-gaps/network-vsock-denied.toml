@@ -1,0 +1,26 @@
+# STATUS 2026-10-15 (known gap): linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/seccomp-vsock-block.test.ts (Apache-2.0)
+id = "network-vsock-denied"
+source = "anthropics/sandbox-runtime test/sandbox/seccomp-vsock-block.test.ts (Apache-2.0)"
+category = "network"
+severity = "high"
+os = ["linux"]
+requires = ["landlock"]
+
+# AF_VSOCK talks to the hypervisor/host (CID 2) on VMs and microVMs. Landlock
+# does not mediate it and the egress close only covers AF_INET/AF_INET6 dgram/raw,
+# so with the network denied an AF_VSOCK socket is an unmediated channel out.
+# Creating one must fail. (On a host with no vsock transport the kernel answers
+# EAFNOSUPPORT and this passes without proving anything; run it on a VM.)
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys\ntry:\n  socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM); sys.exit(0)\nexcept OSError:\n  sys.exit(1)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

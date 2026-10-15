@@ -1,0 +1,35 @@
+# STATUS 2026-10-15 (known gap): linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)
+id = "trust-handoff-git-exchange-rename"
+source = "anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux"]
+
+# renameat2(RENAME_EXCHANGE) atomically swaps two directories — a different
+# kernel path from rename(2). Swapping .git with an attacker dir puts the
+# attacker's config at .git/config in one call.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.git/config"
+content = "[core]\n"
+[[fixture]]
+path = "{root}/work/.git/hooks"
+dir = true
+[[fixture]]
+path = "{root}/work/exch/config"
+content = "planted"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,sys\nlibc=ctypes.CDLL(None,use_errno=True)\nsys.exit(0 if libc.renameat2(-100,b\"{root}/work/.git\",-100,b\"{root}/work/exch\",2)==0 else 1)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.git/config"

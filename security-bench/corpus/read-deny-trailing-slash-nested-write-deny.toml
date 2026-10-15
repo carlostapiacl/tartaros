@@ -1,0 +1,28 @@
+# derived from anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)
+id = "read-deny-trailing-slash-nested-write-deny"
+source = "anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A read-denied dir spelled WITH a trailing slash, plus a write-deny on a subdir
+# under it. The write-deny protection (a read-only bind in srt, a rule in ours) must
+# not re-expose the read-denied contents. Spellings that are compared by exact
+# string break this.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/work/secrets/"]
+write_denies = ["{root}/work/secrets/sub"]
+
+[[fixture]]
+path = "{root}/work/secrets/sub/token"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat {root}/work/secrets/sub/token"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

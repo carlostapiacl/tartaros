@@ -1,0 +1,28 @@
+# derived from anthropics/sandbox-runtime test/sandbox/macos-seatbelt.test.ts (Apache-2.0)
+id = "filesystem-write-deny-rename-bypass"
+source = "anthropics/sandbox-runtime test/sandbox/macos-seatbelt.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# Rename-write-rename: move the write-denied dir to an undenied name, write into
+# it, move it back. The protected file must end up unchanged at its original path.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/protected"]
+
+[[fixture]]
+path = "{root}/work/protected/secret.txt"
+content = "ORIGINAL"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mv {root}/work/protected {root}/work/p2 && echo EVIL > {root}/work/p2/secret.txt && mv {root}/work/p2 {root}/work/protected"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/protected/secret.txt"

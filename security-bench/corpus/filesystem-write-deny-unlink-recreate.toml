@@ -1,0 +1,30 @@
+# derived from nolabs-ai/nono crates/nono-cli/tests/glob_deny_after_start_run.rs (deleted_and_recreated_file_stays_denied) (Apache-2.0)
+# A write-denied FILE inside a writable root: the agent cannot open it for
+# write, but the parent directory is writable, so it may try to unlink it and
+# create a fresh file of the same name (new inode). Inode-based enforcement
+# (Landlock) only protects the old inode; the guarantee is about the PATH.
+id = "filesystem-write-deny-unlink-recreate"
+source = "nolabs-ai/nono crates/nono-cli/tests/glob_deny_after_start_run.rs (deleted_and_recreated_file_stays_denied) (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/policy.lock"]
+
+[[fixture]]
+path = "{root}/work/policy.lock"
+content = "ORIGINAL-POLICY"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'rm -f {root}/work/policy.lock; echo EVIL > {root}/work/policy.lock'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"
+
+[assert]
+unchanged = "{root}/work/policy.lock"

@@ -1,0 +1,32 @@
+# derived from anthropics/sandbox-runtime test/sandbox/names-with-a-backslash.test.ts (Apache-2.0)
+id = "write-deny-backslash-absent"
+source = "anthropics/sandbox-runtime test/sandbox/names-with-a-backslash.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "medium"
+os = ["linux", "macos"]
+
+# A write-deny on an ABSENT path whose dir name holds a backslash (work/c\d/file).
+# The file must not be creatable, while the look-alike work/c/d/file stays writable.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/c\\d/file"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mkdir -p '{root}/work/c\\d' && echo x > '{root}/work/c\\d/file'"
+
+# On Linux a deny on an absent path withholds creation in its nearest existing
+# ancestor (Landlock matches inodes), so the look-alike is checked in an existing
+# directory: the deny must cover exactly the backslash name, not a/b-style paths.
+[[fixture]]
+path = "{root}/work/src/c/d"
+dir = true
+
+[control]
+cmd = "echo ok > {root}/work/src/c/d/file"
+
+[assert]
+absent = "{root}/work/c\\d/file"

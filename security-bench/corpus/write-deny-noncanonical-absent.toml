@@ -1,0 +1,27 @@
+# derived from anthropics/sandbox-runtime test/sandbox/path-canonicalization.test.ts (Apache-2.0)
+id = "write-deny-noncanonical-absent"
+source = "anthropics/sandbox-runtime test/sandbox/path-canonicalization.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# A write-deny on an ABSENT path spelled with "//" and "/./". realpath can't
+# canonicalize a path that doesn't exist, so a backend that matches the kernel's
+# canonical path (Seatbelt) would silently match nothing. The file must still be
+# uncreatable.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work//protected/./evil"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mkdir -p {root}/work/protected && echo pwned > {root}/work/protected/evil"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "{root}/work/protected/evil"

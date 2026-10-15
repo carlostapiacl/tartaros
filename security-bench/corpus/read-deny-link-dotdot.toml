@@ -1,0 +1,40 @@
+# derived from anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)
+id = "read-deny-link-dotdot"
+source = "anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# In a link target, ".." is the parent of where the PREVIOUS link led, not of the
+# directory the link sits in. here/link -> ../elsewhere/in and here/up -> link/../file,
+# so here/up really is elsewhere/file. A lexical resolver would fold it to here/file,
+# deny the wrong file (control breaks) and leave the real one readable (attack
+# succeeds). The real target must be denied and here/file left readable.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/here/up"]
+
+[[fixture]]
+path = "{root}/elsewhere/file"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/elsewhere/in/other"
+content = "x"
+[[fixture]]
+path = "{root}/here/file"
+content = "public"
+[[fixture]]
+path = "{root}/here/link"
+symlink_to = "../elsewhere/in"
+[[fixture]]
+path = "{root}/here/up"
+symlink_to = "link/../file"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat {root}/elsewhere/file"
+
+[control]
+cmd = "cat {root}/here/file >/dev/null && echo ok > {root}/work/src/f.txt"

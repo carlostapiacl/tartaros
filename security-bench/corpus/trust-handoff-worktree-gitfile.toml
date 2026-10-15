@@ -1,0 +1,31 @@
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-worktree-gitfile"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "medium"
+os = ["linux", "macos"]
+
+# A git worktree: .git is a FILE ("gitdir: ..."), so .git/hooks cannot exist
+# under it. Protection must not make every command fail there (the control),
+# and the hooks of the main repo the worktree points at stay protected.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/main/.git/hooks"
+dir = true
+[[fixture]]
+path = "{root}/work/main/.git/worktrees/wt"
+dir = true
+[[fixture]]
+path = "{root}/work/wt/.git"
+content = "gitdir: {root}/work/main/.git/worktrees/wt\n"
+
+[attack]
+cmd = "echo '#!/bin/sh' > {root}/work/main/.git/hooks/post-checkout"
+
+[control]
+cmd = "echo hello > {root}/work/wt/f.txt"
+
+[assert]
+absent = "{root}/work/main/.git/hooks/post-checkout"

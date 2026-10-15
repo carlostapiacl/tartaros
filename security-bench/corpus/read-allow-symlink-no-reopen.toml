@@ -1,0 +1,31 @@
+# derived from anthropics/sandbox-runtime test/sandbox/read-deny-glob.test.ts, test/sandbox/read-list-precedence.test.ts (Apache-2.0)
+id = "read-allow-symlink-no-reopen"
+source = "anthropics/sandbox-runtime test/sandbox/read-deny-glob.test.ts, test/sandbox/read-list-precedence.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A read-allow entry lives in agent-writable space and is a symlink into a
+# read-denied dir (proj/docs -> home/.ssh). What an allow entry RESOLVES to must
+# never decide which deny it carves out of — the agent can point it anywhere.
+# The secret must stay unreadable under both names.
+[policy]
+writable_roots = ["{root}/proj"]
+read_denies = ["{root}/home/.ssh"]
+read_allows = ["{root}/proj/docs"]
+
+[[fixture]]
+path = "{root}/home/.ssh/id_rsa"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/proj/src"
+dir = true
+[[fixture]]
+path = "{root}/proj/docs"
+symlink_to = "{root}/home/.ssh"
+
+[attack]
+cmd = "sh -c 'cat {root}/proj/docs/id_rsa || cat {root}/home/.ssh/id_rsa'"
+
+[control]
+cmd = "echo ok > {root}/proj/src/f.txt"

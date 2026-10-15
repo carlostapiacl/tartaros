@@ -1,0 +1,21 @@
+# derived from openai/codex codex-rs/linux-sandbox/tests/suite/sandbox.rs::sandboxed_command_has_no_effective_or_permitted_capabilities; idea also in containers/bubblewrap tests/test-run.sh "we have no caps" (LGPL-2.1-or-later, idea only)
+id = "isolation-no-capabilities"
+source = "openai/codex codex-rs/linux-sandbox/tests/suite/sandbox.rs::sandboxed_command_has_no_effective_or_permitted_capabilities; idea also in containers/bubblewrap tests/test-run.sh \"we have no caps\" (LGPL-2.1-or-later, idea only)"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+
+# The agent's effective and permitted capability sets must be empty (meaningful
+# when the launcher runs as root). Attack succeeds if CapEff or CapPrm != 0.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'grep -E \"^Cap(Eff|Prm):\" /proc/self/status | grep -qv \"0000000000000000\"'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

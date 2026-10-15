@@ -1,0 +1,29 @@
+# derived from anthropics/sandbox-runtime test/sandbox/literal-path-entries.test.ts (Apache-2.0)
+# and test/sandbox/brackets-that-spell-no-set.test.ts (Apache-2.0)
+id = "write-deny-glob-chars-dir"
+source = "anthropics/sandbox-runtime test/sandbox/literal-path-entries.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# The project folder is named "[WIP] project" (brackets plus a space). As a write
+# root it must be writable by its literal name, and a write-deny inside it must hold.
+[policy]
+writable_roots = ["{root}/[WIP] project"]
+write_denies = ["{root}/[WIP] project/keep"]
+
+[[fixture]]
+path = "{root}/[WIP] project/keep/file"
+content = "original"
+[[fixture]]
+path = "{root}/[WIP] project/sub"
+dir = true
+
+[attack]
+cmd = "echo tampered > '{root}/[WIP] project/keep/file'"
+
+[control]
+cmd = "echo fine > '{root}/[WIP] project/sub/other'"
+
+[assert]
+unchanged = "{root}/[WIP] project/keep/file"

@@ -1,0 +1,29 @@
+# derived from anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)
+id = "write-deny-equals-root"
+source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# The exact tie on the write side (read side: read-deny-wins-exact-tie): the
+# same directory is both a writable root and write-denied. Fail-safe = the deny
+# wins, the root is read-only; another root stays writable.
+[policy]
+writable_roots = ["{root}/work", "{root}/proj"]
+write_denies = ["{root}/proj"]
+
+[[fixture]]
+path = "{root}/proj/README.md"
+content = "# original\n"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c '(echo pwned >> {root}/proj/README.md) 2>/dev/null || (echo pwned > {root}/proj/new) 2>/dev/null'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/proj/README.md"

@@ -1,0 +1,28 @@
+# STATUS 2026-10-15 (known gap): macos=control-broke, linux=pass
+# derived from anthropics/sandbox-runtime test/sandbox/literal-path-entries.test.ts (Apache-2.0)
+id = "fs-dotdot-absent-root"
+source = "anthropics/sandbox-runtime test/sandbox/literal-path-entries.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# A write root spelled through a folder that doesn't exist (p/absent/../real) grants
+# p/real and nothing else. The sibling p/keep must stay read-only.
+[policy]
+writable_roots = ["{root}/p/absent/../real"]
+
+[[fixture]]
+path = "{root}/p/keep/file"
+content = "original"
+[[fixture]]
+path = "{root}/p/real"
+dir = true
+
+[attack]
+cmd = "echo escaped > {root}/p/keep/file"
+
+[control]
+cmd = "echo hi > {root}/p/real/new"
+
+[assert]
+unchanged = "{root}/p/keep/file"

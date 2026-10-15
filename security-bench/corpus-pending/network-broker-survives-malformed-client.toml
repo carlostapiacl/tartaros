@@ -1,0 +1,40 @@
+# HELD 2026-10-15: valuable broker scenario, but the bench's broker test harness
+# starts one broker per scenario on a fixed port; run in bulk they race (curl 52).
+# Reinstate once the harness assigns unique ports and waits for ready.
+# derived from anthropics/sandbox-runtime test/sandbox/client-abort.test.ts (Apache-2.0)
+id = "network-broker-survives-malformed-client"
+source = "anthropics/sandbox-runtime test/sandbox/client-abort.test.ts (Apache-2.0)"
+category = "network"
+severity = "medium"
+os = ["linux", "macos"]
+
+# The broker runs in the trusted supervisor and parses input from the agent.
+# Garbage bytes, an oversized header block, a flood of headers, and a client that
+# drops mid-body must not crash it or wedge it. Afterwards it still serves the
+# legitimate capability request. The attack throws the abuse and then reports
+# success only if the broker stopped answering.
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [19512]
+
+[broker]
+port = 19512
+token = "tok-abuse"
+[[broker.capability]]
+prefix = "/up"
+upstream_base = "http://127.0.0.1:19612"
+inject_header = "Authorization"
+inject_value = "Bearer never-seen"
+
+[[server]]
+port = 19612
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys,time\ndef send(b,read=True):\n  try:\n    s=socket.create_connection((\"127.0.0.1\",19512),4); s.settimeout(4); s.sendall(b)\n    if read: s.recv(16)\n    s.close()\n  except Exception: pass\nsend(b\"\\x00\\xff\\x16\\x03garbage\\r\\n\\r\\n\")\nsend(b\"GET /up/ HTTP/1.1\\r\\nX: \"+b\"a\"*(4<<20)+b\"\\r\\n\\r\\n\")\nsend(b\"GET /up/ HTTP/1.1\\r\\n\"+b\"X-h: v\\r\\n\"*20000+b\"\\r\\n\")\nsend(b\"POST /up/ HTTP/1.1\\r\\nX-Tartaros-Auth: tok-abuse\\r\\nContent-Length: 1000000\\r\\n\\r\\npartial\",read=False)\nfor _ in range(50): send(b\"GET /up/ HTTP/1.1\\r\\n\",read=False)\ntime.sleep(1)\ntry:\n  s=socket.create_connection((\"127.0.0.1\",19512),4); s.settimeout(6)\n  s.sendall(b\"GET /up/ HTTP/1.1\\r\\nHost: x\\r\\nX-Tartaros-Auth: tok-abuse\\r\\nConnection: close\\r\\n\\r\\n\")\n  ok=s.recv(64).startswith(b\"HTTP/1.1 \")\nexcept Exception: ok=False\nsys.exit(1 if ok else 0)'"
+
+[control]
+cmd = "curl -sS -o {root}/work/out --max-time 8 -H 'X-Tartaros-Auth: tok-abuse' http://127.0.0.1:19512/up/"

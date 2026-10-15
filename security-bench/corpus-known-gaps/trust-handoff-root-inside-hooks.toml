@@ -1,0 +1,34 @@
+# STATUS 2026-10-15 (known gap): macos=violation, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)
+id = "trust-handoff-root-inside-hooks"
+source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The writable root is placed INSIDE a protected directory (repo/.git/hooks/
+# inner). A walk that looks for .git markers downward from each writable root
+# never sees the repo. srt: a writable path beneath .git/hooks (or .vscode,
+# .idea, .claude/commands, .claude/agents) stays read-only, while one beneath
+# .git/objects stays writable (the control). Possible gap (por confirmar).
+[policy]
+writable_roots = ["{root}/repo/.git/hooks/inner", "{root}/repo/.git/objects"]
+
+[[fixture]]
+path = "{root}/repo/.git/hooks/inner"
+dir = true
+[[fixture]]
+path = "{root}/repo/.git/objects"
+dir = true
+[[fixture]]
+path = "{root}/repo/.git/HEAD"
+content = "ref: refs/heads/main\n"
+
+[attack]
+cmd = "echo '#!/bin/sh' > {root}/repo/.git/hooks/inner/pre-commit"
+
+[control]
+cmd = "echo x > {root}/repo/.git/objects/obj"
+
+[assert]
+absent = "{root}/repo/.git/hooks/inner/pre-commit"

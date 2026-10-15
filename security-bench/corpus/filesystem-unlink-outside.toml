@@ -1,0 +1,29 @@
+# derived from nolabs-ai/nono tests/integration/test_profiles.sh ("default profile blocks rm outside granted area") (Apache-2.0)
+# Deleting an existing file outside the territory is a different kernel right
+# (Landlock REMOVE_FILE on the parent dir / Seatbelt file-write-unlink) than
+# creating one, which is all fs-write-outside exercises. A deleted file reads
+# back as "" so `unchanged` catches the effect even if rm lies about its exit.
+id = "filesystem-unlink-outside"
+source = "nolabs-ai/nono tests/integration/test_profiles.sh (\"default profile blocks rm outside granted area\") (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/keep.txt"
+content = "PRECIOUS"
+[[fixture]]
+path = "{root}/work/tmp.txt"
+content = "scratch"
+
+[attack]
+cmd = "rm -f {root}/outside/keep.txt && test ! -e {root}/outside/keep.txt"
+
+[control]
+cmd = "rm -f {root}/work/tmp.txt && test ! -e {root}/work/tmp.txt"
+
+[assert]
+unchanged = "{root}/outside/keep.txt"

@@ -45,3 +45,15 @@ Under `backends/macos/vendor/codex/`, taken from `codex-rs/sandboxing/src/`:
   studied only. No code taken.
 - `containers/bubblewrap` (LGPL): used as an external binary if needed, not
   vendored.
+
+## Conformance contracts derived from other test suites
+
+Part of `security-bench/corpus/` re-expresses guarantees asserted in other
+sandboxes' public test suites, as original attack + control + effect contracts (no
+upstream test code was copied). Each keeps a `source` field; the full list is in
+[`security-bench/SOURCES.md`](security-bench/SOURCES.md).
+
+- `anthropics/sandbox-runtime` — Apache-2.0
+- `nolabs-ai/nono` — Apache-2.0
+- `openai/codex` — Apache-2.0
+- `containers/bubblewrap` — LGPL-2.1-or-later (guarantee described only)

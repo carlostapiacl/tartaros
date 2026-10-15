@@ -1,0 +1,24 @@
+# derived from openai/codex codex-rs/linux-sandbox/tests/suite/sandbox.rs::sandbox_blocks_curl and codex-rs/sandboxing/src/seatbelt_network_tests.rs::external_dns_child (Apache-2.0)
+id = "network-tcp-external-denied"
+source = "openai/codex codex-rs/linux-sandbox/tests/suite/sandbox.rs::sandbox_blocks_curl and codex-rs/sandboxing/src/seatbelt_network_tests.rs::external_dns_child (Apache-2.0)"
+category = "network"
+severity = "critical"
+os = ["linux", "macos"]
+requires = ["landlock-net"]
+
+# Default-deny network: a TCP connect to an external address must be refused BY
+# POLICY (EPERM/EACCES). A timeout or "unreachable" is NOT a block: on a host
+# without a route it would pass vacuously, so those count as success here.
+# TEST-NET-1 is non-routable, so nothing ever leaves the machine.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,errno,sys\ns=socket.socket(); s.settimeout(1)\ntry:\n  s.connect((\"192.0.2.1\",80)); sys.exit(0)\nexcept OSError as e:\n  sys.exit(1 if e.errno in (errno.EPERM,errno.EACCES) else 0)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

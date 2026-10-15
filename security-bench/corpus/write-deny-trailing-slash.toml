@@ -1,0 +1,28 @@
+# derived from anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-stubs.test.ts (Apache-2.0)
+id = "write-deny-trailing-slash"
+source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-stubs.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# A trailing slash on the writable root (and on the deny) must not defeat
+# prefix/containment checks and silently drop the deny inside the root.
+[policy]
+writable_roots = ["{root}/work/"]
+write_denies = ["{root}/work/secrets/"]
+
+[[fixture]]
+path = "{root}/work/secrets/token.txt"
+content = "ORIGINAL"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c '(echo pwned >> {root}/work/secrets/token.txt) 2>/dev/null || (echo pwned > {root}/work/secrets/new) 2>/dev/null'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/secrets/token.txt"

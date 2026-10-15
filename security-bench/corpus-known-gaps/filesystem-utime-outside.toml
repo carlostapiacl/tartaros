@@ -1,0 +1,26 @@
+# STATUS 2026-10-15 (known gap): macos=pass, linux=violation
+# derived from nolabs-ai/nono tests/integration/test_commands.sh (destructive metadata ops) (Apache-2.0)
+# Same Landlock gap as chmod: utimensat is not a Landlock right. Forging mtimes
+# outside the territory defeats make/rsync/backup change detection and audit
+# timelines. EXPECTED: VIOLATION on Linux (Landlock-only); blocked on macOS.
+id = "filesystem-utime-outside"
+source = "nolabs-ai/nono tests/integration/test_commands.sh (destructive metadata ops) (Apache-2.0)"
+category = "filesystem"
+severity = "medium"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/evidence.log"
+content = "log"
+[[fixture]]
+path = "{root}/work/f"
+content = "x"
+
+[attack]
+cmd = "sh -c 'touch -t 200001010000 {root}/outside/evidence.log && test -z \"$(find {root}/outside/evidence.log -newermt 2001-01-01)\"'"
+
+[control]
+cmd = "touch -t 200001010000 {root}/work/f"

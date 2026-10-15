@@ -1,0 +1,25 @@
+# derived from anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts and integration.test.ts (Apache-2.0)
+id = "lifecycle-exit-status-forwarded"
+source = "anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts and integration.test.ts (Apache-2.0)"
+category = "lifecycle"
+severity = "medium"
+os = ["linux", "macos"]
+
+# The caller decides on the sandboxed command's status, so the sandbox must
+# report it faithfully: a command killed by SIGTERM reads 128+15, an ordinary
+# failure keeps its own code. A wrapper that turned a killed command into 0 (or
+# collapsed every failure to 1) would let a failed step look like a success.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "kill -TERM $$"
+expect_exit = 143
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt && exit 7"
+expect_exit = 7

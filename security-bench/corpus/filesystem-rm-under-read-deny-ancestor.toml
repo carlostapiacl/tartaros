@@ -1,0 +1,30 @@
+# derived from anthropics/sandbox-runtime test/sandbox/allow-read.test.ts (Apache-2.0)
+id = "filesystem-rm-under-read-deny-ancestor"
+source = "anthropics/sandbox-runtime test/sandbox/allow-read.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "medium"
+os = ["linux", "macos"]
+
+# Usability + containment: with a read-deny on an ancestor and a read/write
+# carve-out for the project, deleting a file IN the project works (control), but
+# deleting a file outside the writable root under the same denied ancestor fails.
+[policy]
+writable_roots = ["{root}/base/project"]
+read_denies = ["{root}/base"]
+read_allows = ["{root}/base/project"]
+
+[[fixture]]
+path = "{root}/base/project/deleteme.txt"
+content = "data"
+[[fixture]]
+path = "{root}/base/outside/protected.txt"
+content = "PROTECTED"
+
+[attack]
+cmd = "rm -f {root}/base/outside/protected.txt"
+
+[control]
+cmd = "sh -c 'rm {root}/base/project/deleteme.txt && test ! -e {root}/base/project/deleteme.txt'"
+
+[assert]
+unchanged = "{root}/base/outside/protected.txt"

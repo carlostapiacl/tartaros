@@ -1,0 +1,25 @@
+# HELD 2026-10-15: baseline (ping) needs a host where ICMP works unsandboxed;
+# raw-socket egress is already covered by egress-udp-raw-denied. Reinstate with
+# a baseline.skip reason or on a host with ping privilege.
+# derived from nolabs-ai/nono tests/integration/test_network.sh ("ping blocked with --block-net") (Apache-2.0)
+# ICMP echo via an unprivileged ICMP datagram socket (what ping uses on both
+# macOS and modern Linux). Linux is already covered by egress-udp-raw-denied
+# (same SOCK_DGRAM type); this adds the macOS half and the ICMP protocol.
+id = "network-icmp-denied"
+source = "nolabs-ai/nono tests/integration/test_network.sh (\"ping blocked with --block-net\") (Apache-2.0)"
+category = "network"
+severity = "high"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys\ntry:\n  s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM,socket.IPPROTO_ICMP)\n  s.sendto(b\"\\x08\\x00\\xf7\\xff\\x00\\x00\\x00\\x00\",(\"1.1.1.1\",0)); sys.exit(0)\nexcept OSError:\n  sys.exit(1)'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"

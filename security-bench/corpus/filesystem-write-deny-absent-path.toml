@@ -1,0 +1,25 @@
+# derived from anthropics/sandbox-runtime test/sandbox/deny-path-made-meanwhile.test.ts (Apache-2.0)
+id = "filesystem-write-deny-absent-path"
+source = "anthropics/sandbox-runtime test/sandbox/deny-path-made-meanwhile.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# A write-deny on a path that does NOT exist yet (a leaf, and a leaf under an
+# absent parent) must hold: the agent cannot create it inside its writable root.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/denied.lock", "{root}/work/gone/leaf"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'echo x > {root}/work/denied.lock || (mkdir -p {root}/work/gone/leaf && echo x > {root}/work/gone/leaf/f)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "{root}/work/denied.lock"

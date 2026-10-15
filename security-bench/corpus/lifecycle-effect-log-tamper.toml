@@ -1,0 +1,20 @@
+# derived from nolabs-ai/nono tests/integration/test_sensitive_paths.sh ("Internal State Protection": grants overlapping ~/.nono are rejected) (Apache-2.0)
+# NEEDS RUNNER FEATURE: an `{effect_log}` (or `{state_dir}`) placeholder for
+# where the launcher keeps its own audit/effect log / evidence, plus the runner
+# launching through the CLI path that writes it.
+# The agent must not be able to rewrite or delete the record of what it did,
+# even when a writable root is a broad ancestor (e.g. all of $HOME).
+id = "lifecycle-effect-log-tamper"
+source = "nolabs-ai/nono tests/integration/test_sensitive_paths.sh (\"Internal State Protection\": grants overlapping ~/.nono are rejected) (Apache-2.0)"
+category = "lifecycle"
+severity = "high"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}"]
+
+[attack]
+cmd = "sh -c 'echo forged >> {effect_log}'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/f.txt'"

@@ -1,0 +1,31 @@
+# derived from anthropics/sandbox-runtime test/sandbox/linux-one-mount-per-destination.test.ts (Apache-2.0)
+id = "read-deny-alt-spelling"
+source = "anthropics/sandbox-runtime test/sandbox/linux-one-mount-per-destination.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The read deny is written ONLY in a non-canonical spelling: through a
+# symlinked directory. The secret must still be hidden at its real path.
+# Variants worth separate copies (one spelling each, so the canonical form
+# cannot mask a miss): "{root}//vault/key", "{root}/vault/key/",
+# "{root}/vault/./key".
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/link/key"]
+
+[[fixture]]
+path = "{root}/vault/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/link"
+symlink_to = "{root}/vault"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat {root}/vault/key"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

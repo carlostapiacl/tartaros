@@ -1,0 +1,27 @@
+# derived from anthropics/sandbox-runtime test/sandbox/allow-read.test.ts (Apache-2.0)
+id = "read-allow-inside-deny-writable-ancestor"
+source = "anthropics/sandbox-runtime test/sandbox/allow-read.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "high"
+os = ["linux", "macos"]
+
+# Shape: writable root ~ , read-deny ~/.ssh, read-allow ~/.ssh/known_hosts.
+# The writable root is an ANCESTOR of the deny: the carve-out stays readable
+# (control) and the denied sibling stays unreadable (attack).
+[policy]
+writable_roots = ["{root}/base"]
+read_denies = ["{root}/base/denied"]
+read_allows = ["{root}/base/denied/allowed"]
+
+[[fixture]]
+path = "{root}/base/denied/secret.txt"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/base/denied/allowed/visible.txt"
+content = "VISIBLE"
+
+[attack]
+cmd = "cat {root}/base/denied/secret.txt"
+
+[control]
+cmd = "sh -c 'grep -q VISIBLE {root}/base/denied/allowed/visible.txt && echo ok > {root}/base/f.txt'"

@@ -1,0 +1,29 @@
+# derived from anthropics/sandbox-runtime test/sandbox/integration.test.ts (Apache-2.0)
+id = "fs-dangling-symlink-create-outside"
+source = "anthropics/sandbox-runtime test/sandbox/integration.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# fs-symlink-escape uses a fixture link to an EXISTING outside dir. Here the agent
+# plants the link itself, at run time, to an outside path that does NOT exist yet,
+# and writes through it: following a dangling link must not create the target
+# outside the writable root.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "ln -s {root}/outside/created {root}/work/dangle && echo EVIL > {root}/work/dangle"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "{root}/outside/created"

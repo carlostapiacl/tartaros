@@ -1,0 +1,36 @@
+# derived from anthropics/sandbox-runtime test/sandbox/read-list-precedence.test.ts, test/sandbox/read-deny-glob.test.ts (Apache-2.0)
+id = "read-deny-given-via-symlink"
+source = "anthropics/sandbox-runtime test/sandbox/read-list-precedence.test.ts, test/sandbox/read-deny-glob.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The POLICY names the secret through a symlinked spelling (a chain of two links:
+# alias -> a/b, a/b/l2 -> ../../vault). The deny must bind to the real target,
+# so reading it by its canonical path is blocked. (Distinct from
+# read-deny-symlink-bypass, where the AGENT plants the link.)
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/alias/l2"]
+
+[[fixture]]
+path = "{root}/vault/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/a/b"
+dir = true
+[[fixture]]
+path = "{root}/alias"
+symlink_to = "{root}/a/b"
+[[fixture]]
+path = "{root}/a/b/l2"
+symlink_to = "{root}/vault"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat {root}/vault/key"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

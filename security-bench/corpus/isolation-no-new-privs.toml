@@ -1,0 +1,22 @@
+# derived from anthropics/sandbox-runtime test/sandbox/integration.test.ts (Apache-2.0)
+id = "isolation-no-new-privs"
+source = "anthropics/sandbox-runtime test/sandbox/integration.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+
+# A setuid binary must not raise the agent's privileges. The kernel guarantee for
+# that is no_new_privs on the confined process (also a precondition for loading
+# Landlock/seccomp unprivileged). The attack succeeds only if NoNewPrivs is 0.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "grep -qE '^NoNewPrivs:[[:space:]]+0$' /proc/self/status"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

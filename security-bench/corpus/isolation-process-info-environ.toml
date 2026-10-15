@@ -1,0 +1,26 @@
+# derived from anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)
+id = "isolation-process-info-environ"
+source = "anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "high"
+os = ["linux", "macos"]
+
+# isolate_process_info exists in the policy but no corpus scenario exercises it.
+# The launcher's environment is where secrets live before the scrub (F-13), so
+# the agent must not read ANOTHER process's environment: Linux /proc/<ppid>/environ,
+# macOS KERN_PROCARGS2 (what `ps -E` uses). The launcher surely has PATH=, so a
+# successful read greps it. Yama does not restrict environ reads, so this is a
+# real test of the sandbox.
+[policy]
+writable_roots = ["{root}/work"]
+isolate_process_info = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "P=$PPID; if [ -e /proc/$P/environ ]; then tr '\\0' '\\n' < /proc/$P/environ | grep -q '^PATH='; else ps -E -ww -p $P -o command= | grep -q 'PATH='; fi"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

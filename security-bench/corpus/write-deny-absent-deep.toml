@@ -1,0 +1,27 @@
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "write-deny-absent-deep"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A user write-deny for a path whose parents do not exist yet (a/b/c/policy.json):
+# the agent creates the chain and writes the file. The deny must hold for an
+# absent path at any depth (FsRule.even_if_absent). The chmod mirrors srt's
+# "mode-closed parent reopened by the agent" arm.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/a/b/c/policy.json"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mkdir -p {root}/work/a/b/c && chmod 755 {root}/work/a/b/c && echo pwned > {root}/work/a/b/c/policy.json"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "{root}/work/a/b/c/policy.json"

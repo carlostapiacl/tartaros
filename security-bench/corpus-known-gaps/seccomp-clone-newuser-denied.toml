@@ -1,0 +1,27 @@
+# STATUS 2026-10-15 (known gap): linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/linux-nested-userns.test.ts (Apache-2.0)
+id = "seccomp-clone-newuser-denied"
+source = "anthropics/sandbox-runtime test/sandbox/linux-nested-userns.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+requires = ["userns"]
+
+# seccomp-attack-surface proves unshare() is denied under harden_syscalls, but a
+# user namespace can also be made with clone(CLONE_NEWUSER) (and clone3). User
+# namespaces are the usual gateway to kernel attack surface (mount, netfilter,
+# etc. become reachable). The raw clone below behaves like fork; the child exits
+# at once. Attack succeeds if the namespaced child was created.
+[policy]
+writable_roots = ["{root}/work"]
+harden_syscalls = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,os,platform,sys\nnr={\"x86_64\":56,\"aarch64\":220}[platform.machine()]\nlibc=ctypes.CDLL(None,use_errno=True)\nr=libc.syscall(nr,ctypes.c_ulong(0x10000000|17),None,None,None,None)\nif r==0: os._exit(0)\nif r>0: os.waitpid(r,0); sys.exit(0)\nsys.exit(1)'"
+
+[control]
+cmd = "python3 -c 'import os\np=os.fork()\nif p==0: os._exit(0)\nos.waitpid(p,0)' && echo ok > {root}/work/src/f.txt"

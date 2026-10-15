@@ -1,0 +1,42 @@
+# HELD 2026-10-15: valuable broker scenario, but the bench's broker test harness
+# starts one broker per scenario on a fixed port; run in bulk they race (curl 52).
+# Reinstate once the harness assigns unique ports and waits for ready.
+# derived from anthropics/sandbox-runtime test/sandbox/request-target-forwarding.test.ts (Apache-2.0)
+id = "network-broker-path-dot-segments"
+source = "anthropics/sandbox-runtime test/sandbox/request-target-forwarding.test.ts (Apache-2.0)"
+category = "network"
+severity = "high"
+os = ["linux", "macos"]
+
+# A capability scopes the agent to an upstream base path (/api/v1). The path the
+# broker judges must be the path it forwards: `/up/../../admin`, `/up/%2e%2e/admin`
+# or `//admin` must not reach the upstream outside /api/v1.
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [19515]
+
+[broker]
+port = 19515
+token = "tok-path"
+[[broker.capability]]
+prefix = "/up"
+upstream_base = "http://127.0.0.1:19615/api/v1"
+inject_header = "Authorization"
+inject_value = "Bearer x"
+
+[[server]]
+port = 19615
+# log_requests = "{root}/upstream.log"   # <-- runner feature needed
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'for p in /up/../../admin /up/%2e%2e/%2e%2e/admin /up/..%2f..%2fadmin; do curl -s --path-as-is -o /dev/null --max-time 4 -H \"X-Tartaros-Auth: tok-path\" \"http://127.0.0.1:19515$p\"; done; exit 1'"
+
+[control]
+cmd = "curl -sS -o {root}/work/out --max-time 5 -H 'X-Tartaros-Auth: tok-path' http://127.0.0.1:19515/up/ok"
+
+[assert]
+# no request line outside /api/v1 in the log   # <-- runner feature needed

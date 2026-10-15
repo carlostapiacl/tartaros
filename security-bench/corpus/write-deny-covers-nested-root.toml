@@ -1,0 +1,32 @@
+# derived from anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)
+id = "write-deny-covers-nested-root"
+source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# "Write-protect the checkout, let the build write to checkout/out": a write
+# deny on proj and a writable root NESTED inside it (proj/out). srt's rule is
+# that the deny wins however the two are nested, so out/ is read-only too.
+# A backend that grants writable roots as independent allows would let the
+# nested root through -> possible gap (por confirmar). If tartaros decides the
+# opposite (most-specific wins), record that as a documented semantic instead.
+[policy]
+writable_roots = ["{root}/work", "{root}/work/proj/out"]
+write_denies = ["{root}/work/proj"]
+
+[[fixture]]
+path = "{root}/work/proj/out"
+dir = true
+[[fixture]]
+path = "{root}/work/other"
+dir = true
+
+[attack]
+cmd = "echo pwned > {root}/work/proj/out/x"
+
+[control]
+cmd = "echo ok > {root}/work/other/f.txt"
+
+[assert]
+absent = "{root}/work/proj/out/x"

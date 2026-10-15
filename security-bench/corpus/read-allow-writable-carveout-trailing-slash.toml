@@ -1,0 +1,31 @@
+# derived from anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)
+id = "read-allow-writable-carveout-trailing-slash"
+source = "anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "medium"
+os = ["linux", "macos"]
+
+# A carve-out named with a trailing slash in BOTH read_allows and writable_roots,
+# inside a read-denied dir. It must stay writable (srt's bug left it read-only,
+# EROFS), and the denied siblings must stay unreadable. The control is the main
+# check here (usability); the attack keeps the rest of the deny honest.
+[policy]
+writable_roots = ["{root}/work", "{root}/secrets/data/"]
+read_denies = ["{root}/secrets"]
+read_allows = ["{root}/secrets/data/"]
+
+[[fixture]]
+path = "{root}/secrets/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/secrets/data/out.txt"
+content = "x"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat {root}/secrets/key"
+
+[control]
+cmd = "echo new > {root}/secrets/data/out.txt && cat {root}/secrets/data/out.txt >/dev/null"

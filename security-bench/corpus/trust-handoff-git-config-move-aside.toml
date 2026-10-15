@@ -1,0 +1,32 @@
+# derived from anthropics/sandbox-runtime test/sandbox/linux-nested-userns.test.ts (Apache-2.0)
+id = "trust-handoff-git-config-move-aside"
+source = "anthropics/sandbox-runtime test/sandbox/linux-nested-userns.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# trust-handoff-rename-over-hook moves a file ONTO a protected one. This is the
+# other direction: rename the protected .git/config AWAY (a same-directory rename
+# needs only remove/create rights on .git, not write on the file), then create a
+# fresh .git/config with planted content that the host's next `git` reads.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.git/config"
+content = "[core]\n"
+[[fixture]]
+path = "{root}/work/.git/hooks"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mv {root}/work/.git/config {root}/work/.git/config.aside && printf '[core]\\n\\tfsmonitor = touch /tmp/pwned\\n' > {root}/work/.git/config"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.git/config"

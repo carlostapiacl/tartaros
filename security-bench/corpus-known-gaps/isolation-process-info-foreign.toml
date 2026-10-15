@@ -1,0 +1,26 @@
+# STATUS 2026-10-15 (known gap): linux=control-broke
+# derived from nolabs-ai/nono tests/integration/test_system_paths.sh ("cannot read foreign /proc/1/maps", "/proc/self readable", grandchild /proc/self issue #602) (Apache-2.0)
+# With isolate_process_info, /proc/<pid> of processes outside the sandbox is
+# unreadable (cmdline is world-readable by default, so this is meaningful even
+# as non-root), while the agent — including a GRANDCHILD under sh -c — can
+# still read its own /proc/self (runtimes like bun/node need it).
+id = "isolation-process-info-foreign"
+source = "nolabs-ai/nono tests/integration/test_system_paths.sh (\"cannot read foreign /proc/1/maps\", \"/proc/self readable\", grandchild /proc/self issue #602) (Apache-2.0)"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+requires = ["landlock"]
+
+[policy]
+writable_roots = ["{root}/work"]
+isolate_process_info = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'cat /proc/1/cmdline | tr \"\\0\" \" \" | grep -q .'"
+
+[control]
+cmd = "sh -c 'sh -c \"cat /proc/self/status >/dev/null && cat /proc/self/maps >/dev/null\"'"

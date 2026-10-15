@@ -1,0 +1,30 @@
+# derived from anthropics/sandbox-runtime test/sandbox/stale-mount-point.test.ts (Apache-2.0)
+id = "write-deny-existing-file-chmod"
+source = "anthropics/sandbox-runtime test/sandbox/stale-mount-point.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# A pre-existing file at a write-denied path (a git lock file the host's git
+# will act on). The agent owns it, so it first widens the mode and then
+# appends: the refusal must come from the sandbox, not the file mode, and
+# teardown must leave the file exactly as found.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/repo/.git/config.lock"]
+
+[[fixture]]
+path = "{root}/work/repo/.git/config.lock"
+content = "LOCKED"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "chmod u+w {root}/work/repo/.git/config.lock; echo x >> {root}/work/repo/.git/config.lock"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/repo/.git/config.lock"

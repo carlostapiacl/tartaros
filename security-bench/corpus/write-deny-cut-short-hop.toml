@@ -1,0 +1,34 @@
+# derived from anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)
+# and test/sandbox/write-deny-way-cut-short.property.test.ts (Apache-2.0)
+id = "write-deny-cut-short-hop"
+source = "anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# The denied name is a link whose path is cut short by a missing hop: w/name ->
+# hop/../made, and w/hop doesn't exist. Whoever creates hop decides where name leads.
+# The agent creates hop (making name resolve to w/made) and then writes through name.
+# The deny must still hold: name never comes to exist. srt holds the missing hop
+# itself. A backend that resolves the deny at the moment of access, or not at all,
+# lets the write through. (srt only runs this on Linux. On macOS it is our guarantee
+# to state; if it fails there, that is a finding, not a broken contract.)
+[policy]
+writable_roots = ["{root}/w"]
+write_denies = ["{root}/w/name"]
+
+[[fixture]]
+path = "{root}/w/src"
+dir = true
+[[fixture]]
+path = "{root}/w/name"
+symlink_to = "hop/../made"
+
+[attack]
+cmd = "cd {root}/w && mkdir hop && echo written >> name"
+
+[control]
+cmd = "echo ok > {root}/w/src/f.txt"
+
+[assert]
+absent = "{root}/w/made"
