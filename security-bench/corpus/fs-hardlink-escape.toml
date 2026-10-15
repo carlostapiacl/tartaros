@@ -1,7 +1,7 @@
 id = "fs-hardlink-bypass-read-deny"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # the agent tries to hardlink a read-denied secret into a readable location and
 # read it through the link — Landlock/Seatbelt must not allow the equivalence.

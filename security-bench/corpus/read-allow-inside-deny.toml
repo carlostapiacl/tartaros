@@ -1,7 +1,7 @@
 id = "read-allow-inside-deny"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Deny reads of a whole directory but RE-ALLOW one branch within it
 # (deny-inside-allow for reads). The agent can read the re-allowed branch but

@@ -1,0 +1,25 @@
+[package]
+name = "tartaros-windows"
+description = "Native Windows backend for tartaros: AppContainer, grant-only NTFS ACLs, job object (see docs/windows-backend.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+tartaros-core = { path = "../../core" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59.0", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+] }
