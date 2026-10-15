@@ -67,7 +67,10 @@ Still open: `multi-tenant` kernel isolation (microVM, below) and scoping
       authoritative.
 - [x] integration tests (`tests/trust_handoff.rs`, macOS): 6 live checks green,
       including git running under the profile
-- [ ] shell rc / CI-config handoff paths beyond `.github/workflows`
+- [x] shell rc / per-user tool config (`.bashrc`, `.gitconfig`, `.ripgreprc`, …)
+      handoff paths — opt-in `--protect-home-handoff` (off by default so dotfiles
+      repos stay editable). Top-level verified green on macOS + Linux 6.8;
+      nested-absent on Linux rides the documented bind-mount limit.
 
 ## M2 — Linux backend
 - [x] `Policy::linux_write_allowlist`: **carves** the deny out of the allow

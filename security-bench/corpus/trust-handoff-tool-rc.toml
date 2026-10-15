@@ -1,0 +1,35 @@
+# STATUS 2026-10-15 (measured): macos=pass, linux=pass
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-tool-rc"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# Per-user tool config that a trusted tool on the host loads from the
+# directory: .gitconfig (aliases, core.pager/core.fsmonitor run commands) and
+# .ripgreprc (pre-processor commands). A per-user home-handoff surface, opt-in
+# via `protect_home_handoff` (adds HANDOFF_HOME_NAMES to the deny set), off by
+# default so a dotfiles repo stays editable; `materialize_absent_handoff` lets
+# Landlock withhold the absent ones on Linux. Scope: top-level (the nested-absent
+# case is the documented Linux bind-mount limit, see docs/limits.md).
+[policy]
+writable_roots = ["{root}/work"]
+protect_home_handoff = true
+materialize_absent_handoff = true   # Linux: pre-create absent home names so they cannot be created (macOS regex covers absent already)
+
+[[fixture]]
+path = "{root}/work/.gitconfig"
+content = "[user]\n\tname = original\n"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = 'for f in .gitconfig .ripgreprc ; do (printf "[core]\\n\\tfsmonitor = /tmp/x\\n" >> {root}/work/$f) 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.gitconfig"

@@ -5,6 +5,18 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **`--protect-home-handoff` (opt-in).** Also denies the per-user home-handoff
+  surface under the writable roots — shell rc files (`.bashrc`, `.bash_profile`,
+  `.zshrc`, `.zprofile`, `.profile`), `.gitconfig` (core.fsmonitor/core.pager run
+  commands) and `.ripgreprc` (pre-processor) — denied even if absent. Off by
+  default because protecting them breaks editing one's own dotfiles in the box (a
+  dotfiles repo is a writable root full of these names). Turn it on when the
+  workspace is not a dotfiles repo and that surface is in scope. Also settable in a
+  config file (`protect_home_handoff = true`). Closes the `trust-handoff-shell-rc`
+  and `trust-handoff-tool-rc` scenarios (previously tracked as a deliberate
+  non-goal in `corpus-known-gaps/`).
+
 ### Hardening found by the cross-sandbox corpus
 Running the conformance corpus against the public test suites of other sandboxes
 (sandbox-runtime, nono, Codex, bubblewrap) surfaced real gaps. Fixed, each with a
