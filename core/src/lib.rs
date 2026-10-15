@@ -352,13 +352,16 @@ impl Policy {
         // trust-handoff files are a macOS/Seatbelt strength (regex denies cover
         // not-yet-existing paths) that Landlock cannot match. Without this an
         // empty writable root would be made fully unwritable by absent denies.
+        // Landlock matches inodes, so carve on the REAL paths: a deny written
+        // through a symlinked directory must exclude the directory it resolves to.
+        denied = denied.iter().map(|p| resolve_best_effort(p)).collect();
         denied.retain(|p| p.exists());
         denied.sort();
         denied.dedup();
 
         let mut out = Vec::new();
         for root in &self.writable_roots {
-            carve(root, &denied, &mut out);
+            carve(&resolve_best_effort(root), &denied, &mut out);
         }
         out
     }
@@ -377,6 +380,10 @@ impl Policy {
         if self.isolate_process_info {
             denied.push(PathBuf::from("/proc"));
         }
+        // Carve on the real paths (Landlock matches inodes): a deny written through
+        // a symlinked directory, or whose last component is a symlink, must hide
+        // the file it resolves to, not just the name it was given.
+        denied = denied.iter().map(|p| resolve_best_effort(p)).collect();
         denied.retain(|p| p.exists());
         let mut out = if denied.is_empty() {
             vec![PathBuf::from("/")]
@@ -394,8 +401,17 @@ impl Policy {
         // would re-open the deeper secret (security bug). So we carve the
         // re-allowed subtree too, excluding any denies that fall within it. The
         // deepest rule wins, matching the macOS specificity order.
-        for a in &self.read_allows {
-            if !a.exists() {
+        for given in &self.read_allows {
+            if !given.exists() {
+                continue;
+            }
+            let a = &resolve_best_effort(given);
+            // A re-allow only re-opens the branch it NAMES. If it reaches a denied
+            // area only by following a symlink (the name itself is not inside any
+            // deny), granting it would re-open a secret through a planted link.
+            let named_inside = self.read_denies.iter().any(|d| given.starts_with(d) || given.starts_with(resolve_best_effort(d)));
+            let lands_inside = denied.iter().any(|d| a.starts_with(d));
+            if lands_inside && !named_inside {
                 continue;
             }
             // Exact contradiction (the SAME path is both read-denied and
@@ -408,7 +424,7 @@ impl Policy {
             let inner: Vec<PathBuf> =
                 denied.iter().filter(|d| d.starts_with(a) && d.as_path() != a.as_path()).cloned().collect();
             if inner.is_empty() {
-                out.push(a.clone());
+                out.push(a.to_path_buf());
             } else {
                 carve(a, &inner, &mut out);
             }
@@ -534,6 +550,61 @@ impl Profile {
     }
 }
 
+/// Resolve a path's symlinks as far as it exists: canonicalize the nearest
+/// existing ancestor and reattach the rest. Lets a rule on a not-yet-existing
+/// file under a symlinked directory land where a write through the link would
+/// create it. Falls back to the path unchanged if nothing resolves.
+pub fn resolve_best_effort(path: &Path) -> PathBuf {
+    if let Ok(c) = path.canonicalize() {
+        return c;
+    }
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path;
+    while let Some(parent) = cur.parent() {
+        if let Some(name) = cur.file_name() {
+            suffix.push(name.to_owned());
+        }
+        if let Ok(c) = parent.canonicalize() {
+            let mut out = c;
+            for s in suffix.iter().rev() {
+                out.push(s);
+            }
+            return out;
+        }
+        cur = parent;
+    }
+    path.to_path_buf()
+}
+
+impl Policy {
+    /// A writable root that is a symlink grants its TARGET. Refuse one whose target
+    /// is not inside another (non-symlink) writable root: following it would grant
+    /// a directory nobody named (e.g. a link planted by an earlier run).
+    pub fn check_symlinked_roots(&self) -> Result<(), String> {
+        let plain: Vec<PathBuf> = self
+            .writable_roots
+            .iter()
+            .filter(|r| !std::fs::symlink_metadata(r).map(|m| m.file_type().is_symlink()).unwrap_or(false))
+            .map(|r| resolve_best_effort(r))
+            .collect();
+        for r in &self.writable_roots {
+            let is_link = std::fs::symlink_metadata(r).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+            if is_link {
+                let target = resolve_best_effort(r);
+                if !plain.iter().any(|p| target.starts_with(p)) {
+                    return Err(format!(
+                        "writable root {} is a symlink to {}, which is outside the other writable roots; \
+                         name the real directory instead",
+                        r.display(),
+                        target.display()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 fn deny(path: PathBuf, even_if_absent: bool) -> FsRule {
     FsRule { path, access: Access::Deny, even_if_absent }
 }
@@ -565,7 +636,14 @@ fn carve(dir: &Path, denied: &[PathBuf], out: &mut Vec<PathBuf>) {
             Ok(m) => m,
             Err(_) => continue,
         };
-        if !meta.is_dir() || meta.file_type().is_symlink() {
+        if meta.file_type().is_symlink() {
+            // Never grant a symlink entry: the rule would be opened through the
+            // link and land on its TARGET, which may be a denied path or lie
+            // outside the territory. The target keeps whatever its own real path
+            // is granted (reads and writes through the link check the target).
+            continue;
+        }
+        if !meta.is_dir() {
             // A regular file here that is not itself denied stays writable.
             if !denied.iter().any(|d| d == &path) {
                 out.push(path);
@@ -835,6 +913,8 @@ mod tests {
         fs::create_dir_all(root.join("a/nested/.git/hooks")).unwrap();
         fs::create_dir_all(root.join("a/nested/.git/objects")).unwrap();
         fs::create_dir_all(root.join("a/other")).unwrap();
+        // The allow-list is on real paths (Landlock matches inodes); compare on them.
+        let root = root.canonicalize().unwrap();
 
         let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
         let allow = policy.linux_write_allowlist();
@@ -1005,6 +1085,7 @@ mod tests {
         }
         fs::create_dir_all(&deep).unwrap();
         fs::write(root.join("shallow.txt"), b"x").unwrap();
+        let (root, deep) = (root.canonicalize().unwrap(), deep.canonicalize().unwrap());
 
         let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
         let allow = policy.linux_write_allowlist();
