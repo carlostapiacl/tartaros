@@ -1,4 +1,4 @@
-//! Win32 side of the backend. Everything here was first measured in the W0 spike.
+//! Win32 side of the backend.
 
 use std::ffi::{c_void, OsStr};
 use std::mem::{size_of, zeroed};
@@ -750,11 +750,21 @@ pub(crate) fn run(policy: &Policy, command: &[String]) -> Result<RunOutcome, Run
         let program = program.is_absolute().then_some(program);
 
         let mut journal = Journal::open(&tag, Some(&format!("tartaros.{tag}"))).map_err(err)?;
-        let made = make_placeholders(policy, &mut journal).map_err(err)?;
+        // On any failure before the agent runs, the placeholders and ACLs have
+        // already been undone (make_placeholders / apply_plan clean up their own),
+        // so the journal describes nothing left on disk: drop it with finish().
+        let made = match make_placeholders(policy, &mut journal) {
+            Ok(m) => m,
+            Err(e) => {
+                journal.finish();
+                return Err(err(e));
+            }
+        };
         let saved = match apply_plan(policy, program, &mut journal, |path, grant| apply(path, &container.sid_str, grant)) {
             Ok(s) => s,
             Err(e) => {
                 remove_placeholders(&made);
+                journal.finish();
                 return Err(e);
             }
         };
@@ -1023,15 +1033,24 @@ impl SandboxUser {
             return Err(format!("CryptUnprotectData: {}", std::io::Error::last_os_error()));
         }
         let bytes = std::slice::from_raw_parts_mut(out.pbData, out.cbData as usize);
-        let mut password: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        // Exact capacity, so the Vec never reallocates and leaves a copy of the
+        // password in freed memory.
+        let mut password: Vec<u16> = Vec::with_capacity(bytes.len() / 2 + 1);
+        password.extend(bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])));
         password.push(0);
         for b in bytes.iter_mut() {
             std::ptr::write_volatile(b, 0);
         }
         LocalFree(out.pbData as *mut c_void);
+        let zero = |p: &mut Vec<u16>| {
+            for c in p.iter_mut() {
+                std::ptr::write_volatile(c, 0);
+            }
+        };
         let mut sid: PSID = null_mut();
         let ws = wide(OsStr::new(&sid_str));
         if ConvertStringSidToSidW(ws.as_ptr(), &mut sid) == 0 {
+            zero(&mut password);
             return Err(format!("bad sandbox SID {sid_str}: {}", std::io::Error::last_os_error()));
         }
         let profile_key = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid_str}");
@@ -1061,11 +1080,18 @@ pub(crate) fn run_sandbox_user(policy: &Policy, command: &[String]) -> Result<Ru
         let program = Path::new(&command[0]);
         let program = program.is_absolute().then_some(program);
         let mut journal = Journal::open(&tag, None).map_err(err)?;
-        let made = make_placeholders(policy, &mut journal).map_err(err)?;
+        let made = match make_placeholders(policy, &mut journal) {
+            Ok(m) => m,
+            Err(e) => {
+                journal.finish();
+                return Err(err(e));
+            }
+        };
         let saved = match apply_plan(policy, program, &mut journal, |path, grant| apply_user(path, &user.sid_str, grant)) {
             Ok(s) => s,
             Err(e) => {
                 remove_placeholders(&made);
+                journal.finish();
                 return Err(e);
             }
         };

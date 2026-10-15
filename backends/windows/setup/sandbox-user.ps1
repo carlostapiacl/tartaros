@@ -63,9 +63,11 @@ function Set-Rights([string]$Sid, [bool]$Add) {
             $vals = if ($m) { ($m -split '=', 2)[1].Trim() -split ',' | Where-Object { $_ } } else { @() }
             $vals = @($vals | Where-Object { $_ -ne "*$Sid" })
             if ($Add) { $vals += "*$Sid" }
-            # An empty value would clear the right for everyone else too: skip it
-            # and let secedit leave the existing assignment alone.
-            if ($vals.Count -gt 0) { "$r = $($vals -join ',')" }
+            # On removal, emit the line even when empty so secedit actually clears
+            # the assignment (our SID may have been its only holder). $vals already
+            # dropped only our SID, so any other holders are still listed. On add
+            # the list is never empty.
+            if (($vals.Count -gt 0) -or (-not $Add)) { "$r = $($vals -join ',')" }
         }
         @('[Unicode]', 'Unicode=yes', '[Version]', 'signature="$CHICAGO$"', 'Revision=1', '[Privilege Rights]') + $lines |
             Set-Content -Encoding Unicode "$tmp\new.inf"
@@ -82,6 +84,7 @@ function Install {
     if (-not (Test-Path $ProfileDir -PathType Container)) { throw "no such directory: $ProfileDir" }
     Add-Type -AssemblyName System.Security
 
+    $priorProfile = (Get-ItemProperty -Path $KeyPath -Name ProfileDir -ErrorAction SilentlyContinue).ProfileDir
     $existing = Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue
     if ($existing -and -not (Test-Path $KeyPath)) {
         throw "a local user '$UserName' exists that this script did not create; refusing to adopt it"
@@ -107,19 +110,25 @@ function Install {
         }
     }
 
-    # Password: DPAPI machine scope, in a key the sandbox group cannot read.
+    # Who installs: only this SID (plus SYSTEM/Admins) may read the key. DPAPI
+    # LocalMachine can be decrypted by any local user, so the key's DACL is the
+    # real boundary; granting Builtin Users read would hand every local account
+    # the sandbox password (and thus a logon as the sandbox user).
+    $installer = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    # Password: DPAPI machine scope, in a key only the installer and admins can read.
     $blob = [Security.Cryptography.ProtectedData]::Protect(
         [Text.Encoding]::Unicode.GetBytes($plain), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
     $plain = $null
     if (-not (Test-Path $KeyPath)) { New-Item -Path $KeyPath -Force | Out-Null }
     $acl = New-Object Security.AccessControl.RegistrySecurity
-    $acl.SetSecurityDescriptorSddlForm("O:BAD:P(D;OICI;KA;;;$gsid)(A;OICI;KA;;;SY)(A;OICI;KA;;;BA)(A;OICI;KR;;;BU)")
+    $acl.SetSecurityDescriptorSddlForm("O:BAD:P(D;OICI;KA;;;$gsid)(A;OICI;KA;;;SY)(A;OICI;KA;;;BA)(A;OICI;KR;;;$installer)")
     Set-Acl -Path $KeyPath -AclObject $acl
     Set-ItemProperty -Path $KeyPath -Name User -Value $UserName
     Set-ItemProperty -Path $KeyPath -Name Sid -Value $sid
     Set-ItemProperty -Path $KeyPath -Name GroupSid -Value $gsid
     Set-ItemProperty -Path $KeyPath -Name Blob -Value $blob -Type Binary
     Set-ItemProperty -Path $KeyPath -Name ProfileDir -Value $ProfileDir
+    Set-ItemProperty -Path $KeyPath -Name Installer -Value $installer
 
     # Off the logon screen; no network, batch, service or RDP logon.
     if (-not (Test-Path $HideKey)) { New-Item -Path $HideKey -Force | Out-Null }
@@ -134,7 +143,12 @@ function Install {
     New-NetFirewallRule -DisplayName "$FwGroup (in)" -Group $FwGroup -Direction Inbound -Action Block -LocalUser $sddl -Profile Any | Out-Null
 
     # Read on the runner's profile: the neutral model reads everything except
-    # what the policy denies; the backend adds those denies per run.
+    # what the policy denies; the backend adds those denies per run. Note: this
+    # grant persists between runs, not only during one. If a previous install
+    # pointed at a different profile, drop that grant first.
+    if ($priorProfile -and ($priorProfile -ne $ProfileDir) -and (Test-Path $priorProfile)) {
+        icacls $priorProfile /remove:g "*${gsid}" /C /Q | Out-Null
+    }
     icacls $ProfileDir /grant "*${gsid}:(OI)(CI)(RX)" /C /Q | Out-Null
 
     # Create the profile now (first logon), so runs find USERPROFILE/TEMP.
@@ -160,6 +174,11 @@ function Uninstall {
     if (Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $UserName }
     if (Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue) { Remove-LocalGroup -Name $GroupName }
     if (Test-Path $KeyPath) { Remove-Item -Path $KeyPath -Recurse -Force }
+    # Drop the now-empty parent key if nothing else lives under HKLM\SOFTWARE	artaros.
+    $parent = Split-Path $KeyPath -Parent
+    if ((Test-Path $parent) -and -not (Get-ChildItem $parent -ErrorAction SilentlyContinue) -and -not (Get-ItemProperty $parent -ErrorAction SilentlyContinue).PSObject.Properties.Where({ $_.Name -notlike 'PS*' })) {
+        Remove-Item -Path $parent -Force -ErrorAction SilentlyContinue
+    }
     Write-Output 'uninstalled'
 }
 
