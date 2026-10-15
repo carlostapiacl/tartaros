@@ -5,6 +5,25 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **Renaming a plain sub-directory of a writable root no longer fails (macOS).**
+  The ancestor-move-blocking (which stops a protected path being relocated out of
+  its deny) was applied to every nested handoff NAME under a writable root,
+  including names that do not exist, so it pinned `file-write-unlink` on every
+  ancestor directory and a legitimate `mv src src2` on a plain directory was denied.
+  `Policy::gitdir_pointer_handoff` now returns only EXISTING surfaces (the absent
+  names are already covered any-depth by the Seatbelt regex), so plain directory
+  renames work while the protection is unchanged.
+
+### Hardening
+- **Moving the whole `.git` dir aside is blocked (macOS).** An agent could
+  `mv .git .git-moved && mkdir .git` and plant a fresh `.git/config`/hooks at the
+  original path while the protected inodes travelled with the moved dir. macOS now
+  denies `file-write-unlink` on the `.git` directory itself (writes inside it —
+  objects/refs — stay allowed). Closes `trust-handoff-git-dir-replace` on macOS;
+  the Linux case stays open (Landlock governs rename by the parent's write access)
+  and is documented in `docs/limits.md`.
+
 ## [0.1.0-alpha.2] — 2026-10-15
 
 ### Fixed

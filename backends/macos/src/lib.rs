@@ -11,7 +11,7 @@
 
 use tartaros_core::{
     Access, Backend, Collector, EffectSink, FsRule, Network, Policy, PolicyError, RunError,
-    RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES,
+    RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES, HANDOFF_HOME_NAMES,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -508,7 +508,7 @@ fn build_profile(policy: &Policy) -> String {
     // any-depth — defeats the ancestor-rename move (wherever the path lands under
     // the root it still matches; outside the root is not writable anyway).
     for root in &policy.writable_roots {
-        emit_handoff_regex(&mut p, root);
+        emit_handoff_regex(&mut p, root, policy.protect_home_handoff);
     }
     // A `.git` pointer file (worktree/submodule) can repoint the repo at a gitdir
     // elsewhere under a writable root; its hooks/config have no `.git` ancestor, so
@@ -673,7 +673,7 @@ fn emit_deny(p: &mut String, path: &Path, roots: &[PathBuf]) {
 /// cannot escape it (it would still match under the root, and outside the root
 /// is not writable). Absent paths are covered too — the pattern does not require
 /// the path to exist, which is the point of a pre-planting defense.
-fn emit_handoff_regex(p: &mut String, root: &Path) {
+fn emit_handoff_regex(p: &mut String, root: &Path, home: bool) {
     let root_re = regex_escape(&root.to_string_lossy());
     let mut emit = |name: &str| {
         let name_re = regex_escape(name);
@@ -689,6 +689,15 @@ fn emit_handoff_regex(p: &mut String, root: &Path) {
     for name in HANDOFF_GIT_NAMES {
         emit(name);
     }
+    // Opt-in home-handoff names (shell rc, .gitconfig, .ripgreprc): emitted as the
+    // same any-depth regex so an ABSENT one is covered too (the gitdir-pointer
+    // emit_deny path only pins EXISTING surfaces, by design, to keep plain
+    // directory renames working). Only when the policy opted in.
+    if home {
+        for name in HANDOFF_HOME_NAMES {
+            emit(name);
+        }
+    }
     // Submodule gitdirs: `.git/modules/<name>/{hooks,config}` at any depth — the
     // `.git/hooks`/`.git/config` patterns above do not match these (different
     // path). `.*` spans nested submodules too. Contents (objects/refs) stay
@@ -698,6 +707,15 @@ fn emit_handoff_regex(p: &mut String, root: &Path) {
     ));
     p.push_str(&format!(
         "(deny file-write* (regex #\"^{root_re}(/.*)?/\\.git/modules/.*/config$\"))\n"
+    ));
+    // The `.git` DIRECTORY itself: deny unlink/rename (but NOT writes inside it —
+    // objects/refs stay writable for git). Without this, moving the whole `.git`
+    // aside and creating a fresh one at the same path re-points the host's git at
+    // planted hooks/config while the protected inodes travel untouched. The
+    // hooks/config patterns above protect the children, not the parent dir. Scoped
+    // to `.git` only, so a plain sub-directory rename is unaffected. Any depth.
+    p.push_str(&format!(
+        "(deny file-write-unlink (regex #\"^{root_re}(/.*)?/\\.git$\"))\n"
     ));
 }
 

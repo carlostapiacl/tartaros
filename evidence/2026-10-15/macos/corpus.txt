@@ -2,32 +2,32 @@ tartaros-bench · backend=macos
 
   -- egress-udp-raw-denied (SKIPPED: not for macos)
 /bin/sh: forbidden.txt: Operation not permitted
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rename-into-territory-69395/outside/config to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rename-into-territory-69395/work/stolen: Operation not permitted
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rename-out-of-territory-69395/work/data.txt to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rename-out-of-territory-69395/outside/data.txt: Operation not permitted
-rm: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rm-under-read-deny-ancestor-69395/base/outside/protected.txt: Operation not permitted
-sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-single-file-grant-69395/work/sibling.txt: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rename-into-territory-81392/outside/config to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rename-into-territory-81392/work/stolen: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rename-out-of-territory-81392/work/data.txt to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rename-out-of-territory-81392/outside/data.txt: Operation not permitted
+rm: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-rm-under-read-deny-ancestor-81392/base/outside/protected.txt: Operation not permitted
+sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-single-file-grant-81392/work/sibling.txt: Operation not permitted
   -- filesystem-tmp-shm-not-shared (SKIPPED: not for macos)
-truncate: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-truncate-outside-69395/outside/db.sqlite: Operation not permitted
-rm: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-unlink-outside-69395/outside/keep.txt: Operation not permitted
-sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-absent-path-69395/work/denied.lock: Operation not permitted
-mkdir: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-absent-path-69395/work/gone/leaf: Operation not permitted
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-rename-bypass-69395/work/protected to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-rename-bypass-69395/work/p2: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-symlink-alias-69395/work/alias/cfg: Operation not permitted
-sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-truncate-unlink-69395/work/protected/cfg: Operation not permitted
-sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-truncate-unlink-69395/work/protected/cfg: Operation not permitted
-rm: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-truncate-unlink-69395/work/protected/cfg: Operation not permitted
-rm: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-unlink-recreate-69395/work/policy.lock: Operation not permitted
-sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-unlink-recreate-69395/work/policy.lock: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-via-symlink-spelling-69395/work/repo/hooks/pre-push: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-reallow-inside-deny-69395/vault/other: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-dangling-symlink-create-outside-69395/work/dangle: Operation not permitted
-ln: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-hardlink-create-write-out-69395/work/second-name: Operation not permitted
-ln: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-hardlink-widen-write-69395/work/t: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-dangling-create-69395/work/dangling: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-escape-69395/work/link/secret: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-file-out-agent-made-69395/work/made: Operation not permitted
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-rename-out-69395/work/made to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-rename-out-69395/work/link-to-dir/file: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-write-outside-territory-69395/outside.txt: Operation not permitted
+truncate: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-truncate-outside-81392/outside/db.sqlite: Operation not permitted
+rm: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-unlink-outside-81392/outside/keep.txt: Operation not permitted
+sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-absent-path-81392/work/denied.lock: Operation not permitted
+mkdir: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-absent-path-81392/work/gone/leaf: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-rename-bypass-81392/work/protected to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-rename-bypass-81392/work/p2: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-symlink-alias-81392/work/alias/cfg: Operation not permitted
+sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-truncate-unlink-81392/work/protected/cfg: Operation not permitted
+sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-truncate-unlink-81392/work/protected/cfg: Operation not permitted
+rm: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-truncate-unlink-81392/work/protected/cfg: Operation not permitted
+rm: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-unlink-recreate-81392/work/policy.lock: Operation not permitted
+sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-unlink-recreate-81392/work/policy.lock: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-deny-via-symlink-spelling-81392/work/repo/hooks/pre-push: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-filesystem-write-reallow-inside-deny-81392/vault/other: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-dangling-symlink-create-outside-81392/work/dangle: Operation not permitted
+ln: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-hardlink-create-write-out-81392/work/second-name: Operation not permitted
+ln: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-hardlink-widen-write-81392/work/t: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-dangling-create-81392/work/dangling: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-escape-81392/work/link/secret: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-file-out-agent-made-81392/work/made: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-rename-out-81392/work/made to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-symlink-rename-out-81392/work/link-to-dir/file: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-fs-write-outside-territory-81392/outside.txt: Operation not permitted
   -- trust-handoff-materialize-absent (SKIPPED: not for macos)
   -- ipc-unix-socket-outside (SKIPPED: not for macos)
   -- isolate-net-egress (SKIPPED: not for macos)
@@ -60,30 +60,30 @@ sh: {effect_log}: Operation not permitted
 /usr/local/Cellar/pyenv/2.6.3/libexec/pyenv-latest: line 58: cannot create temp file for here document: Operation not permitted
 /usr/local/Cellar/pyenv/2.6.3/libexec/pyenv-latest: line 58: cannot create temp file for here document: Operation not permitted
   -- network-vsock-denied (SKIPPED: not for macos)
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-deny-nested-69395/vault/mine/settings.json: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-inside-deny-writable-ancestor-69395/base/denied/secret.txt: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-inside-deny-69395/vault/other-secret: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-symlink-into-deny-69395/home/.ssh/id_rsa: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-symlink-no-reopen-69395/proj/docs/id_rsa: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-symlink-no-reopen-69395/home/.ssh/id_rsa: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-trailing-slash-nested-deny-69395/priv/pub/secret/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-writable-carveout-trailing-slash-69395/secrets/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-alt-spelling-69395/vault/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-backslash-name-69395/tree/a\b: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-bracket-dir-69395/tree/[user-id]/secret: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-given-via-symlink-69395/vault/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-link-dotdot-69395/elsewhere/file: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-not-reopened-by-nested-writable-69395/vault/key: Operation not permitted
-ls: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-not-reopened-by-nested-writable-69395/vault: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-deny-nested-81392/vault/mine/settings.json: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-inside-deny-writable-ancestor-81392/base/denied/secret.txt: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-inside-deny-81392/vault/other-secret: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-symlink-into-deny-81392/home/.ssh/id_rsa: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-symlink-no-reopen-81392/proj/docs/id_rsa: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-symlink-no-reopen-81392/home/.ssh/id_rsa: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-trailing-slash-nested-deny-81392/priv/pub/secret/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-allow-writable-carveout-trailing-slash-81392/secrets/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-alt-spelling-81392/vault/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-backslash-name-81392/tree/a\b: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-bracket-dir-81392/tree/[user-id]/secret: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-given-via-symlink-81392/vault/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-link-dotdot-81392/elsewhere/file: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-not-reopened-by-nested-writable-81392/vault/key: Operation not permitted
+ls: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-not-reopened-by-nested-writable-81392/vault: Operation not permitted
   -- read-deny-proc-magic-symlink (SKIPPED: not for macos)
   -- read-deny-root-carve-out (SKIPPED: not for macos)
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlink-bypass-69395/work/link: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlink-entry-69395/work/secrets/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlinked-dir-69395/work/dotfiles/private/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlinked-dir-69395/work/proj/.private/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-trailing-slash-nested-write-deny-69395/work/secrets/sub/token: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-under-write-deny-69395/work/proj/secrets/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-wins-exact-tie-69395/vault/sec/key.txt: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlink-bypass-81392/work/link: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlink-entry-81392/work/secrets/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlinked-dir-81392/work/dotfiles/private/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-symlinked-dir-81392/work/proj/.private/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-trailing-slash-nested-write-deny-81392/work/secrets/sub/token: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-under-write-deny-81392/work/proj/secrets/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny-wins-exact-tie-81392/vault/sec/key.txt: Operation not permitted
   -- resource-memory-limit (SKIPPED: not for macos)
   -- resource-process-limit (SKIPPED: not for macos)
   -- root-mknod-device-denied (SKIPPED: not for macos)
@@ -91,57 +91,59 @@ cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-read-deny
   -- seccomp-attack-surface (SKIPPED: not for macos)
   -- seccomp-io-uring-denied (SKIPPED: not for macos)
   -- seccomp-new-mount-api-denied (SKIPPED: not for macos)
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secret-read-inside-writable-69395/work/.secrets/token: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secret-read-deny-69395/vault/key: Operation not permitted
-sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-69395/home/.aws/config: Operation not permitted
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-69395/home/replacement to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-69395/home/.aws/config: Operation not permitted
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-69395/home/.aws to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-69395/home/aws2: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secret-read-inside-writable-81392/work/.secrets/token: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secret-read-deny-81392/vault/key: Operation not permitted
+sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-81392/home/.aws/config: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-81392/home/replacement to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-81392/home/.aws/config: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-81392/home/.aws to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-home-credentials-in-writable-81392/home/aws2: Operation not permitted
   -- secrets-proc-host-process-links (SKIPPED: not for macos)
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-allow-symlink-into-deny-69395/work/docs/id_rsa: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-allow-symlink-into-deny-69395/vault/id_rsa: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-after-chmod-69395/work/cfg/secrets/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-also-write-denied-69395/work/.secrets/token: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-case-fold-69395/VAULT/KEY: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-case-fold-69395/Vault/key: Operation not permitted
-ls: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-dir-listing-69395/home/.aws: Operation not permitted
-cat: /System/Volumes/Data/private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-firmlink-69395/vault/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-on-symlinked-path-69395/home/.aws/credentials: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-on-symlinked-path-69395/dotfiles/aws/credentials: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-path-special-chars-69395/my vault "prod" (x)/key: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-prefix-collision-69395/home/.ssh/id_ed25519: Operation not permitted
-not-a-keygrep: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-single-file-69395/home/.netrc: Operation not permitted
-grep: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-symlinked-entry-69395/home/.netrc: Operation not permitted
-grep: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-symlinked-entry-69395/dotfiles/netrc: Operation not permitted
-cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-under-write-denied-ancestor-69395/work/cfg/secrets/key: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-ancestor-rename-69395/work/a/n2/.git/hooks/pre-commit: No such file or directory
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-bracketed-root-69395/w[o]rk/.git/hooks to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-bracketed-root-69395/w[o]rk/.git/hooks-moved: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-bracketed-root-69395/w[o]rk/.git/hooks/pre-commit: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-bracketed-root-69395/w[o]rk/secrets/key: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-claude-commands-69395/work/a/b/.claude/commands/evil.md: Operation not permitted
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-git-config-move-aside-69395/work/.git/config to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-git-config-move-aside-69395/work/.git/config.aside: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-git-config-69395/work/repo/.git/config: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-gitdir-pointer-69395/common/gitdir/hooks/pre-commit: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-gitignored-repo-69395/work/sub/.git/hooks/pre-commit: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-mcp-json-69395/work/proj/.mcp.json: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-nested-git-hook-69395/work/a/nested/.git/hooks/pre-commit: Operation not permitted
-mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-rename-over-hook-69395/work/evil.sh to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-rename-over-hook-69395/work/.git/hooks/pre-commit: Operation not permitted
-sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-submodule-hook-69395/work/.git/modules/m/hooks/pre-commit: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-symlinked-claude-dir-69395/work/proj/.claude/commands/evil.md: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-unreadable-at-compile-69395/work/locked/.git/config: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-worktree-gitfile-69395/work/main/.git/hooks/post-checkout: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-absent-deep-69395/work/a/b/c/policy.json: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-backslash-absent-69395/work/c\d/file: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-covers-nested-root-69395/work/proj/out/x: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-allow-symlink-into-deny-81392/work/docs/id_rsa: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-allow-symlink-into-deny-81392/vault/id_rsa: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-after-chmod-81392/work/cfg/secrets/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-also-write-denied-81392/work/.secrets/token: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-case-fold-81392/VAULT/KEY: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-case-fold-81392/Vault/key: Operation not permitted
+ls: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-dir-listing-81392/home/.aws: Operation not permitted
+cat: /System/Volumes/Data/private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-firmlink-81392/vault/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-on-symlinked-path-81392/home/.aws/credentials: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-on-symlinked-path-81392/dotfiles/aws/credentials: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-path-special-chars-81392/my vault "prod" (x)/key: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-prefix-collision-81392/home/.ssh/id_ed25519: Operation not permitted
+not-a-keygrep: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-single-file-81392/home/.netrc: Operation not permitted
+grep: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-symlinked-entry-81392/home/.netrc: Operation not permitted
+grep: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-symlinked-entry-81392/dotfiles/netrc: Operation not permitted
+cat: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-secrets-read-deny-under-write-denied-ancestor-81392/work/cfg/secrets/key: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-ancestor-rename-81392/work/a/n2/.git/hooks/pre-commit: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-bracketed-root-81392/w[o]rk/.git/hooks to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-bracketed-root-81392/w[o]rk/.git/hooks-moved: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-bracketed-root-81392/w[o]rk/.git/hooks/pre-commit: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-bracketed-root-81392/w[o]rk/secrets/key: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-claude-commands-81392/work/a/b/.claude/commands/evil.md: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-git-config-move-aside-81392/work/.git/config to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-git-config-move-aside-81392/work/.git/config.aside: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-git-config-81392/work/repo/.git/config: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-git-dir-replace-81392/work/.git to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-git-dir-replace-81392/work/.git-moved: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-gitdir-pointer-81392/common/gitdir/hooks/pre-commit: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-gitignored-repo-81392/work/sub/.git/hooks/pre-commit: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-mcp-json-81392/work/proj/.mcp.json: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-nested-git-hook-81392/work/a/nested/.git/hooks/pre-commit: Operation not permitted
+mv: rename /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-rename-over-hook-81392/work/evil.sh to /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-rename-over-hook-81392/work/.git/hooks/pre-commit: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-root-inside-hooks-81392/repo/.git/hooks/inner/pre-commit: Operation not permitted
+sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-submodule-hook-81392/work/.git/modules/m/hooks/pre-commit: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-symlinked-claude-dir-81392/work/proj/.claude/commands/evil.md: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-unreadable-at-compile-81392/work/locked/.git/config: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-trust-handoff-worktree-gitfile-81392/work/main/.git/hooks/post-checkout: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-absent-deep-81392/work/a/b/c/policy.json: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-backslash-absent-81392/work/c\d/file: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-covers-nested-root-81392/work/proj/out/x: Operation not permitted
 /bin/sh: name: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-dangling-link-target-69395/here/new: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-existing-file-chmod-69395/work/repo/.git/config.lock: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-glob-chars-dir-69395/[WIP] project/keep/file: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-inside-writable-69395/work/protected/evil: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-link-dotdot-69395/elsewhere/down/in/file: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-noncanonical-absent-69395/work/protected/evil: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-symlinked-parent-69395/work/proj2/.cfg: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-symlinked-parent-69395/work/real-proj/.cfg: Operation not permitted
-/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-under-dotdot-root-69395/p/real/file: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-dangling-link-target-81392/here/new: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-existing-file-chmod-81392/work/repo/.git/config.lock: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-glob-chars-dir-81392/[WIP] project/keep/file: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-inside-writable-81392/work/protected/evil: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-link-dotdot-81392/elsewhere/down/in/file: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-noncanonical-absent-81392/work/protected/evil: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-symlinked-parent-81392/work/proj2/.cfg: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-symlinked-parent-81392/work/real-proj/.cfg: Operation not permitted
+/bin/sh: /private/var/folders/hd/md4fxw015r555bjzt1qw_xw80000gn/T/secbench-write-deny-under-dotdot-root-81392/p/real/file: Operation not permitted
 
 scenario                             sev      result
 ----------------------------------------------------------------
@@ -227,11 +229,13 @@ trust-handoff-claude-commands        critical PASS  attack rc=1 control rc=0
 trust-handoff-editor-dirs            high     PASS  attack rc=1 control rc=0
 trust-handoff-git-config-move-aside  critical PASS  attack rc=1 control rc=0
 trust-handoff-git-config             critical PASS  attack rc=1 control rc=0
+trust-handoff-git-dir-replace        critical PASS  attack rc=1 control rc=0
 trust-handoff-gitdir-pointer         critical PASS  attack rc=1 control rc=0
 trust-handoff-gitignored-repo        critical PASS  attack rc=1 control rc=0
 trust-handoff-mcp-json               critical PASS  attack rc=1 control rc=0
 trust-handoff-nested-git-hook        critical PASS  attack rc=1 control rc=0
 trust-handoff-rename-over-hook       critical PASS  attack rc=1 control rc=0
+trust-handoff-root-inside-hooks      critical PASS  attack rc=1 control rc=0
 trust-handoff-shell-rc               high     PASS  attack rc=1 control rc=0
 trust-handoff-submodule-hook         critical PASS  attack rc=1 control rc=0
 trust-handoff-symlinked-claude-dir   critical PASS  attack rc=1 control rc=0
@@ -255,19 +259,19 @@ write-deny-trailing-slash            high     PASS  attack rc=1 control rc=0
 write-deny-under-dotdot-root         high     PASS  attack rc=1 control rc=0
 
 == scorecard ==
-  scenarios run:           108
-  PASS:                    108/108
+  scenarios run:           110
+  PASS:                    110/110
   VIOLATION:               0  (critical: 0)  [target 0]
   CONTROL_BROKE:           0  [target 0]
   INFRA_ERROR:             0  [target 0]
   VACUOUS (no baseline):   0  [target 0]
   SKIPPED (other OS):      30
   UNSUPPORTED (host caps): 0
-  coverage:                108/108 applicable scenarios ran
+  coverage:                110/110 applicable scenarios ran
 
-environment: macos · kernel 24.6.0 · tartaros-bench 0.1.0-alpha
+environment: macos · kernel 24.6.0 · tartaros-bench 0.1.0-alpha.2
 host caps:  landlock=false cgroup_v2=false userns=false
 
 report: reports/last.json
 
-OK: all 108 scenarios passed (30 skipped, 0 unsupported, coverage 108/108)
+OK: all 110 scenarios passed (30 skipped, 0 unsupported, coverage 110/110)

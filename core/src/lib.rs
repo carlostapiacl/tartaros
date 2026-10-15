@@ -528,7 +528,16 @@ impl Policy {
                 .iter()
                 .any(|w| r.path.starts_with(&resolve_best_effort(w)));
             let is_dotgit_path = r.path.components().any(|c| c.as_os_str() == ".git");
-            if under_root && !is_dotgit_path {
+            // Only EXISTING surfaces. A pointer target is a real relocated gitdir;
+            // the absent config-handoff NAMES (`.mcp.json`, `.vscode`, … at any
+            // depth) are already covered any-depth by the Seatbelt regex, so adding
+            // them here is redundant — and because the macOS backend emits these as
+            // literal denies with ancestor move-blocking, an absent name would pin
+            // `file-write-unlink` on every ancestor DIRECTORY, making a plain
+            // sub-directory un-renamable (`mv src src2` fails) for no protection
+            // gain. Gating on existence keeps the pointer-target protection and lets
+            // legitimate directory renames through.
+            if under_root && !is_dotgit_path && r.path.exists() {
                 out.push(r.path);
             }
         }
@@ -1180,6 +1189,32 @@ mod tests {
         assert!(denied(&gitconfig), ".gitconfig must be denied under protect_home_handoff");
         // A non-handoff file stays writable even with the flag on.
         assert!(!on_rules.iter().any(|r| r.path == root.join("src.rs")));
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn gitdir_pointer_handoff_only_returns_existing_surfaces() {
+        let tmp = std::env::temp_dir().join(format!("sbx-ptr-{}", std::process::id()));
+        fs::create_dir_all(tmp.join("work/src")).unwrap();
+        // An EXISTING config-handoff dir is a live surface; absent names are not.
+        fs::create_dir_all(tmp.join("work/.vscode")).unwrap();
+        // Canonicalize so the raw rule paths and the under-root check align on the
+        // real path (macOS temp dirs are /var -> /private/var symlinks).
+        let root = tmp.join("work").canonicalize().unwrap();
+
+        let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
+        let surfaces = policy.gitdir_pointer_handoff();
+        // The existing .vscode is returned (so the macOS backend pins it).
+        assert!(surfaces.iter().any(|p| p == &root.join(".vscode")),
+            "an existing handoff dir must be returned");
+        // Absent config names (e.g. src/.mcp.json) are NOT — they are covered by the
+        // any-depth regex, and returning them would pin unlink on `src` (breaking a
+        // plain `mv src src2`).
+        assert!(!surfaces.iter().any(|p| p == &resolve_best_effort(&root.join("src/.mcp.json"))),
+            "an absent handoff name must not be returned");
+        assert!(!surfaces.iter().any(|p| p == &resolve_best_effort(&root.join("src"))),
+            "a plain sub-directory must not be pinned");
 
         fs::remove_dir_all(&tmp).ok();
     }
