@@ -11,7 +11,7 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, LocalFree, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW, ConvertStringSidToSidW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, GetSecurityInfo,
     SetEntriesInAclW, SetNamedSecurityInfoW, SetSecurityInfo, EXPLICIT_ACCESS_W, GRANT_ACCESS,
     NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SE_FILE_OBJECT, SE_WINDOW_OBJECT, TRUSTEE_IS_SID,
@@ -26,6 +26,8 @@ use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION, PSID,
     SECURITY_CAPABILITIES, TOKEN_ELEVATION, TOKEN_QUERY, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
+use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB};
+use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_ANY};
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -38,7 +40,7 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     GetUserObjectInformationW, SetProcessWindowStation, UOI_NAME,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, GetCurrentProcess, GetExitCodeProcess, InitializeProcThreadAttributeList,
+    CreateProcessW, CreateProcessWithLogonW, GetCurrentProcess, LOGON_WITH_PROFILE, STARTUPINFOW, GetExitCodeProcess, InitializeProcThreadAttributeList,
     OpenProcessToken, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
     WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
@@ -280,6 +282,22 @@ unsafe fn restore(saved: Vec<Saved>) -> Vec<String> {
     failed
 }
 
+/// Sandbox-user tier: add the user's ACEs (see `crate::user_aces`) to the path's
+/// explicit ones, keeping its protection flag. Deny ACEs bind a user SID, so the
+/// DACL is never frozen; restore puts the original SDDL back.
+unsafe fn apply_user(path: &Path, sid: &str, grant: Grant) -> Result<Saved, String> {
+    let wp = native(path);
+    let before = read_sddl(&wp).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (flags, aces) = split_dacl(&before)?;
+    let mut v: Vec<String> = aces.iter().filter(|a| !ace_field(a, 1).contains("ID")).cloned().collect();
+    v.extend(crate::user_aces(grant, sid));
+    // Deny ACEs first, as canonical order requires.
+    v.sort_by_key(|a| !a.starts_with("D;"));
+    let new = format!("D:{flags}{}", v.iter().map(|a| format!("({a})")).collect::<String>());
+    write_sddl(&wp, &new).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Saved { path: wp, sddl: before })
+}
+
 // ------------------------------------------------------------ desktop / winsta
 
 unsafe fn grant_handle(h: HANDLE, sid: PSID, mask: u32) -> Result<(*mut c_void, *mut ACL), String> {
@@ -446,7 +464,9 @@ impl Drop for Container {
     }
 }
 
-fn env_block(policy: &Policy, temp: Option<&Path>) -> Option<Vec<u16>> {
+/// `temp`: TEMP/TMP for the child. `profile`: the sandbox user's profile, which
+/// replaces the caller's USERPROFILE/APPDATA/LOCALAPPDATA (and TEMP/TMP).
+fn env_block(policy: &Policy, temp: Option<&Path>, profile: Option<&Path>) -> Option<Vec<u16>> {
     let mut vars: Vec<(String, String)> = match policy.child_env() {
         None => return None, // inherit_env: the caller opted into full passthrough
         Some(v) => v,
@@ -461,7 +481,19 @@ fn env_block(policy: &Policy, temp: Option<&Path>) -> Option<Vec<u16>> {
             vars.push((k, v));
         }
     }
-    if let Some(t) = temp {
+    let profile_temp = profile.map(|p| p.join("AppData").join("Local").join("Temp"));
+    if let Some(p) = profile {
+        let set = [
+            ("USERPROFILE", p.to_path_buf()),
+            ("APPDATA", p.join("AppData").join("Roaming")),
+            ("LOCALAPPDATA", p.join("AppData").join("Local")),
+        ];
+        vars.retain(|(k, _)| !set.iter().any(|(n, _)| n.eq_ignore_ascii_case(k)));
+        for (n, v) in set {
+            vars.push((n.into(), v.to_string_lossy().into_owned()));
+        }
+    }
+    if let Some(t) = temp.or(profile_temp.as_deref()) {
         vars.retain(|(k, _)| !k.eq_ignore_ascii_case("TEMP") && !k.eq_ignore_ascii_case("TMP"));
         let t = t.to_string_lossy().into_owned();
         vars.push(("TEMP".into(), t.clone()));
@@ -491,45 +523,11 @@ pub(crate) fn run(policy: &Policy, command: &[String]) -> Result<RunOutcome, Run
     );
     unsafe {
         let container = Container::create(&tag).map_err(err)?;
-        let absent = crate::absent_write_denies(policy);
-        if !absent.is_empty() {
-            let list: Vec<String> = absent.iter().map(|p| p.display().to_string()).collect();
-            return Err(err(format!(
-                "unsupported on Windows: write-deny on a path that does not exist yet ({}); \
-                 an ACL cannot name a missing file, so the run is refused instead of left able to create it",
-                list.join(", ")
-            )));
-        }
-        if policy.materialize_absent_handoff {
-            materialize(policy).map_err(err)?;
-        }
+        prepare(policy)?;
         let program = Path::new(&command[0]);
         let program = program.is_absolute().then_some(program);
 
-        let mut saved = Vec::new();
-        let debug = std::env::var_os("TARTAROS_DEBUG").is_some();
-        for (path, grant) in crate::acl_plan(policy, program) {
-            if debug {
-                eprintln!("[acl] {grant:?} {}", path.display());
-            }
-            match apply(&path, &container.sid_str, grant) {
-                Ok(s) => {
-                    if debug {
-                        eprintln!("      -> {}", read_sddl(&native(&path)).unwrap_or_default());
-                        if let Ok(rd) = std::fs::read_dir(&path) {
-                            for e in rd.flatten().take(3) {
-                                eprintln!("      child {} -> {}", e.file_name().to_string_lossy(), read_sddl(&native(&e.path())).unwrap_or_default());
-                            }
-                        }
-                    }
-                    saved.push(s)
-                }
-                Err(e) => {
-                    let failed = restore(saved);
-                    return Err(err(format!("applying ACLs: {e}{}", restore_note(&failed))));
-                }
-            }
-        }
+        let saved = apply_plan(policy, program, |path, grant| apply(path, &container.sid_str, grant))?;
 
         let outcome = spawn(policy, command, &container, &tag);
         let failed = restore(saved);
@@ -539,6 +537,52 @@ pub(crate) fn run(policy: &Policy, command: &[String]) -> Result<RunOutcome, Run
         }
         outcome
     }
+}
+
+/// Checks and preparation shared by both tiers, before any ACL is touched.
+fn prepare(policy: &Policy) -> Result<(), RunError> {
+    let absent = crate::absent_write_denies(policy);
+    if !absent.is_empty() {
+        let list: Vec<String> = absent.iter().map(|p| p.display().to_string()).collect();
+        return Err(err(format!(
+            "unsupported on Windows: write-deny on a path that does not exist yet ({}); \
+             an ACL cannot name a missing file, so the run is refused instead of left able to create it",
+            list.join(", ")
+        )));
+    }
+    if policy.materialize_absent_handoff {
+        materialize(policy).map_err(err)?;
+    }
+    Ok(())
+}
+
+/// Apply the policy's ACL plan with `apply_one`; on the first failure, undo what
+/// was applied and fail.
+unsafe fn apply_plan(
+    policy: &Policy,
+    program: Option<&Path>,
+    apply_one: impl Fn(&Path, Grant) -> Result<Saved, String>,
+) -> Result<Vec<Saved>, RunError> {
+    let mut saved = Vec::new();
+    let debug = std::env::var_os("TARTAROS_DEBUG").is_some();
+    for (path, grant) in crate::acl_plan(policy, program) {
+        if debug {
+            eprintln!("[acl] {grant:?} {}", path.display());
+        }
+        match apply_one(&path, grant) {
+            Ok(s) => {
+                if debug {
+                    eprintln!("      -> {}", read_sddl(&native(&path)).unwrap_or_default());
+                }
+                saved.push(s)
+            }
+            Err(e) => {
+                let failed = restore(saved);
+                return Err(err(format!("applying ACLs: {e}{}", restore_note(&failed))));
+            }
+        }
+    }
+    Ok(saved)
 }
 
 /// Create the absent top-level trust-handoff paths so they exist to be protected
@@ -586,36 +630,8 @@ fn restore_note(failed: &[String]) -> String {
 
 unsafe fn spawn(policy: &Policy, command: &[String], c: &Container, tag: &str) -> Result<RunOutcome, RunError> {
     // Job first; the process starts suspended and is assigned before it runs,
-    // so nothing executes outside the caps. No BREAKAWAY_OK.
-    let job = CreateJobObjectW(null(), null());
-    if job.is_null() {
-        return Err(err(format!("CreateJobObject: {}", std::io::Error::last_os_error())));
-    }
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if let Some(b) = policy.max_memory_bytes {
-        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
-        limits.JobMemoryLimit = b as usize;
-    }
-    if let Some(n) = policy.max_processes {
-        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
-        limits.BasicLimitInformation.ActiveProcessLimit = n.min(u32::MAX as u64) as u32;
-    }
-    if let Some(s) = policy.max_cpu_secs {
-        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_TIME;
-        limits.BasicLimitInformation.PerJobUserTimeLimit = (s as i64) * 10_000_000;
-    }
-    if SetInformationJobObject(
-        job,
-        JobObjectExtendedLimitInformation,
-        &limits as *const _ as *const c_void,
-        size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-    ) == 0
-    {
-        let e = std::io::Error::last_os_error();
-        CloseHandle(job);
-        return Err(err(format!("SetInformationJobObject: {e}")));
-    }
+    // so nothing executes outside the caps.
+    let job = make_job(policy)?;
 
     let mut desk = match private_desktop(c.sid, tag) {
         Ok(d) => d,
@@ -658,28 +674,14 @@ unsafe fn spawn(policy: &Policy, command: &[String], c: &Container, tag: &str) -
     si.StartupInfo.lpDesktop = desk.lp.as_mut_ptr();
     si.lpAttributeList = list;
 
-    let mut cmdline = String::new();
-    for (i, a) in command.iter().enumerate() {
-        if i > 0 {
-            cmdline.push(' ');
-        }
-        quote(a, &mut cmdline);
-    }
+    let cmdline = command_line(command);
     if std::env::var_os("TARTAROS_DEBUG").is_some() {
         eprintln!("[cmdline] {cmdline}");
     }
     let mut cmdline_w = wide(OsStr::new(&cmdline));
     let temp = c.folder().map(|f| f.join("Temp")).filter(|t| t.is_dir());
-    let env = env_block(policy, temp.as_deref());
-    // The working directory: the first writable root that is a directory (a
-    // root may be a single file; then its parent).
-    let cwd = policy
-        .writable_roots
-        .iter()
-        .find(|p| p.is_dir())
-        .cloned()
-        .or_else(|| policy.writable_roots.first().and_then(|p| p.parent().map(Path::to_path_buf)))
-        .map(|p| native(&p));
+    let env = env_block(policy, temp.as_deref(), None);
+    let cwd = working_dir(policy);
 
     let mut pi: PROCESS_INFORMATION = zeroed();
     let created = CreateProcessW(
@@ -711,20 +713,252 @@ unsafe fn spawn(policy: &Policy, command: &[String], c: &Container, tag: &str) -
         return Err(err(format!("AssignProcessToJobObject: {e}")));
     }
     ResumeThread(pi.hThread);
-    let wait_ms = policy.timeout.map_or(INFINITE, |t| t.as_millis().min(u32::MAX as u128 - 1) as u32);
-    let exit_code = if WaitForSingleObject(pi.hProcess, wait_ms) == WAIT_TIMEOUT {
-        TerminateJobObject(job, EXIT_TIMEOUT as u32);
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        EXIT_TIMEOUT
-    } else {
-        let mut code: u32 = 0;
-        GetExitCodeProcess(pi.hProcess, &mut code);
-        code as i32
-    };
+    let exit_code = wait_exit(policy, job, pi.hProcess);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     // Teardown: closing the job kills every descendant still alive (no daemon
     // outlives the run), then the private desktop goes.
+    CloseHandle(job);
+    desk.close();
+    Ok(RunOutcome { exit_code })
+}
+
+// ------------------------------------------------------- sandbox-user tier
+
+const SBX_KEY: &str = r"SOFTWARE\tartaros\SandboxUser";
+
+/// One value from HKLM\SOFTWARE\tartaros\SandboxUser (or another HKLM key).
+unsafe fn reg_value(key: &str, name: &str) -> Result<Vec<u8>, String> {
+    let (k, n) = (wide(OsStr::new(key)), wide(OsStr::new(name)));
+    let mut len = 0u32;
+    let rc = RegGetValueW(HKEY_LOCAL_MACHINE, k.as_ptr(), n.as_ptr(), RRF_RT_ANY, null_mut(), null_mut(), &mut len);
+    if rc != 0 {
+        return Err(format!("HKLM\\{key}\\{name}: error {rc}"));
+    }
+    let mut buf = vec![0u8; len as usize];
+    let rc = RegGetValueW(HKEY_LOCAL_MACHINE, k.as_ptr(), n.as_ptr(), RRF_RT_ANY, null_mut(), buf.as_mut_ptr() as *mut c_void, &mut len);
+    if rc != 0 {
+        return Err(format!("HKLM\\{key}\\{name}: error {rc}"));
+    }
+    buf.truncate(len as usize);
+    Ok(buf)
+}
+
+/// A REG_SZ / REG_EXPAND_SZ value (RegGetValue expands the latter).
+unsafe fn reg_string(key: &str, name: &str) -> Result<String, String> {
+    let b = reg_value(key, name)?;
+    let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+    Ok(String::from_utf16_lossy(&w))
+}
+
+/// The sandbox identity installed by `setup/sandbox-user.ps1`.
+struct SandboxUser {
+    name: Vec<u16>,
+    sid_str: String,
+    sid: PSID,
+    /// UTF-16, NUL-terminated; wiped on drop.
+    password: Vec<u16>,
+    profile: Option<PathBuf>,
+}
+
+impl SandboxUser {
+    unsafe fn load() -> Result<Self, String> {
+        let missing = |e: String| format!("sandbox user not installed (run setup/sandbox-user.ps1 install, elevated, once): {e}");
+        let name = reg_string(SBX_KEY, "User").map_err(missing)?;
+        let sid_str = reg_string(SBX_KEY, "Sid").map_err(missing)?;
+        let mut blob = reg_value(SBX_KEY, "Blob").map_err(missing)?;
+        let input = CRYPT_INTEGER_BLOB { cbData: blob.len() as u32, pbData: blob.as_mut_ptr() };
+        let mut out = CRYPT_INTEGER_BLOB { cbData: 0, pbData: null_mut() };
+        if CryptUnprotectData(&input, null_mut(), null(), null(), null(), CRYPTPROTECT_UI_FORBIDDEN, &mut out) == 0 {
+            return Err(format!("CryptUnprotectData: {}", std::io::Error::last_os_error()));
+        }
+        let bytes = std::slice::from_raw_parts_mut(out.pbData, out.cbData as usize);
+        let mut password: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        password.push(0);
+        for b in bytes.iter_mut() {
+            std::ptr::write_volatile(b, 0);
+        }
+        LocalFree(out.pbData as *mut c_void);
+        let mut sid: PSID = null_mut();
+        let ws = wide(OsStr::new(&sid_str));
+        if ConvertStringSidToSidW(ws.as_ptr(), &mut sid) == 0 {
+            return Err(format!("bad sandbox SID {sid_str}: {}", std::io::Error::last_os_error()));
+        }
+        let profile_key = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid_str}");
+        let profile = reg_string(&profile_key, "ProfileImagePath").ok().map(PathBuf::from).filter(|p| p.is_absolute());
+        Ok(SandboxUser { name: wide(OsStr::new(&name)), sid_str, sid, password, profile })
+    }
+}
+
+impl Drop for SandboxUser {
+    fn drop(&mut self) {
+        for c in self.password.iter_mut() {
+            unsafe { std::ptr::write_volatile(c, 0) };
+        }
+        unsafe { LocalFree(self.sid) };
+    }
+}
+
+pub(crate) fn run_sandbox_user(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let tag = format!("u{}.{}", std::process::id(), COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    unsafe {
+        let user = SandboxUser::load().map_err(err)?;
+        prepare(policy)?;
+        let program = Path::new(&command[0]);
+        let program = program.is_absolute().then_some(program);
+        let saved = apply_plan(policy, program, |path, grant| apply_user(path, &user.sid_str, grant))?;
+        let outcome = spawn_user(policy, command, &user, &tag);
+        let failed = restore(saved);
+        if !failed.is_empty() {
+            return Err(err(format!("run finished but ACL restore failed:{}", restore_note(&failed))));
+        }
+        outcome
+    }
+}
+
+/// The job every run lives in: kill-on-close plus the policy's caps. No
+/// BREAKAWAY_OK, so nothing the agent starts can leave it.
+unsafe fn make_job(policy: &Policy) -> Result<HANDLE, RunError> {
+    let job = CreateJobObjectW(null(), null());
+    if job.is_null() {
+        return Err(err(format!("CreateJobObject: {}", std::io::Error::last_os_error())));
+    }
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if let Some(b) = policy.max_memory_bytes {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+        limits.JobMemoryLimit = b as usize;
+    }
+    if let Some(n) = policy.max_processes {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        limits.BasicLimitInformation.ActiveProcessLimit = n.min(u32::MAX as u64) as u32;
+    }
+    if let Some(s) = policy.max_cpu_secs {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_TIME;
+        limits.BasicLimitInformation.PerJobUserTimeLimit = (s as i64) * 10_000_000;
+    }
+    if SetInformationJobObject(
+        job,
+        JobObjectExtendedLimitInformation,
+        &limits as *const _ as *const c_void,
+        size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+    ) == 0
+    {
+        let e = std::io::Error::last_os_error();
+        CloseHandle(job);
+        return Err(err(format!("SetInformationJobObject: {e}")));
+    }
+    Ok(job)
+}
+
+fn command_line(command: &[String]) -> String {
+    let mut cmdline = String::new();
+    for (i, a) in command.iter().enumerate() {
+        if i > 0 {
+            cmdline.push(' ');
+        }
+        quote(a, &mut cmdline);
+    }
+    cmdline
+}
+
+/// The working directory: the first writable root that is a directory (a root
+/// may be a single file; then its parent).
+fn working_dir(policy: &Policy) -> Option<Vec<u16>> {
+    policy
+        .writable_roots
+        .iter()
+        .find(|p| p.is_dir())
+        .cloned()
+        .or_else(|| policy.writable_roots.first().and_then(|p| p.parent().map(Path::to_path_buf)))
+        .map(|p| native(&p))
+}
+
+/// Wait for the process, enforcing the policy timeout; returns its exit code.
+unsafe fn wait_exit(policy: &Policy, job: HANDLE, process: HANDLE) -> i32 {
+    let wait_ms = policy.timeout.map_or(INFINITE, |t| t.as_millis().min(u32::MAX as u128 - 1) as u32);
+    if WaitForSingleObject(process, wait_ms) == WAIT_TIMEOUT {
+        TerminateJobObject(job, EXIT_TIMEOUT as u32);
+        WaitForSingleObject(process, INFINITE);
+        EXIT_TIMEOUT
+    } else {
+        let mut code: u32 = 0;
+        GetExitCodeProcess(process, &mut code);
+        code as i32
+    }
+}
+
+/// Launch as the sandbox user: CreateProcessWithLogonW (the only logon-and-spawn
+/// call a non-admin may make), suspended, on a private desktop, assigned to the
+/// job before it runs a single instruction.
+unsafe fn spawn_user(policy: &Policy, command: &[String], user: &SandboxUser, tag: &str) -> Result<RunOutcome, RunError> {
+    let job = make_job(policy)?;
+    let mut desk = match private_desktop(user.sid, tag) {
+        Ok(d) => d,
+        Err(e) => {
+            CloseHandle(job);
+            return Err(err(format!("private desktop: {e}")));
+        }
+    };
+    let mut si: STARTUPINFOW = zeroed();
+    si.cb = size_of::<STARTUPINFOW>() as u32;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    for (which, slot) in [
+        (STD_INPUT_HANDLE, &mut si.hStdInput),
+        (STD_OUTPUT_HANDLE, &mut si.hStdOutput),
+        (STD_ERROR_HANDLE, &mut si.hStdError),
+    ] {
+        let h = GetStdHandle(which);
+        if !h.is_null() && h as isize != -1 {
+            SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        }
+        *slot = h;
+    }
+    si.lpDesktop = desk.lp.as_mut_ptr();
+
+    let cmdline = command_line(command);
+    if std::env::var_os("TARTAROS_DEBUG").is_some() {
+        eprintln!("[cmdline] {cmdline} (as {})", user.sid_str);
+    }
+    let mut cmdline_w = wide(OsStr::new(&cmdline));
+    let env = env_block(policy, None, user.profile.as_deref());
+    let cwd = working_dir(policy);
+    let domain = wide(OsStr::new("."));
+    let mut pi: PROCESS_INFORMATION = zeroed();
+    let created = CreateProcessWithLogonW(
+        user.name.as_ptr(),
+        domain.as_ptr(),
+        user.password.as_ptr(),
+        LOGON_WITH_PROFILE,
+        null(),
+        cmdline_w.as_mut_ptr(),
+        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+        env.as_ref().map_or(null(), |e| e.as_ptr() as *const c_void),
+        cwd.as_ref().map_or(null(), |c| c.as_ptr()),
+        &si,
+        &mut pi,
+    );
+    if created == 0 {
+        let e = std::io::Error::last_os_error();
+        desk.close();
+        CloseHandle(job);
+        return Err(err(format!("CreateProcessWithLogon {}: {e}", command[0])));
+    }
+    if AssignProcessToJobObject(job, pi.hProcess) == 0 {
+        let e = std::io::Error::last_os_error();
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        desk.close();
+        CloseHandle(job);
+        return Err(err(format!("AssignProcessToJobObject: {e}")));
+    }
+    ResumeThread(pi.hThread);
+    let exit_code = wait_exit(policy, job, pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
     CloseHandle(job);
     desk.close();
     Ok(RunOutcome { exit_code })
