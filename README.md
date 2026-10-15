@@ -7,7 +7,7 @@ reach, its network stays on an allowlist, your repo stays clean, and nothing it
 leaves behind runs later outside the box. Every one of those claims is a test in
 this repo that you can run on your own machine.
 
-Open source (Apache-2.0) · macOS and Linux · one binary · no Docker, no VM, no
+Open source (Apache-2.0) · macOS and Linux · Windows backend (preview) · one binary · no Docker, no VM, no
 account, no login · written in Rust · `v0.1.0-alpha`
 
 [Website](https://carlostapiacl.github.io/tartaros/) ·
@@ -95,6 +95,7 @@ other sandboxes (sandbox-runtime, nono, Codex, bubblewrap) and credited in
 | macOS 15.7, Seatbelt | **106 / 106 pass** (the rest are Linux-only) |
 | Mutation check, both OS: remove one protection, the suite must catch it | **0 blind spots** |
 | microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle | **20 / 20 pass** |
+| Windows 10 19045, corpus `--ignore-os` (backend via the bench) | **AppContainer 85/111, dedicated-user 90/111**, 0 critical violations ([limits](docs/limits.md)) |
 
 Scenarios still open on some host are kept in `security-bench/corpus-known-gaps/`
 with their measured status, not hidden — see [Know the edges](#know-the-edges).

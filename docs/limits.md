@@ -136,3 +136,37 @@ than you asked for.
   and planting a fresh config; and on **macOS**, moving an entire writable root into
   another writable root (`mv root otherRoot/x`) — the same move is already blocked on
   Linux. Until each is closed with a fix and a scenario, these are not claimed.
+
+## Windows (backend exercised by the corpus; `tartaros run` wiring is next)
+
+Measured on Windows 10 19045 (non-elevated session). The backend is driven
+through the conformance bench today; the `tartaros run` CLI does not yet dispatch
+to it on Windows, and `--log` has no Windows collectors.
+
+- **Reads differ by tier.** The `appcontainer` tier is deny-by-default: only
+  granted paths are readable, which is stricter than the neutral model and breaks
+  the read-model controls (a deny-with-a-reopened-branch, a single-file read-deny).
+  The `sandbox-user` tier follows the neutral model (read everything except
+  `--read-deny`), matching Linux/macOS, at the cost of a one-time admin setup.
+  Pick the tier that matches what you need.
+- **Loopback on the `sandbox-user` tier.** Egress is blocked by per-SID firewall
+  rules the setup installs, but the Windows firewall does not filter loopback, so a
+  service on `127.0.0.1` stays reachable to the agent on that tier. The
+  `appcontainer` tier has no network capability at all, so loopback is closed too.
+  A broker-backed loopback policy is future work.
+- **`WRITE_RESTRICTED` runner (sandbox-user).** The command runs under a
+  write-restricted token whose restricting SIDs are the user and `Everyone`;
+  `Everyone` is required or the loader cannot start a process. A path writable by
+  `Everyone` therefore stays writable (one writable only by `Users` or
+  `Authenticated Users` does not). Whether a restricted child can inject into its
+  own (unrestricted) runner process in the shared job is not yet proven closed.
+- **Absent handoff names in an arbitrary subdirectory.** Absent handoff names are
+  held for the run with placeholder directories in a writable root, a repo root, a
+  repo's `.git/hooks`, and a nested name whose first component exists. A brand-new
+  name in an arbitrary subdirectory (e.g. `sub/.gitattributes`) is not held.
+- **Concurrent runs on the same writable root.** One run per invocation is the
+  model. Two live runs over the same root can race their DACL save/restore; the
+  ACL journal recovers only after a run has ended, not between two live ones.
+- **No egress broker, domain allowlist or local-port scoping yet** — the network
+  is all-or-nothing (denied), refused with a clear message when a policy asks for
+  more.
