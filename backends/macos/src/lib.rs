@@ -538,6 +538,22 @@ fn build_profile(policy: &Policy) -> String {
         } else {
             p.push_str(&format!("(deny file-read* (subpath {}))\n", quote(real)));
             p.push_str(&format!("(deny file-read* (literal {}))\n", quote(real)));
+            // A read-denied secret inside a writable root can be relocated out of
+            // its deny by renaming an ancestor directory (the ancestors are
+            // writable). Block unlink/rename on the secret and on each ancestor up
+            // to the writable root, exactly as emit_deny does for write-denies, so
+            // the deny cannot be escaped by moving the path.
+            if let Some(root) = policy.writable_roots.iter().map(|r| canonical_best_effort(r)).find(|r| real.starts_with(r)) {
+                p.push_str(&format!("(deny file-write-unlink (literal {}))\n", quote(real)));
+                let mut cur = real.parent();
+                while let Some(dir) = cur {
+                    if dir == root.as_path() {
+                        break;
+                    }
+                    p.push_str(&format!("(deny file-write-unlink (literal {}))\n", quote(dir)));
+                    cur = dir.parent();
+                }
+            }
         }
     }
 
