@@ -154,10 +154,18 @@ to it on Windows, and `--log` has no Windows collectors.
   (`tartaros-wfp`), since the Windows firewall exempts loopback and cannot. The
   backend verifies that filter is present before each run and refuses (fail-closed)
   if it is not; it no longer assumes it. The `appcontainer` tier has no network
-  capability at all, so its egress and loopback are closed by construction. A
-  broker-backed domain allowlist (permit the agent to reach only an egress broker
-  on a loopback port, which `tartaros-wfp --allow-loopback-port` already carves)
-  is the remaining network step.
+  capability at all, so its egress and loopback are closed by construction.
+- **Domain-scoped egress on the `sandbox-user` tier.** `--allow-domain` is
+  supported: the one-time setup (`install -BrokerPort <port>`) carves a WFP permit
+  for `127.0.0.1:<port>` and blocks everything else; at run time tartaros starts
+  the egress broker on that fixed port and points the agent's `HTTPS_PROXY` at it,
+  so the agent reaches only the allowlisted hosts and cannot connect anywhere
+  directly (measured: an allowed host's CONNECT returns 200, a non-allowed host
+  403, and a direct external socket is blocked by WFP). Without a configured
+  broker port, or on the `appcontainer` tier, `--allow-domain` is refused
+  fail-closed. Like the other backends this is a blind CONNECT tunnel (TLS
+  end-to-end, no SNI/cert inspection). A fixed port is required because a WFP
+  permit needs admin and is installed once at setup, not per run.
 - **`WRITE_RESTRICTED` runner (sandbox-user).** The command runs under a
   write-restricted token whose restricting SIDs are the user and `Everyone`;
   `Everyone` is required or the loader cannot start a process. A path writable by
