@@ -334,8 +334,11 @@ fn main() {
     let env = environment();
     // Host capabilities a scenario may require to be meaningful.
     let has_cap = |name: &str| match name {
-        "landlock" => env.landlock || OS == "macos",
-        "landlock-net" => env.landlock_net || OS == "macos",
+        // "landlock"/"landlock-net" name the Linux mechanism; what a contract
+        // needs is filesystem / network confinement, which macOS and the Windows
+        // backend provide by construction.
+        "landlock" => env.landlock || OS == "macos" || OS == "windows",
+        "landlock-net" => env.landlock_net || OS == "macos" || OS == "windows",
         "cgroup" => env.cgroup_v2,
         "userns" => env.userns,
         "root" => is_root(),
@@ -392,6 +395,13 @@ fn main() {
         // A policy the backend refuses up front (a guarantee it cannot enforce on
         // this OS, e.g. a PID namespace on Windows) is UNSUPPORTED, not an infra
         // error — unless refusing is exactly what the contract expects.
+        // Windows creates symlinks only with a privilege or Developer Mode; a
+        // contract whose fixture needs one would silently test something else.
+        if OS == "windows" && c.fixture.iter().any(|f| f.symlink_to.is_some()) && !can_symlink() {
+            println!("  ~~ {} (UNSUPPORTED: needs symlink creation: privilege or Developer Mode)", c.id);
+            unsupported += 1;
+            continue;
+        }
         if OS == "windows" && !c.unix_server.is_empty() {
             println!("  ~~ {} (UNSUPPORTED: unix_server fixtures not built on Windows)", c.id);
             unsupported += 1;
@@ -404,7 +414,15 @@ fn main() {
                 continue;
             }
         }
-        outcomes.push(run_scenario(c));
+        let o = run_scenario(c);
+        // A refusal the backend can only make once the fixture exists (e.g. a
+        // write-deny on a path that is absent) is a capability gap, not an error.
+        if o.infra_error && o.detail.contains("unsupported on ") {
+            println!("  ~~ {} (UNSUPPORTED: backend refuses at run: {})", o.id, o.detail.chars().take(110).collect::<String>());
+            unsupported += 1;
+            continue;
+        }
+        outcomes.push(o);
     }
 
     println!("\n{:<36} {:<8} result", "scenario", "sev");
@@ -791,11 +809,17 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
             if let Some(target) = &fi.symlink_to {
                 #[cfg(unix)]
                 let _ = std::os::unix::fs::symlink(sub(target), &p);
+                // Windows links are typed (file vs directory) and resolved
+                // relative to the link's folder; the target spelling uses '\'.
                 #[cfg(windows)]
-                let _ = if Path::new(&sub(target)).is_dir() {
-                    std::os::windows::fs::symlink_dir(sub(target), &p)
-                } else {
-                    std::os::windows::fs::symlink_file(sub(target), &p)
+                let _ = {
+                    let t = sub(target).replace('/', "\\");
+                    let resolved = Path::new(&p).parent().map(|d| d.join(&t)).unwrap_or_else(|| PathBuf::from(&t));
+                    if resolved.is_dir() {
+                        std::os::windows::fs::symlink_dir(&t, &p)
+                    } else {
+                        std::os::windows::fs::symlink_file(&t, &p)
+                    }
                 };
             } else if fi.dir {
                 let _ = std::fs::create_dir_all(&p);
