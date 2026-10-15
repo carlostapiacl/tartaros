@@ -32,6 +32,7 @@ mod namespace;
 mod cgroup;
 #[cfg(target_os = "linux")]
 mod landlock_probe;
+pub use landlock_probe::{landlock_fs_supported, landlock_net_supported};
 
 pub struct LandlockBackend;
 

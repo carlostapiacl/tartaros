@@ -5,7 +5,7 @@
 /// Probe (fail-closed, P0-2): can this kernel enforce Landlock filesystem rules?
 /// Builds a ruleset with HardRequirement — it errors if the capability is absent.
 /// Creates no restriction (never calls restrict_self); the fd is dropped.
-pub(crate) fn landlock_fs_supported() -> bool {
+pub fn landlock_fs_supported() -> bool {
     use landlock::{ABI, Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr};
     Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
@@ -16,7 +16,7 @@ pub(crate) fn landlock_fs_supported() -> bool {
 
 /// Probe (fail-closed, P0-2): can this kernel enforce Landlock TCP network rules
 /// (ABI v4, Linux >= 6.7)?
-pub(crate) fn landlock_net_supported() -> bool {
+pub fn landlock_net_supported() -> bool {
     use landlock::{AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr};
     Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
