@@ -1,0 +1,38 @@
+# derived from anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)
+id = "write-deny-link-dotdot"
+source = "anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# The write-deny is spelled through here/down -> link/../down/in, where here/link ->
+# ../elsewhere/in. So it really names elsewhere/down/in/file, and that file must stay
+# unchanged when written by its real name.
+[policy]
+writable_roots = ["{root}"]
+write_denies = ["{root}/here/down/file"]
+
+[[fixture]]
+path = "{root}/elsewhere/down/in/file"
+content = "original"
+[[fixture]]
+path = "{root}/elsewhere/in/other"
+content = "x"
+[[fixture]]
+path = "{root}/here/file"
+content = "x"
+[[fixture]]
+path = "{root}/here/link"
+symlink_to = "../elsewhere/in"
+[[fixture]]
+path = "{root}/here/down"
+symlink_to = "link/../down/in"
+
+[attack]
+cmd = "echo appended >> {root}/elsewhere/down/in/file"
+
+[control]
+cmd = "echo appended >> {root}/here/file"
+
+[assert]
+unchanged = "{root}/elsewhere/down/in/file"

@@ -1,0 +1,29 @@
+# derived from anthropics/sandbox-runtime test/sandbox/linux-mount-plan-record.test.ts (Apache-2.0)
+id = "read-deny-symlink-entry"
+source = "anthropics/sandbox-runtime test/sandbox/linux-mount-plan-record.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The read-deny entry is itself a symlink (home/sec -> work/secrets) whose
+# target lies INSIDE a writable root. The deny applies to where it resolves:
+# the secrets are hidden even though the agent may write around them.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/home/sec"]
+
+[[fixture]]
+path = "{root}/work/secrets/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/home/sec"
+symlink_to = "{root}/work/secrets"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat {root}/work/secrets/key"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

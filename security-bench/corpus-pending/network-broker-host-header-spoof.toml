@@ -1,0 +1,39 @@
+# HELD 2026-10-15: valuable broker scenario, but the bench's broker test harness
+# starts one broker per scenario on a fixed port; run in bulk they race (curl 52).
+# Reinstate once the harness assigns unique ports and waits for ready.
+# derived from anthropics/sandbox-runtime test/sandbox/request-filter.test.ts (Apache-2.0)
+id = "network-broker-host-header-spoof"
+source = "anthropics/sandbox-runtime test/sandbox/request-filter.test.ts (Apache-2.0)"
+category = "network"
+severity = "high"
+os = ["linux", "macos"]
+
+# The broker must decide on, and dial, the request TARGET (absolute-form URI or
+# CONNECT authority), never a Host header the agent controls. Here the target is
+# an internal address (refused) dressed up with a benign Host header. A broker
+# that routes or judges by Host would let it through.
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [19511]
+
+[broker]
+port = 19511
+token = "tok-host"
+[[broker.capability]]
+prefix = "/up"
+upstream_base = "http://127.0.0.1:19611"
+inject_header = "Authorization"
+inject_value = "Bearer never-seen"
+
+[[server]]
+port = 19611
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys\nfor req in (\"GET http://127.0.0.1:19611/ HTTP/1.1\\r\\nHost: example.com\\r\\n\",\"CONNECT 127.0.0.1:19611 HTTP/1.1\\r\\nHost: example.com:443\\r\\n\"):\n  s=socket.create_connection((\"127.0.0.1\",19511),4); s.settimeout(4)\n  s.sendall((req+\"X-Tartaros-Auth: tok-host\\r\\nConnection: close\\r\\n\\r\\n\").encode())\n  try: r=s.recv(64)\n  except Exception: r=b\"\"\n  s.close()\n  if r.split(b\" \")[1:2]==[b\"200\"]: sys.exit(0)\nsys.exit(1)'"
+
+[control]
+cmd = "curl -sS -o {root}/work/out --max-time 5 -H 'X-Tartaros-Auth: tok-host' http://127.0.0.1:19511/up/"

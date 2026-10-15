@@ -1,0 +1,26 @@
+# derived from openai/codex codex-rs/linux-sandbox/tests/suite/managed_proxy.rs::sandboxed_commands_have_a_seccomp_filtered_namespace_reaper and ::namespace_reaper_collects_orphaned_descendants (Apache-2.0)
+id = "isolation-pid1-reaper-filtered"
+source = "openai/codex codex-rs/linux-sandbox/tests/suite/managed_proxy.rs::sandboxed_commands_have_a_seccomp_filtered_namespace_reaper and ::namespace_reaper_collects_orphaned_descendants (Apache-2.0)"
+category = "isolation"
+severity = "medium"
+os = ["linux"]
+requires = ["userns"]
+
+# Under isolate_pids, PID 1 inside the namespace (our shim) must itself be under
+# seccomp — otherwise a process that can signal/ptrace-adjacent PID 1 inherits a
+# less-confined peer. Attack succeeds if /proc/1/status shows Seccomp: 0.
+# Control: an orphaned grandchild gets reaped (no zombie left behind).
+[policy]
+writable_roots = ["{root}/work"]
+isolate_pids = true
+harden_syscalls = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'awk \"/^Seccomp:/{print \\$2}\" /proc/1/status | grep -qx 0'"
+
+[control]
+cmd = "sh -c 'o=$(sh -c \"sleep 0.1 >/dev/null 2>&1 & echo \\$!\"); for i in $(seq 1 100); do [ -e /proc/$o ] || exit 0; grep -q \"^State:.*Z\" /proc/$o/status 2>/dev/null || true; sleep 0.02; done; exit 1'"

@@ -1,0 +1,35 @@
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-git-config"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# .git/config is passive RCE (core.fsmonitor, core.hooksPath, filters run by
+# the host's next `git`). tartaros protects it (HANDOFF_GIT_NAMES) but no
+# contract exercises it. The control is the other half of srt's guarantee:
+# the rest of .git (index, objects, refs) stays writable so git still works.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/repo/.git/config"
+content = "[core]\n\tbare = false\n"
+[[fixture]]
+path = "{root}/work/repo/.git/HEAD"
+content = "ref: refs/heads/main\n"
+[[fixture]]
+path = "{root}/work/repo/.git/objects"
+dir = true
+[[fixture]]
+path = "{root}/work/repo/.git/refs/heads"
+dir = true
+
+[attack]
+cmd = 'printf "[core]\\n\\tfsmonitor = /tmp/evil\\n" >> {root}/work/repo/.git/config'
+
+[control]
+cmd = "echo x > {root}/work/repo/.git/index && echo x > {root}/work/repo/.git/objects/obj && echo x > {root}/work/repo/.git/refs/heads/main"
+
+[assert]
+unchanged = "{root}/work/repo/.git/config"

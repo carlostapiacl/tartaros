@@ -1,0 +1,28 @@
+# derived from anthropics/sandbox-runtime test/sandbox/write-through-links.test.ts (Apache-2.0)
+id = "fs-symlink-file-out-agent-made"
+source = "anthropics/sandbox-runtime test/sandbox/write-through-links.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# Variant of fs-symlink-escape. Here the link points at a FILE (not a dir) outside
+# the root, and the agent creates the link itself inside its writable root, in the
+# same run. A write through it must land nowhere.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/file"
+content = "original"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "ln -s {root}/outside/file {root}/work/made && echo changed > {root}/work/made"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/outside/file"

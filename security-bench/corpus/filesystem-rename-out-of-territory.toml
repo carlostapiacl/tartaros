@@ -1,0 +1,29 @@
+# derived from nolabs-ai/nono crates/nono-cli/tests/execution_strategy_run.rs (same-FS rename / Landlock Refer, #1689) (Apache-2.0)
+# Moving a file from the territory to a path outside it is a rename (Landlock
+# REFER + MAKE_REG on the destination dir), not an open-for-write. It must be
+# denied, while a rename BETWEEN two directories inside the territory (what
+# atomic-write tooling does: write pending/x then mv x up) must keep working.
+id = "filesystem-rename-out-of-territory"
+source = "nolabs-ai/nono crates/nono-cli/tests/execution_strategy_run.rs (same-FS rename / Landlock Refer, #1689) (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/data.txt"
+content = "payload"
+[[fixture]]
+path = "{root}/outside"
+dir = true
+
+[attack]
+cmd = "mv {root}/work/data.txt {root}/outside/data.txt"
+
+[control]
+cmd = "sh -c 'mkdir -p {root}/work/pending && echo x > {root}/work/pending/r.json && mv {root}/work/pending/r.json {root}/work/r.json && test -f {root}/work/r.json'"
+
+[assert]
+absent = "{root}/outside/data.txt"

@@ -1,0 +1,38 @@
+# derived from anthropics/sandbox-runtime test/sandbox/deny-order-independence.test.ts, test/sandbox/read-deny-glob.test.ts (Apache-2.0)
+id = "filesystem-write-deny-via-symlink-spelling"
+source = "anthropics/sandbox-runtime test/sandbox/deny-order-independence.test.ts, test/sandbox/read-deny-glob.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The write-deny is written through a symlink chain that leaves the writable
+# area and comes back (work/away -> outside, outside/to-hooks -> work/repo/hooks).
+# The deny must protect the real target, so a direct write to it fails.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/away/to-hooks"]
+
+[[fixture]]
+path = "{root}/work/repo/hooks/pre-push"
+content = "ORIGINAL"
+[[fixture]]
+path = "{root}/outside"
+dir = true
+[[fixture]]
+path = "{root}/outside/to-hooks"
+symlink_to = "{root}/work/repo/hooks"
+[[fixture]]
+path = "{root}/work/away"
+symlink_to = "{root}/outside"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "echo EVIL > {root}/work/repo/hooks/pre-push"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/repo/hooks/pre-push"

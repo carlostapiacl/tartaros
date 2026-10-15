@@ -1,0 +1,29 @@
+# STATUS 2026-10-15 (known gap): macos=violation, linux=pass
+# derived from openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_renaming_protected_workspace_into_another_writable_root (Apache-2.0)
+id = "filesystem-writable-root-move-across-roots"
+source = "openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_renaming_protected_workspace_into_another_writable_root (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# Two writable roots; the first holds a write-denied file. Moving the whole
+# first root into the second must not launder the deny.
+[policy]
+writable_roots = ["{root}/work", "{root}/dest"]
+write_denies = ["{root}/work/locked"]
+
+[[fixture]]
+path = "{root}/work/locked/cfg"
+content = "PROTECTED"
+[[fixture]]
+path = "{root}/dest/keep"
+content = "x"
+
+[attack]
+cmd = "mv {root}/work {root}/dest/moved 2>/dev/null; echo EVIL > {root}/dest/moved/locked/cfg"
+
+[control]
+cmd = "echo ok > {root}/dest/f.txt"
+
+[assert]
+unchanged = "{root}/work/locked/cfg"

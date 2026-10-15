@@ -1,0 +1,31 @@
+# derived from anthropics/sandbox-runtime test/sandbox/linux-mount-plan-record.test.ts (Apache-2.0)
+id = "read-allow-symlink-into-deny"
+source = "anthropics/sandbox-runtime test/sandbox/linux-mount-plan-record.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A read_allow entry names a path in the project that is actually a symlink
+# planted (by the repo or an earlier run) into the read-denied ~/.ssh. If the
+# policy compiler canonicalizes the allow, it re-opens the secret. The allow
+# names the LINK, not its target, so nothing must be lifted.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/home/.ssh"]
+read_allows = ["{root}/work/docs"]
+
+[[fixture]]
+path = "{root}/home/.ssh/id_rsa"
+content = "PRIVATEKEY"
+[[fixture]]
+path = "{root}/work/docs"
+symlink_to = "{root}/home/.ssh"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'cat {root}/work/docs/id_rsa 2>/dev/null || cat {root}/home/.ssh/id_rsa'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

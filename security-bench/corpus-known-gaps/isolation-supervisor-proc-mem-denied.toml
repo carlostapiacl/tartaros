@@ -1,0 +1,30 @@
+# STATUS 2026-10-15 (known gap): linux=control-broke
+# derived from anthropics/sandbox-runtime test/docker-weak-sandbox.test.ts (Apache-2.0)
+id = "isolation-supervisor-proc-mem-denied"
+source = "anthropics/sandbox-runtime test/docker-weak-sandbox.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "critical"
+os = ["linux"]
+
+# The process that launched the agent (here the bench runner, in production the
+# tartaros supervisor) runs as the same uid and holds what the agent must not
+# have: the broker's secrets and the launcher env. With isolate_process_info the
+# agent must not be able to open the supervisor's /proc/<pid>/mem for writing,
+# or read its environ or cmdline. Same-uid ptrace-mode access is the gap, and
+# Yama ptrace_scope=0 hosts don't close it. The walk goes up from $PPID through
+# every ancestor that is not inside the sandbox.
+[policy]
+writable_roots = ["{root}/work"]
+isolate_process_info = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+# ATTACK: exit 0 if any ancestor's mem (rw) or environ (r) can be opened.
+[attack]
+cmd = "python3 -c 'import os,sys\np=os.getppid()\nwhile p>1:\n  for f,m in ((\"mem\",os.O_RDWR),(\"environ\",os.O_RDONLY)):\n    try:\n      os.close(os.open(\"/proc/%d/%s\"%(p,f),m)); sys.exit(0)\n    except OSError: pass\n  try:\n    p=int(open(\"/proc/%d/stat\"%p).read().rsplit(\")\",1)[1].split()[1])\n  except Exception: break\nsys.exit(1)'"
+
+# CONTROL: the agent can still read its own process info.
+[control]
+cmd = "sh -c 'cat /proc/self/status >/dev/null && echo ok > {root}/work/src/f.txt'"

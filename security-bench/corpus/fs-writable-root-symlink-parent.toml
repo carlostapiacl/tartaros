@@ -1,0 +1,31 @@
+# derived from anthropics/sandbox-runtime test/sandbox/symlink-boundary.test.ts (Apache-2.0)
+# and test/sandbox/symlink-write-path.test.ts (Apache-2.0)
+id = "fs-writable-root-symlink-parent"
+source = "anthropics/sandbox-runtime test/sandbox/symlink-boundary.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A write root that is a symlink to a BROADER scope (an ancestor; srt's case is
+# /tmp/claude -> /) must not widen the grant to that ancestor. Writing a sibling of
+# work/ through the link must fail.
+expect_refusal = true
+
+[policy]
+writable_roots = ["{root}/work", "{root}/work/up"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+[[fixture]]
+path = "{root}/work/up"
+symlink_to = "{root}"
+
+[attack]
+cmd = "echo escaped > {root}/work/up/escaped.txt"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+absent = "{root}/escaped.txt"

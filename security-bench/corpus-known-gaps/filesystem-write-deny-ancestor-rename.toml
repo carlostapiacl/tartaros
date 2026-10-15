@@ -1,0 +1,31 @@
+# STATUS 2026-10-15 (known gap): macos=pass, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/macos-deny-grouping.test.ts (Apache-2.0)
+id = "filesystem-write-deny-ancestor-rename"
+source = "anthropics/sandbox-runtime test/sandbox/macos-deny-grouping.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# A single LEAF file is write-denied (e.g. a worktree registry's commondir). Its
+# parent dir is otherwise writable, but moving that parent away and writing the
+# leaf at the new path must not work; the leaf keeps its content at its path.
+# The control proves the carve is narrow: siblings and new dirs stay writable.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/reg/e1/commondir"]
+
+[[fixture]]
+path = "{root}/work/reg/e1/commondir"
+content = "../.."
+[[fixture]]
+path = "{root}/work/reg/e1/other"
+content = "x"
+
+[attack]
+cmd = "mv {root}/work/reg/e1 {root}/work/reg/moved && echo EVIL > {root}/work/reg/moved/commondir"
+
+[control]
+cmd = "echo y > {root}/work/reg/e1/other && mkdir {root}/work/reg/fresh && echo z > {root}/work/reg/fresh/commondir"
+
+[assert]
+unchanged = "{root}/work/reg/e1/commondir"

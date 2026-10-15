@@ -1,0 +1,29 @@
+# derived from nolabs-ai/nono tests/integration/test_child_tool_boundaries.sh ("session sandbox writes granted single file") (Apache-2.0)
+# A writable grant on ONE FILE must not widen to its parent directory: siblings
+# stay unwritable. Landlock file rules carry only file rights; Seatbelt needs a
+# literal (not subpath) rule. NEEDS VERIFYING: that tartaros' writable_roots
+# accepts a file path (if it rejects it, this becomes a schema/feature gap).
+id = "filesystem-single-file-grant"
+source = "nolabs-ai/nono tests/integration/test_child_tool_boundaries.sh (\"session sandbox writes granted single file\") (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work/out.txt"]
+
+[[fixture]]
+path = "{root}/work/out.txt"
+content = "initial"
+[[fixture]]
+path = "{root}/work/sibling.txt"
+content = "SIBLING"
+
+[attack]
+cmd = "sh -c 'echo EVIL > {root}/work/sibling.txt'"
+
+[control]
+cmd = "sh -c 'echo updated > {root}/work/out.txt'"
+
+[assert]
+unchanged = "{root}/work/sibling.txt"

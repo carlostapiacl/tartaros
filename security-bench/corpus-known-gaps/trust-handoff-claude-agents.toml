@@ -1,0 +1,31 @@
+# STATUS 2026-10-15 (known gap): macos=pass, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-claude-agents"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# .claude/agents (srt) plus the siblings tartaros also protects (.claude/skills,
+# .claude/hooks, settings.local.json) — planting one is code a trusted agent
+# loads later. Only .claude/commands and settings.json are exercised today.
+# Control: an ordinary file elsewhere under .claude/ stays writable (srt checks
+# that the deny is not the whole .claude dir).
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.claude/agents"
+dir = true
+[[fixture]]
+path = "{root}/work/.claude/notes.txt"
+content = "ORIGINAL"
+
+[attack]
+cmd = 'for f in agents/x.md skills/x/SKILL.md hooks/x.sh settings.local.json; do (mkdir -p $(dirname {root}/work/.claude/$f) && echo pwned > {root}/work/.claude/$f) 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo ok >> {root}/work/.claude/notes.txt"
+
+[assert]
+absent = "{root}/work/.claude/agents/x.md"

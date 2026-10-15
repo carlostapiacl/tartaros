@@ -1,0 +1,29 @@
+# derived from anthropics/sandbox-runtime test/sandbox/brackets-that-spell-no-set.test.ts (Apache-2.0)
+id = "read-deny-bracket-dir"
+source = "anthropics/sandbox-runtime test/sandbox/brackets-that-spell-no-set.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "high"
+os = ["linux", "macos"]
+
+# Route folders are named [user-id], which has glob characters but isn't a valid set
+# (the range r-i runs backwards). A read-deny on that literal folder must cover it,
+# and must not be read as a class (which would hit u/ and miss [user-id]/).
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/tree/[user-id]"]
+
+[[fixture]]
+path = "{root}/tree/[user-id]/secret"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/tree/u/a.env"
+content = "public"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat '{root}/tree/[user-id]/secret'"
+
+[control]
+cmd = "cat {root}/tree/u/a.env >/dev/null && echo ok > {root}/work/src/f.txt"

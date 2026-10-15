@@ -1,0 +1,33 @@
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "write-deny-through-policy-symlink"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The POLICY spells the deny through a directory symlink (link -> decoy, e.g.
+# a repo that ships .claude as a symlink). The deny must land on the resolved
+# target and hold under both spellings. (fs-symlink-escape is the agent making
+# the link; here the link is in the policy path itself.)
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/link/settings.json"]
+
+[[fixture]]
+path = "{root}/work/decoy/settings.json"
+content = "{}"
+[[fixture]]
+path = "{root}/work/link"
+symlink_to = "{root}/work/decoy"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c '(echo pwned > {root}/work/link/settings.json) 2>/dev/null || (echo pwned > {root}/work/decoy/settings.json) 2>/dev/null'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/decoy/settings.json"

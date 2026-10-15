@@ -1,0 +1,28 @@
+# derived from anthropics/sandbox-runtime test/sandbox/macos-allow-local-binding.test.ts (Apache-2.0)
+id = "network-local-bind-denied"
+source = "anthropics/sandbox-runtime test/sandbox/macos-allow-local-binding.test.ts (Apache-2.0)"
+category = "network"
+severity = "high"
+os = ["linux", "macos"]
+requires = ["landlock-net"]
+
+# Granting an outbound loopback port must not also grant LISTENING: an agent that
+# can bind a TCP listener (IPv4 or IPv6 dual-stack mapped loopback) opens an
+# inbound channel other host processes can reach. Bind on an ephemeral port must
+# be denied; connecting to the granted port still works.
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [18011]
+
+[[server]]
+port = 18011
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys\nok=0\nfor fam,addr in ((socket.AF_INET,\"127.0.0.1\"),(socket.AF_INET6,\"::ffff:127.0.0.1\"),(socket.AF_INET6,\"::1\")):\n  try:\n    s=socket.socket(fam,socket.SOCK_STREAM)\n    if fam==socket.AF_INET6: s.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,0)\n    s.bind((addr,0)); s.listen(1); ok=1\n  except OSError: pass\nsys.exit(0 if ok else 1)'"
+
+[control]
+cmd = "curl -s -o {root}/work/src/out --max-time 4 http://127.0.0.1:18011/"

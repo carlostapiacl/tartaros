@@ -1,0 +1,32 @@
+# STATUS 2026-10-15 (known gap): macos=pass, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/linux-unmakeable-mount-point.test.ts (Apache-2.0)
+id = "write-deny-ancestor-move"
+source = "anthropics/sandbox-runtime test/sandbox/linux-unmakeable-mount-point.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A user write-deny on dir/policy.json. The agent moves the PARENT aside and
+# recreates dir/ as a fresh directory, then writes the "denied" path. The
+# handoff names have this (trust-handoff-ancestor-rename); a user write_deny
+# must hold the same way. If the move succeeds the original file is no longer
+# at its path, so `unchanged` fails too.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/dir/policy.json"]
+
+[[fixture]]
+path = "{root}/work/dir/policy.json"
+content = "ORIGINAL"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mv {root}/work/dir {root}/work/aside && mkdir {root}/work/dir && echo pwned > {root}/work/dir/policy.json"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/dir/policy.json"

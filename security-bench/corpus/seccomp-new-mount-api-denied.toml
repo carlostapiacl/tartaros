@@ -1,0 +1,25 @@
+# derived from anthropics/sandbox-runtime test/sandbox/linux-nested-userns.test.ts and seccomp-filter-generator.test.ts (Apache-2.0)
+id = "seccomp-new-mount-api-denied"
+source = "anthropics/sandbox-runtime test/sandbox/linux-nested-userns.test.ts and seccomp-filter-generator.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "medium"
+os = ["linux"]
+requires = ["root"]
+
+# The hardened set denies mount/umount2/pivot_root, but Linux 5.2+ has a second
+# mount API (fsopen/fsconfig/fsmount/move_mount/open_tree/mount_setattr) that a
+# list written against the old calls misses. As root, fsopen("tmpfs") succeeding
+# shows that API is reachable. Syscall 430 is fsopen on every architecture.
+[policy]
+writable_roots = ["{root}/work"]
+harden_syscalls = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,sys\nlibc=ctypes.CDLL(None,use_errno=True)\nsys.exit(0 if libc.syscall(430,b\"tmpfs\",0)>=0 else 1)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

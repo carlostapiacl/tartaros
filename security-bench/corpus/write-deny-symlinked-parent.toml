@@ -1,0 +1,30 @@
+# derived from anthropics/sandbox-runtime test/sandbox/symlinked-deny-paths.test.ts (Apache-2.0)
+id = "write-deny-symlinked-parent"
+source = "anthropics/sandbox-runtime test/sandbox/symlinked-deny-paths.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# A user write-deny on an ABSENT file whose parent is a symlink (proj2 -> real-proj).
+# The deny has to land where a write through the link would create the file, so the
+# file must not be creatable under its real name either. A plain name (.cfg) is used
+# so the built-in handoff list doesn't mask the user deny.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/proj2/.cfg"]
+
+[[fixture]]
+path = "{root}/work/real-proj/src"
+dir = true
+[[fixture]]
+path = "{root}/work/proj2"
+symlink_to = "{root}/work/real-proj"
+
+[attack]
+cmd = "echo evil > {root}/work/proj2/.cfg || echo evil > {root}/work/real-proj/.cfg"
+
+[control]
+cmd = "echo ok > {root}/work/real-proj/src/f.txt"
+
+[assert]
+absent = "{root}/work/real-proj/.cfg"

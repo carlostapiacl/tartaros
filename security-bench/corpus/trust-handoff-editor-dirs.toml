@@ -1,0 +1,32 @@
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-editor-dirs"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# srt write-denies the WHOLE .vscode/ and .idea/ directories (IDE run
+# configurations, extension recommendations, workspace tasks). tartaros covers
+# only .vscode/{tasks,launch,settings}.json and nothing under .idea/ ->
+# expected gap (por confirmar). Attack: any write under either directory.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.idea/workspace.xml"
+content = "<project/>"
+[[fixture]]
+path = "{root}/work/.vscode"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = 'for f in .idea/workspace.xml .idea/runConfigurations.xml .vscode/extensions.json .vscode/x.code-workspace; do (echo pwned >> {root}/work/$f) 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.idea/workspace.xml"

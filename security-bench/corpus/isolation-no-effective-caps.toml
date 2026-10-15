@@ -1,0 +1,25 @@
+# derived from anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)
+id = "isolation-no-effective-caps"
+source = "anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+requires = ["root"]
+
+# Under the hardened tier the workload should hold no effective capabilities, so
+# a root agent cannot use CAP_SYS_ADMIN/CAP_DAC_OVERRIDE/CAP_NET_RAW etc. even
+# where a syscall slipped past the filter. Attack succeeds if CapEff is non-zero.
+[policy]
+writable_roots = ["{root}/work"]
+harden_syscalls = true
+strict = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "grep -qE '^CapEff:[[:space:]]+0*[1-9a-f]' /proc/self/status"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

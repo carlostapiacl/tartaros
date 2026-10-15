@@ -1,0 +1,24 @@
+# derived from anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)
+id = "seccomp-io-uring-denied"
+source = "anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)"
+category = "network"
+severity = "critical"
+os = ["linux"]
+requires = ["landlock"]
+
+# IORING_OP_SOCKET/CONNECT create and connect sockets in kernel context, past
+# every socket() rule (the UDP/raw egress close, deny_unix_sockets). With the
+# network denied, no io_uring ring may be created. Syscall 425 is
+# io_uring_setup on every architecture.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,sys\nlibc=ctypes.CDLL(None,use_errno=True)\np=(ctypes.c_byte*256)()\nsys.exit(0 if libc.syscall(425,4,p)>=0 else 1)'"
+
+[control]
+cmd = "python3 -c 'import os; os.listdir(\"/\")' && echo ok > {root}/work/src/f.txt"

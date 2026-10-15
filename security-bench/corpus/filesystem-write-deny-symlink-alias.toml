@@ -1,0 +1,31 @@
+# derived from openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_protected_reads_and_writes_through_symlink_aliases (Apache-2.0)
+id = "filesystem-write-deny-symlink-alias"
+source = "openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_protected_reads_and_writes_through_symlink_aliases (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A pre-existing symlink inside the writable root aliases a write-denied dir;
+# writing through the alias must be denied (read-deny-symlink-bypass covers reads).
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/protected"]
+
+[[fixture]]
+path = "{root}/work/protected/cfg"
+content = "PROTECTED"
+[[fixture]]
+path = "{root}/work/alias"
+symlink_to = "{root}/work/protected"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "echo EVIL > {root}/work/alias/cfg"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/protected/cfg"

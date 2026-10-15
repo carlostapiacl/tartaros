@@ -1,0 +1,30 @@
+# derived from anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)
+id = "read-deny-under-write-deny"
+source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# Layering: writable root > write-denied project > read-denied secret inside
+# it. Applying the write deny (a read-only view of proj) must not re-expose
+# the read-denied file beneath it. Control: the rest of proj stays readable.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/proj"]
+read_denies = ["{root}/work/proj/secrets"]
+
+[[fixture]]
+path = "{root}/work/proj/secrets/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/proj/README.md"
+content = "readme"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "cat {root}/work/proj/secrets/key"
+
+[control]
+cmd = "cat {root}/work/proj/README.md >/dev/null && echo ok > {root}/work/src/f.txt"

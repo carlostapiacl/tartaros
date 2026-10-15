@@ -1,0 +1,32 @@
+# derived from anthropics/sandbox-runtime test/sandbox/symlinked-deny-paths.test.ts (Apache-2.0)
+id = "read-deny-symlinked-dir"
+source = "anthropics/sandbox-runtime test/sandbox/symlinked-deny-paths.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The read-deny entry is itself a symlink (proj/.private -> ../dotfiles/private). The
+# deny must cover the real directory, so the secret is unreadable by its real name
+# too, not just through the link spelling.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/work/proj/.private"]
+
+[[fixture]]
+path = "{root}/work/dotfiles/private/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/dotfiles/public.txt"
+content = "public"
+[[fixture]]
+path = "{root}/work/proj/src"
+dir = true
+[[fixture]]
+path = "{root}/work/proj/.private"
+symlink_to = "../dotfiles/private"
+
+[attack]
+cmd = "cat {root}/work/dotfiles/private/key || cat {root}/work/proj/.private/key"
+
+[control]
+cmd = "cat {root}/work/dotfiles/public.txt >/dev/null && echo ok > {root}/work/proj/src/f.txt"

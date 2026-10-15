@@ -1,0 +1,29 @@
+# derived from anthropics/sandbox-runtime test/sandbox/default-write-paths.test.ts (Apache-2.0)
+id = "read-deny-not-reopened-by-nested-writable"
+source = "anthropics/sandbox-runtime test/sandbox/default-write-paths.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "high"
+os = ["linux", "macos"]
+
+# A writable root nested INSIDE a read-denied dir (e.g. a log dir under a denied
+# home) must not re-open reads of the rest of that dir. The write grant itself
+# keeps working (control).
+[policy]
+writable_roots = ["{root}/work", "{root}/vault/logs"]
+read_denies = ["{root}/vault"]
+
+[[fixture]]
+path = "{root}/vault/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/vault/logs"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'cat {root}/vault/key || ls {root}/vault | grep -q key'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/vault/logs/f.txt && echo ok > {root}/work/src/f.txt'"

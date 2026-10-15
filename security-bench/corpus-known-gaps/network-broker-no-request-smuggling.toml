@@ -1,0 +1,42 @@
+# STATUS 2026-10-15 (known gap): macos=control-broke, linux=pass
+# derived from anthropics/sandbox-runtime test/sandbox/client-abort.test.ts and test/sandbox/trailers-then-request.test.ts (Apache-2.0)
+id = "network-broker-no-request-smuggling"
+source = "anthropics/sandbox-runtime test/sandbox/client-abort.test.ts and test/sandbox/trailers-then-request.test.ts (Apache-2.0)"
+category = "network"
+severity = "high"
+os = ["linux", "macos"]
+
+# A GET carrying a chunked body, conflicting Content-Length/Transfer-Encoding, or
+# chunk trailers followed by a second request must not get a hidden second
+# request to the upstream that the broker never mediated (for example one to a
+# path outside the capability prefix). The upstream must see exactly one request
+# per mediated request.
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [19514]
+
+[broker]
+port = 19514
+token = "tok-smug"
+[[broker.capability]]
+prefix = "/up"
+upstream_base = "http://127.0.0.1:19614"
+inject_header = "Authorization"
+inject_value = "Bearer x"
+
+[[server]]
+port = 19614
+# log_requests = "{root}/upstream.log"   # <-- runner feature needed
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket\ns=socket.create_connection((\"127.0.0.1\",19514),4); s.settimeout(4)\ns.sendall(b\"GET /up/a HTTP/1.1\\r\\nHost: x\\r\\nX-Tartaros-Auth: tok-smug\\r\\nTransfer-Encoding: chunked\\r\\nContent-Length: 4\\r\\n\\r\\n0\\r\\n\\r\\nGET /admin HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\")\ntry: s.recv(4096)\nexcept Exception: pass'; exit 1"
+
+[control]
+cmd = "curl -sS -o {root}/work/out --max-time 5 -H 'X-Tartaros-Auth: tok-smug' http://127.0.0.1:19614/ 2>/dev/null; curl -sS -o {root}/work/out --max-time 5 -H 'X-Tartaros-Auth: tok-smug' http://127.0.0.1:19514/up/"
+
+[assert]
+# absent_line = { file = "{root}/upstream.log", pattern = "/admin" }   # <-- runner feature needed

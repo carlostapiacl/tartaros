@@ -1,0 +1,28 @@
+# STATUS 2026-10-15 (known gap): macos=control-broke, linux=control-broke
+# derived from anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)
+id = "read-deny-around-nested-root"
+source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A writable root nested inside a read-denied directory: the nested root is
+# readable and writable, its siblings in the denied dir stay unreadable.
+# (Variant from the same file: make vault/w/secret.txt a write_deny too and
+# check it stays unwritable while vault/w/notes.txt is writable.)
+[policy]
+writable_roots = ["{root}/work", "{root}/vault/w"]
+read_denies = ["{root}/vault"]
+
+[[fixture]]
+path = "{root}/vault/other.txt"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/vault/w/notes.txt"
+content = "notes"
+
+[attack]
+cmd = "cat {root}/vault/other.txt"
+
+[control]
+cmd = "cat {root}/vault/w/notes.txt >/dev/null && echo ok > {root}/vault/w/f.txt"

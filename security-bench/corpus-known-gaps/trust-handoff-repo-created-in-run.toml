@@ -1,0 +1,28 @@
+# STATUS 2026-10-15 (known gap): macos=control-broke, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-repo-created-in-run"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# The repo does not exist when the policy is compiled: the agent runs `git
+# init` and then plants a hook in it. A per-repo walk done before the run sees
+# no .git here, so this may be a gap (por confirmar). srt's half is the
+# control: `git init` must keep working inside the sandbox. --template= keeps
+# init from copying sample hooks, so the control does not depend on hooks.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "git init -q --template= {root}/work/fresh && mkdir -p {root}/work/fresh/.git/hooks && echo '#!/bin/sh' > {root}/work/fresh/.git/hooks/pre-commit"
+
+[control]
+cmd = "git init -q --template= {root}/work/src/other && git -C {root}/work/src/other status >/dev/null"
+
+[assert]
+absent = "{root}/work/fresh/.git/hooks/pre-commit"

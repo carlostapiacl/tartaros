@@ -1,0 +1,28 @@
+# STATUS 2026-10-15 (known gap): macos=pass, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-gitmodules"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# .gitmodules (submodule URLs/commands) and .gitattributes (filter drivers) are
+# protected by tartaros but not exercised. Both at the root and one level down.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.gitmodules"
+content = "[submodule \"a\"]\n\tpath = a\n"
+[[fixture]]
+path = "{root}/work/sub/src"
+dir = true
+
+[attack]
+cmd = 'for f in .gitmodules .gitattributes sub/.gitmodules sub/.gitattributes; do (echo "* filter=evil" >> {root}/work/$f) 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo ok > {root}/work/sub/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.gitmodules"

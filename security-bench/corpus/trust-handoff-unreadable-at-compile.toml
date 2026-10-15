@@ -1,0 +1,33 @@
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-unreadable-at-compile"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The repo's .git is mode 000 when the policy is compiled, so a walk cannot see
+# hooks/config inside it. The agent owns the dir, chmods it back open and then
+# rewrites .git/config. Protection must not depend on being able to read the
+# tree at compile time (fail closed). Must run as NON-root (root ignores modes).
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/locked/.git/config"
+content = "[core]\n"
+[[fixture]]
+path = "{root}/work/locked/.git/hooks"
+dir = true
+# NEEDS: mode = "000" applied to {root}/work/locked/.git AFTER the files above
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "chmod 755 {root}/work/locked/.git && echo pwned >> {root}/work/locked/.git/config"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/locked/.git/config"

@@ -1,0 +1,28 @@
+# STATUS 2026-10-15 (known gap): macos=vacuous, linux=control-broke
+# derived from nolabs-ai/nono tests/integration/test_child_tool_boundaries.sh ("command sandbox does not inherit session --allow directory") (Apache-2.0)
+# NEEDS RUNNER FEATURE: a `{launcher_bin}` placeholder (path of the tartaros
+# CLI) readable+executable inside the sandbox.
+# The agent re-invokes the launcher with a BROADER grant. Landlock layers stack
+# and Seatbelt profiles cannot be widened, so the inner run must be no more
+# privileged than the outer one: the write outside must still fail.
+id = "isolation-nested-relaunch-no-widen"
+source = "nolabs-ai/nono tests/integration/test_child_tool_boundaries.sh (\"command sandbox does not inherit session --allow directory\") (Apache-2.0)"
+category = "isolation"
+severity = "critical"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside"
+dir = true
+
+[attack]
+cmd = "{launcher_bin} run --write {root}/outside -- sh -c 'echo EVIL > {root}/outside/f'"
+
+[control]
+cmd = "{launcher_bin} run --write {root}/work -- sh -c 'echo ok > {root}/work/f'"
+
+[assert]
+absent = "{root}/outside/f"

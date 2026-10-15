@@ -1,0 +1,28 @@
+# derived from anthropics/sandbox-runtime test/sandbox/macos-allow-local-binding.test.ts (Apache-2.0)
+id = "network-egress-public-denied"
+source = "anthropics/sandbox-runtime test/sandbox/macos-allow-local-binding.test.ts (Apache-2.0)"
+category = "network"
+severity = "critical"
+os = ["linux", "macos"]
+requires = ["landlock-net"]
+
+# Default network posture with a loopback grant: TCP connect and UDP sendto to a
+# public address must be refused by the sandbox. UDP sendto on an unconnected
+# socket returns immediately when permitted, so it is a reliable signal even on a
+# host without internet; the TCP leg alone could false-pass offline.
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [18012]
+
+[[server]]
+port = 18012
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys\nok=0\ntry:\n  u=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); u.sendto(b\"x\",(\"1.1.1.1\",53)); ok=1\nexcept OSError: pass\ntry:\n  t=socket.socket(); t.settimeout(3); t.connect((\"1.1.1.1\",443)); ok=1\nexcept OSError: pass\nsys.exit(0 if ok else 1)'"
+
+[control]
+cmd = "curl -s -o {root}/work/src/out --max-time 4 http://127.0.0.1:18012/"

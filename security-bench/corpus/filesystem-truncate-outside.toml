@@ -1,0 +1,29 @@
+# derived from nolabs-ai/nono tests/integration/test_system_paths.sh ("cannot write to ...") (Apache-2.0)
+# truncate(2) by PATH is mediated by Landlock only from ABI v3 (LANDLOCK_ACCESS_FS_TRUNCATE);
+# on older ABIs a sandbox that only handles WRITE_FILE lets the agent zero any
+# file it can stat. The content check proves the real effect.
+id = "filesystem-truncate-outside"
+source = "nolabs-ai/nono tests/integration/test_system_paths.sh (\"cannot write to ...\") (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+requires = ["landlock"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/db.sqlite"
+content = "IMPORTANT-DATA"
+[[fixture]]
+path = "{root}/work/f.txt"
+content = "scratch"
+
+[attack]
+cmd = "truncate -s 0 {root}/outside/db.sqlite"
+
+[control]
+cmd = "truncate -s 0 {root}/work/f.txt"
+
+[assert]
+unchanged = "{root}/outside/db.sqlite"

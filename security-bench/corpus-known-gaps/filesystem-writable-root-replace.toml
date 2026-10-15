@@ -1,0 +1,29 @@
+# STATUS 2026-10-15 (known gap): macos=violation, linux=violation
+# derived from openai/codex codex-rs/sandboxing/src/seatbelt_tests.rs::seatbelt_prevents_writable_root_replacement and ::seatbelt_prevents_writable_directory_root_rename (Apache-2.0)
+id = "filesystem-writable-root-replace"
+source = "openai/codex codex-rs/sandboxing/src/seatbelt_tests.rs::seatbelt_prevents_writable_root_replacement and ::seatbelt_prevents_writable_directory_root_rename (Apache-2.0)"
+category = "filesystem"
+severity = "high"
+os = ["linux", "macos"]
+
+# The writable root itself must not be removable/renamable and re-pointed (as a
+# symlink) at a location outside the territory, and a write through the new
+# name must not land outside.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/secret"
+content = "PROTECTED"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mv {root}/work {root}/work.old 2>/dev/null || rm -rf {root}/work 2>/dev/null; ln -s {root}/outside {root}/work 2>/dev/null; echo EVIL > {root}/work/secret"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/outside/secret"

@@ -40,11 +40,15 @@ a blind spot — the corpus never actually tested that enforcement — and the r
 exits non-zero. The mutations weaken the policy the runner passes, never the
 backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind spots.
 
-## Scorecard (measured 2026-10-13, a Linux host Linux 6.8)
+## Scorecard (measured 2026-10-15, a Linux host kernel 6.8)
 
-| | Linux (Linux 6.8) | macOS 15.7 (cross-platform subset) |
+The corpus has 131 scenarios; 99 are derived from other sandboxes' public test
+suites and credited in [`SOURCES.md`](SOURCES.md). Confirmed-open scenarios live in
+[`corpus-known-gaps/`](corpus-known-gaps/) with their per-OS status.
+
+| | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) |
 |---|---|---|
-| scenarios | 31/31 pass | 20/20 pass |
+| scenarios | 128/128 pass | 106/106 pass |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 | mutation blind spots | 0 | 0 |

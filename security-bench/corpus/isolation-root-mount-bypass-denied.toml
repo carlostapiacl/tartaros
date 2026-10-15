@@ -1,0 +1,33 @@
+# derived from anthropics/sandbox-runtime test/docker-weak-sandbox.test.ts (Apache-2.0)
+id = "isolation-root-mount-bypass-denied"
+source = "anthropics/sandbox-runtime test/docker-weak-sandbox.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "critical"
+os = ["linux"]
+requires = ["landlock", "root"]
+
+# A uid-0 agent holding CAP_SYS_ADMIN could rearrange the mount table to get
+# around a deny: bind-mount the read-denied dir into its workspace, remount /
+# read-write, or unmount whatever covers a path. A Landlock-restricted process
+# may not change mount topology, and Landlock rights follow inodes, not mount
+# points. Every step must fail, and the secret must never come out.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/vault"]
+
+[[fixture]]
+path = "{root}/vault/key"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/mnt"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+# ATTACK: exit 0 if any mount operation succeeds or the secret is readable.
+[attack]
+cmd = "sh -c 'mount --bind {root}/vault {root}/work/mnt 2>/dev/null && exit 0; cat {root}/work/mnt/key 2>/dev/null | grep -q TOPSECRET && exit 0; mount -o remount,rw / 2>/dev/null && exit 0; python3 -c \"import ctypes,sys; l=ctypes.CDLL(None,use_errno=True); sys.exit(0 if l.umount2(b\\\"/\\\",2)==0 else 1)\" && exit 0; exit 1'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"

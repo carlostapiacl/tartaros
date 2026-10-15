@@ -1,0 +1,30 @@
+# derived from anthropics/sandbox-runtime test/sandbox/integration.test.ts and pid-namespace-isolation.test.ts (Apache-2.0)
+id = "lifecycle-background-reaped-on-exit"
+source = "anthropics/sandbox-runtime test/sandbox/integration.test.ts and pid-namespace-isolation.test.ts (Apache-2.0)"
+category = "lifecycle"
+severity = "high"
+os = ["linux", "macos"]
+
+# lifecycle-daemon-escape covers a setsid'd daemon at TIMEOUT. This is the normal
+# path: the command exits 0 immediately but leaves a plain background child (same
+# process group, stdio detached so the runner does not wait on it). When the
+# sandboxed command ends, its whole tree must end; the child would write "dirty"
+# after 1s, so after settling the marker must still read "clean".
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/marker"
+content = "clean"
+
+[attack]
+cmd = "(sleep 1; echo dirty > {root}/work/marker) </dev/null >/dev/null 2>&1 & exit 0"
+# the attack itself exits 0 by design; the guarantee is judged by the marker.
+expect_exit = 0
+
+[control]
+cmd = "echo ok > {root}/work/ctl.txt"
+
+[assert]
+unchanged = "{root}/work/marker"
+settle_secs = 3

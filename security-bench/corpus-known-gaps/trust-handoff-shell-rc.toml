@@ -1,0 +1,32 @@
+# STATUS 2026-10-15 (known gap): macos=violation, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-shell-rc"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# Shell startup files are run by the host user's next shell whenever the
+# workspace is (or becomes) HOME, or a tool sources them from the project. srt
+# write-denies them by name at the workspace root and one level below.
+# tartaros HANDOFF_CONFIG_NAMES does NOT list them today -> expected gap
+# (por confirmar): if it fails, track in corpus-known-gaps/ until the names
+# are added. The attack succeeds if ANY of the names can be written.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.bashrc"
+content = "ORIGINAL"
+[[fixture]]
+path = "{root}/work/sub/src"
+dir = true
+
+[attack]
+cmd = 'for f in .bashrc .bash_profile .zshrc .zprofile .profile sub/.bashrc sub/.zshrc; do (echo pwned >> {root}/work/$f) 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo ok > {root}/work/sub/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.bashrc"

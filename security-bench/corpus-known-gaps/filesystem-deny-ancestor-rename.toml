@@ -1,0 +1,32 @@
+# STATUS 2026-10-15 (known gap): macos=control-broke, linux=pass
+# derived from openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_renaming_ancestors_of_explicit_protected_files (Apache-2.0)
+id = "filesystem-deny-ancestor-rename"
+source = "openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_renaming_ancestors_of_explicit_protected_files (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A user write-deny inside a writable root must survive renaming its PARENT:
+# moving {root}/work/private -> {root}/work/exposed must not carry the protected
+# file out from under its rule. Either the rename fails, or the file stays
+# unwritable at its new path. trust-handoff-ancestor-rename covers this only for
+# the fixed .git/hooks set; this covers arbitrary write_denies.
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/private"]
+
+[[fixture]]
+path = "{root}/work/private/secret.env"
+content = "PROTECTED"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mv {root}/work/private {root}/work/exposed 2>/dev/null; echo EVIL > {root}/work/exposed/secret.env"
+
+[control]
+cmd = "mv {root}/work/src {root}/work/src2 && echo ok > {root}/work/src2/f.txt"
+
+[assert]
+unchanged = "{root}/work/private/secret.env"

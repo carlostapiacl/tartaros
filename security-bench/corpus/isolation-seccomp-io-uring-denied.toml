@@ -1,0 +1,26 @@
+# derived from nolabs-ai/nono crates/nono-cli/tests/execution_strategy_run.rs (cli_auto_block_net_uses_static_seccomp_baseline: "IO_URING -1 1") (Apache-2.0)
+# io_uring can create sockets (IORING_OP_SOCKET, 5.19+) and do I/O without the
+# socket()/connect() syscalls a seccomp filter inspects — so the F-1 UDP/raw
+# seccomp filter is bypassable unless io_uring_setup itself is denied. Under the
+# default network-denied posture io_uring_setup (nr 425 on all arches) must fail
+# with EPERM. NOTE: io_uring is not in harden_syscalls' list today, so this is
+# EXPECTED to be a VIOLATION. Vacuous on hosts with kernel.io_uring_disabled=2.
+# Follow-up: a full PoC that opens a UDP socket via IORING_OP_SOCKET.
+id = "isolation-seccomp-io-uring-denied"
+source = "nolabs-ai/nono crates/nono-cli/tests/execution_strategy_run.rs (cli_auto_block_net_uses_static_seccomp_baseline: \"IO_URING -1 1\") (Apache-2.0)"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,sys\nl=ctypes.CDLL(None,use_errno=True)\np=ctypes.create_string_buffer(120)\nfd=l.syscall(425,1,p)\nsys.exit(0 if fd>=0 else 1)'"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/f.txt'"

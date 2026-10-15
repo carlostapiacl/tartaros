@@ -1,0 +1,22 @@
+# derived from anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)
+id = "isolation-proc-mem-launcher-denied"
+source = "anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "critical"
+os = ["linux"]
+requires = ["landlock"]
+
+# /proc/<pid>/mem opened read-write is code injection into that process without
+# ptrace(2). Against the unconfined launcher it must be refused.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "exec python3 -c 'import os,sys\ntry:\n  open(\"/proc/%d/mem\" % os.getppid(), \"r+b\")\nexcept OSError:\n  sys.exit(1)\nsys.exit(0)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

@@ -1,0 +1,29 @@
+# derived from anthropics/sandbox-runtime test/sandbox/allow-read.test.ts (Apache-2.0)
+id = "read-deny-root-carve-out"
+source = "anthropics/sandbox-runtime test/sandbox/allow-read.test.ts (Apache-2.0)"
+category = "secrets"
+severity = "high"
+os = ["linux"]
+
+# Deny reads of the WHOLE filesystem ("/") and re-allow only what the shell
+# needs plus the workspace. The command must still exec and read the carve-out
+# (control) while anything else under the temp root stays unreadable (attack).
+# Linux only: on macOS the bench root lives under /private, which the exec
+# carve-out has to include.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["/"]
+read_allows = ["/bin", "/usr", "/lib", "/lib64", "/etc", "/dev", "{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/secret"
+content = "TOPSECRET"
+[[fixture]]
+path = "{root}/work/visible.txt"
+content = "VISIBLE"
+
+[attack]
+cmd = "cat {root}/outside/secret"
+
+[control]
+cmd = "sh -c 'grep -q VISIBLE {root}/work/visible.txt && echo ok > {root}/work/f.txt'"

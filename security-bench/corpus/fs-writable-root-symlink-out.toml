@@ -1,0 +1,35 @@
+# derived from anthropics/sandbox-runtime test/sandbox/symlink-write-path.test.ts (Apache-2.0)
+id = "fs-writable-root-symlink-out"
+source = "anthropics/sandbox-runtime test/sandbox/symlink-write-path.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A write root that is ITSELF a symlink pointing out of bounds (here an earlier run
+# planted work/evil -> ../protected) must not turn the link's target into a write
+# root. The policy names {root}/work/evil, but what would be granted is
+# {root}/protected, which nobody granted. Policy decision this pins down: a
+# symlinked write root that resolves outside the other roots is refused, not followed.
+expect_refusal = true
+
+[policy]
+writable_roots = ["{root}/work", "{root}/work/evil"]
+
+[[fixture]]
+path = "{root}/protected/secret.txt"
+content = "PROTECTED"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+[[fixture]]
+path = "{root}/work/evil"
+symlink_to = "{root}/protected"
+
+[attack]
+cmd = "echo pwned > {root}/work/evil/secret.txt"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/protected/secret.txt"

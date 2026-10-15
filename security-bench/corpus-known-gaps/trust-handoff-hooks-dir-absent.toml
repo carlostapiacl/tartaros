@@ -1,0 +1,26 @@
+# STATUS 2026-10-15 (known gap): macos=pass, linux=violation
+# derived from anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)
+id = "trust-handoff-hooks-dir-absent"
+source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# A repo whose .git exists but has NO hooks/ directory: the agent creates it
+# and plants a hook. The deny must hold for a path that does not exist yet.
+# Control: the rest of the repo (HEAD) stays writable.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/repo/.git/HEAD"
+content = "ref: refs/heads/main\n"
+
+[attack]
+cmd = "mkdir -p {root}/work/repo/.git/hooks && echo '#!/bin/sh' > {root}/work/repo/.git/hooks/pre-commit"
+
+[control]
+cmd = "echo 'ref: refs/heads/dev' > {root}/work/repo/.git/HEAD"
+
+[assert]
+absent = "{root}/work/repo/.git/hooks/pre-commit"

@@ -1,0 +1,41 @@
+# HELD 2026-10-15: valuable broker scenario, but the bench's broker test harness
+# starts one broker per scenario on a fixed port; run in bulk they race (curl 52).
+# Reinstate once the harness assigns unique ports and waits for ready.
+# derived from anthropics/sandbox-runtime test/sandbox/resolved-address-guard.test.ts (Apache-2.0)
+id = "network-broker-ssrf-internal"
+source = "anthropics/sandbox-runtime test/sandbox/resolved-address-guard.test.ts (Apache-2.0)"
+category = "network"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The agent may reach only the broker port. Using the broker as a forward proxy, it
+# names a destination whose ADDRESS is internal — a hostname that resolves to
+# loopback, or the link-local metadata address — to reach host services the
+# sandbox itself would block (19640 is not granted). The broker must resolve and
+# refuse internal destinations (403), so neither request reaches anything.
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [19540]
+
+[broker]
+port = 19540
+token = "run-token-only-the-agent-has"
+[[broker.capability]]
+prefix = "/up"
+upstream_base = "http://127.0.0.1:19640"
+inject_header = "Authorization"
+inject_value = "Bearer the-agent-never-sees-this"
+
+[[server]]
+port = 19640
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "sh -c 'A=\"X-Tartaros-Auth: run-token-only-the-agent-has\"; curl -sf -o /dev/null --max-time 4 --noproxy \"\" -x http://127.0.0.1:19540 -H \"$A\" http://localhost:19640/ || curl -sf -o /dev/null --max-time 4 --noproxy \"\" -x http://127.0.0.1:19540 -H \"$A\" http://169.254.169.254/latest/meta-data/'"
+
+[control]
+# The declared capability (an operator-chosen upstream) still works.
+cmd = "curl -sSf -o {root}/work/out --max-time 5 -H 'X-Tartaros-Auth: run-token-only-the-agent-has' http://127.0.0.1:19540/up/"

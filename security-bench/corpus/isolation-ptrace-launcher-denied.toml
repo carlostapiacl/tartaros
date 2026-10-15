@@ -1,0 +1,26 @@
+# derived from anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)
+id = "isolation-ptrace-launcher-denied"
+source = "anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "critical"
+os = ["linux"]
+requires = ["landlock"]
+
+# The confined process must not be able to trace a process OUTSIDE the sandbox
+# (here its launcher, the bench itself): tracing it would mean running code
+# with none of the sandbox's restrictions. `exec` makes python replace the
+# outer sh so getppid() is the unconfined spawner. PTRACE_SEIZE (0x4206) is used
+# so a broken sandbox does not stop the launcher; the tracer exiting detaches.
+# Default posture (no harden_syscalls): Landlock's ptrace scoping must hold alone.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "exec python3 -c 'import ctypes,os,sys\nlibc=ctypes.CDLL(None,use_errno=True)\nsys.exit(0 if libc.ptrace(0x4206,os.getppid(),0,0)==0 else 1)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

@@ -65,6 +65,30 @@ CATEGORY = {
 ORDER = ["Trust-handoff", "Secrets", "Network", "Files", "Isolation", "Processes and resources"]
 
 
+def contract_desc(text):
+    """One-line description: the first plain # comment that is not metadata."""
+    for line in text.splitlines():
+        t = line.strip()
+        if not t.startswith("#"):
+            if t and not t.startswith("[") and "=" in t:
+                continue
+            if t:
+                break
+            continue
+        c = t.lstrip("# ").strip()
+        low = c.lower()
+        if low.startswith(("derived from", "status", "held", "known gap")):
+            continue
+        if c:
+            return c
+    return ""
+
+
+def contract_source(text):
+    m = re.search(r'^source\s*=\s*"([^"]*)"', text, re.M)
+    return m.group(1) if m else ""
+
+
 def toml_header(path):
     head = {}
     for line in path.read_text().splitlines():
@@ -128,9 +152,13 @@ def main():
         sid = h["id"]
         lin = linux.get(sid)
         mac = macos.get(sid)
+        text = toml.read_text()
+        desc = WHAT.get(name) or contract_desc(text)
+        src = contract_source(text)
+        src_html = f'<span class="src">{html.escape(src)}</span>' if src else ""
         row = (
             f'<tr><th scope="row"><a href="https://github.com/carlostapiacl/tartaros/blob/master/security-bench/corpus/{name}.toml">{html.escape(name)}</a>'
-            f'<span class="what">{html.escape(WHAT.get(name, ""))}</span></th>'
+            f'<span class="what">{html.escape(desc)}</span>{src_html}</th>'
             f'<td class="sev sev-{h["severity"]}">{h["severity"]}</td>'
             + cell("PASS" if lin and lin["passed"] else ("FAIL" if lin else None), "linux" in h["os"])
             + cell("PASS" if mac and mac["passed"] else ("FAIL" if mac else None), "macos" in h["os"])

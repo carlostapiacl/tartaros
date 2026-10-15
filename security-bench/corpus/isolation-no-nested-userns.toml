@@ -1,0 +1,24 @@
+# derived from containers/bubblewrap tests/test-run.sh "can disable nested userns" (LGPL-2.1-or-later, idea only)
+id = "isolation-no-nested-userns"
+source = "containers/bubblewrap tests/test-run.sh \"can disable nested userns\" (LGPL-2.1-or-later, idea only)"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+
+# With hardening, the agent must not be able to create a new user namespace
+# (the main kernel attack-surface entry point). seccomp-hardening tests a mount
+# namespace via unshare(); this asks the same question for CLONE_NEWUSER via the
+# standard unshare(1) tool.
+[policy]
+writable_roots = ["{root}/work"]
+harden_syscalls = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "unshare -U true"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

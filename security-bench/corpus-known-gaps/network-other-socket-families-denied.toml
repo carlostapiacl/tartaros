@@ -1,0 +1,23 @@
+# STATUS 2026-10-15 (known gap): linux=violation
+# derived from openai/codex codex-rs/linux-sandbox/tests/suite/managed_proxy_unix_sockets_tests.rs::managed_proxy_allow_all_unix_sockets_preserves_network_isolation (Apache-2.0)
+id = "network-other-socket-families-denied"
+source = "openai/codex codex-rs/linux-sandbox/tests/suite/managed_proxy_unix_sockets_tests.rs::managed_proxy_allow_all_unix_sockets_preserves_network_isolation (Apache-2.0)"
+category = "network"
+severity = "high"
+os = ["linux"]
+
+# Codex asserts that under restricted network, AF_NETLINK and AF_VSOCK sockets
+# cannot be created (EPERM). Landlock net mediates only TCP and our seccomp
+# filter only INET dgram/raw, so this checks whether those families are closed.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys\nok=0\nfor f in (socket.AF_NETLINK, getattr(socket,\"AF_VSOCK\",40)):\n  try:\n    socket.socket(f, socket.SOCK_DGRAM if f==socket.AF_NETLINK else socket.SOCK_STREAM).close(); ok=1\n  except OSError: pass\nsys.exit(0 if ok else 1)'"
+
+[control]
+cmd = "python3 -c 'import socket; a,b=socket.socketpair(); a.send(b\"k\"); assert b.recv(1)==b\"k\"' && echo ok > {root}/work/src/f.txt"

@@ -1,0 +1,30 @@
+# derived from anthropics/sandbox-runtime test/sandbox/write-through-links.test.ts (Apache-2.0)
+id = "fs-hardlink-create-write-out"
+source = "anthropics/sandbox-runtime test/sandbox/write-through-links.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# fs-hardlink-escape covers READING a read-denied file through a hard link. This is
+# the WRITE side: the agent tries to give a merely outside (not denied) file a
+# second name inside its root, then write through that name. On Linux, Landlock's
+# REFER right (and in srt, the mount boundary) stops the link(2). The macOS outcome
+# is not established (por confirmar): srt deliberately skips it.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/file"
+content = "original"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "ln {root}/outside/file {root}/work/second-name && echo changed > {root}/work/second-name"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/outside/file"

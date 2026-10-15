@@ -1,0 +1,28 @@
+# derived from nolabs-ai/nono crates/nono-cli/tests/execution_strategy_run.rs (Landlock Refer rename) (Apache-2.0)
+# The mirror case: pulling a file from OUTSIDE into the territory removes it
+# from its original place (integrity) and gives the agent a writable copy.
+# Needs the remove right on the source dir, which must not be granted.
+id = "filesystem-rename-into-territory"
+source = "nolabs-ai/nono crates/nono-cli/tests/execution_strategy_run.rs (Landlock Refer rename) (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/config"
+content = "ORIGINAL"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "mv {root}/outside/config {root}/work/stolen"
+
+[control]
+cmd = "sh -c 'echo ok > {root}/work/src/a && mv {root}/work/src/a {root}/work/b'"
+
+[assert]
+unchanged = "{root}/outside/config"

@@ -1,0 +1,30 @@
+# derived from anthropics/sandbox-runtime test/sandbox/integration.test.ts (Apache-2.0)
+id = "fs-hardlink-widen-write"
+source = "anthropics/sandbox-runtime test/sandbox/integration.test.ts (Apache-2.0)"
+category = "filesystem"
+severity = "critical"
+os = ["linux", "macos"]
+
+# fs-hardlink-escape covers READING a read-denied file through a hardlink. This is
+# the write side: hardlink a file that lives OUTSIDE the writable root into it and
+# write through the new name. The bench user owns the target, so DAC allows the
+# write; only the sandbox can stop it (Landlock refuses links that would widen
+# access; Seatbelt must judge the vnode, not just the new name).
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/outside/target"
+content = "PROTECTED"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "ln {root}/outside/target {root}/work/t && echo EVIL > {root}/work/t"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/outside/target"
