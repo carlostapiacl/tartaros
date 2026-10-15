@@ -1,18 +1,16 @@
-# STATUS 2026-10-15 (known gap): macos=violation, linux=violation
-# ROOT CAUSE (measured 2026-10-15): blocking the `.git` move-aside is easy (deny
-# file-write-unlink on the `.git` dir). The blocker is the CONTROL: `mv src src2`
-# (renaming a plain sub-directory) is ALREADY denied today, because the macOS
-# ancestor-move-blocking emits file-write-unlink on every ancestor of every nested
-# handoff name — even ABSENT ones — so every directory under a writable root is
-# un-renamable. Closing this needs the ancestor-unlink to fire only for EXISTING
-# protected paths (an absent handoff name needs no ancestor pin — the any-depth
-# regex already stops its creation). Tracked as its own fix; see docs/limits.md.
+# STATUS 2026-10-15 (measured): macos=pass; linux=OPEN (see docs/limits.md)
+# macOS fix: (1) deny file-write-unlink on the `.git` dir itself (block the
+# move-aside); (2) narrow the ancestor-move-blocking to EXISTING handoff paths so
+# the honest control `mv src src2` (a plain sub-directory rename) still works.
+# Linux stays open: Landlock governs rename by the parent directory's write access,
+# so renaming `.git` within a writable root cannot be blocked per-entry without
+# breaking legitimate renames. macOS-only until a Landlock approach is found.
 # derived from anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)
 id = "trust-handoff-git-dir-replace"
 source = "anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)"
 category = "trust-handoff"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["macos"]
 
 # Move the WHOLE .git aside (its protected children travel with it) and create a
 # new .git at the original path with a planted config. The protected inodes are

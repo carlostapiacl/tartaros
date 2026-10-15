@@ -33,16 +33,15 @@ than you asked for.
   `.ripgreprc`) follows exactly this rule — top-level covered on both OS (Linux
   needs `--materialize` for the absent ones), nested-absent on Linux is the same
   bind-mount gap.
-- **Renaming a sub-directory of a writable root is currently denied (macOS).**
-  The ancestor-move-blocking that stops a secret/handoff path being relocated out
-  of its deny is too broad: it pins `file-write-unlink` on every ancestor of every
-  nested handoff NAME, including names that do not exist, so every directory under
-  a writable root is un-renamable (`mv src src2` on a plain dir fails; renaming a
-  file is fine). The intended fix is to pin ancestors only for handoff/secret paths
-  that actually EXIST — an absent name needs no ancestor pin, since the any-depth
-  regex already stops its creation wherever the dir lands. Until then, moving the
-  whole `.git` aside to swap in a planted one (`trust-handoff-git-dir-replace`) also
-  stays open, because its honest control is exactly such a legitimate rename.
+- **Moving the whole `.git` dir aside: blocked on macOS, open on Linux.** An agent
+  can `mv .git .git-moved && mkdir .git` and plant a fresh `.git/config`/hooks at
+  the original path (the protected inodes travel with the moved dir). macOS denies
+  `file-write-unlink` on the `.git` directory itself, so the move fails. On Linux,
+  Landlock governs a rename by the parent directory's write access, not per entry,
+  so blocking just `.git`'s rename inside a writable root is not expressible without
+  breaking legitimate renames — the scenario `trust-handoff-git-dir-replace` is
+  macOS-only until a Landlock-side approach exists (a read-only bind mount of `.git`
+  under the mount-namespace strategy is the likely path).
 - **AF_UNIX pathname sockets are not path-filtered on Linux.** Landlock does not
   govern `connect()` to a unix socket by path, and the seccomp AF_UNIX deny is
   all-or-nothing, so a confined agent can reach a host daemon's socket
