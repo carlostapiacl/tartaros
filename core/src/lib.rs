@@ -97,6 +97,19 @@ pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
 /// reads from the host, outside the box.
 pub const HANDOFF_GIT_NAMES: &[&str] = &[".git/hooks", ".git/config"];
 
+/// Directory handoff surfaces, as path SUFFIXES. If a writable root is named
+/// *inside* one of these (e.g. a root under `<repo>/.git/hooks/`), the downward
+/// walk from that root never sees the enclosing surface, so it would be granted
+/// wholesale — letting the agent plant a hook through a root nobody should have
+/// put there. These suffixes let the policy detect that upward and deny the root.
+/// Only directories a trusted tool later *runs from* are listed; `.git/objects`,
+/// `.git/refs`, … are deliberately absent (a root there is legitimate).
+pub const HANDOFF_DIR_SUFFIXES: &[&str] = &[
+    ".git/hooks",
+    ".claude/commands", ".claude/agents", ".claude/skills", ".claude/hooks",
+    ".codex", ".vscode", ".idea", ".husky", ".github/workflows",
+];
+
 /// Per-USER startup/config files a trusted tool or the host's next shell later
 /// runs or sources, when the workspace is (or becomes) HOME or a tool reads them
 /// from the directory: shell rc files and per-user tool config with run-command
@@ -510,8 +523,29 @@ impl Policy {
         for root in &self.writable_roots {
             expand_root(root, self.protect_home_handoff, &mut out);
         }
+        // Upward check: a writable root named INSIDE a handoff surface (e.g. under
+        // `<repo>/.git/hooks/`) is denied wholesale — the downward walk can't see
+        // the enclosing surface, so without this the root would be fully writable
+        // and a hook could be planted through it. A sibling root under
+        // `.git/objects` is untouched (not a handoff surface).
+        for p in self.ancestor_handoff_denies() {
+            out.push(deny(p, true));
+        }
         dedup(&mut out);
         out
+    }
+
+    /// Writable roots that are named INSIDE a directory handoff surface
+    /// (`<…>/.git/hooks/inner`, a root under `.vscode`, …). Such a root must not be
+    /// granted writable — the downward walk from it never sees the enclosing
+    /// surface. The macOS backend emits these as subpath denies; the Linux carve
+    /// picks them up through [`trust_handoff_rules`]. Real (resolved) paths.
+    pub fn ancestor_handoff_denies(&self) -> Vec<PathBuf> {
+        self.writable_roots
+            .iter()
+            .filter(|r| root_inside_handoff_surface(r))
+            .map(|r| resolve_best_effort(r))
+            .collect()
     }
 }
 
@@ -717,6 +751,23 @@ impl Policy {
 
 fn deny(path: PathBuf, even_if_absent: bool) -> FsRule {
     FsRule { path, access: Access::Deny, even_if_absent }
+}
+
+/// Is this writable root named inside a directory handoff surface? True when a
+/// STRICT ancestor of the root (its real path) ends with one of
+/// `HANDOFF_DIR_SUFFIXES` (`<…>/.git/hooks`, `<…>/.vscode`, …). The root itself
+/// is not a surface — a root that *is* exactly `.git/hooks` is handled by the
+/// downward walk; here we catch a root planted *below* one.
+fn root_inside_handoff_surface(root: &Path) -> bool {
+    let real = resolve_best_effort(root);
+    let mut anc = real.parent();
+    while let Some(a) = anc {
+        if HANDOFF_DIR_SUFFIXES.iter().any(|suf| a.ends_with(suf)) {
+            return true;
+        }
+        anc = a.parent();
+    }
+    false
 }
 
 /// Carve the Landlock write allow-list for one root (see
@@ -1067,6 +1118,29 @@ mod tests {
         assert!(denied(&gitconfig), ".gitconfig must be denied under protect_home_handoff");
         // A non-handoff file stays writable even with the flag on.
         assert!(!on_rules.iter().any(|r| r.path == root.join("src.rs")));
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn writable_root_inside_handoff_surface_is_denied() {
+        let tmp = std::env::temp_dir().join(format!("sbx-rih-{}", std::process::id()));
+        // One root inside .git/hooks (a surface), a sibling under .git/objects (not).
+        let inside = tmp.join("repo/.git/hooks/inner");
+        let objects = tmp.join("repo/.git/objects");
+        fs::create_dir_all(&inside).unwrap();
+        fs::create_dir_all(&objects).unwrap();
+
+        let policy = Policy {
+            writable_roots: vec![inside.clone(), objects.clone()],
+            ..Default::default()
+        };
+        let denied = policy.ancestor_handoff_denies();
+        // The root beneath .git/hooks is denied; the one beneath .git/objects is not.
+        assert!(denied.iter().any(|p| p == &resolve_best_effort(&inside)),
+            "a root inside .git/hooks must be denied");
+        assert!(!denied.iter().any(|p| p == &resolve_best_effort(&objects)),
+            "a root inside .git/objects is legitimate and stays writable");
 
         fs::remove_dir_all(&tmp).ok();
     }

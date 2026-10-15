@@ -1,4 +1,12 @@
 # STATUS 2026-10-15 (known gap): macos=violation, linux=violation
+# ROOT CAUSE (measured 2026-10-15): blocking the `.git` move-aside is easy (deny
+# file-write-unlink on the `.git` dir). The blocker is the CONTROL: `mv src src2`
+# (renaming a plain sub-directory) is ALREADY denied today, because the macOS
+# ancestor-move-blocking emits file-write-unlink on every ancestor of every nested
+# handoff name — even ABSENT ones — so every directory under a writable root is
+# un-renamable. Closing this needs the ancestor-unlink to fire only for EXISTING
+# protected paths (an absent handoff name needs no ancestor pin — the any-depth
+# regex already stops its creation). Tracked as its own fix; see docs/limits.md.
 # derived from anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)
 id = "trust-handoff-git-dir-replace"
 source = "anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)"

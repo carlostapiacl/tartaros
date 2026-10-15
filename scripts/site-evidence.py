@@ -39,6 +39,7 @@ WHAT = {
     "trust-handoff-ancestor-rename": "Renaming an ancestor directory doesn't free the hooks below it.",
     "trust-handoff-rename-over-hook": "Renaming a file onto a protected hook is denied too.",
     "trust-handoff-claude-commands": "Nested .claude/commands can't be written at any depth.",
+    "trust-handoff-root-inside-hooks": "A writable root placed inside .git/hooks can't plant a hook; one under .git/objects stays writable.",
     "trust-handoff-shell-rc": "With --protect-home-handoff, shell rc files (.bashrc, .zshrc, …) can't be planted.",
     "trust-handoff-tool-rc": "With --protect-home-handoff, .gitconfig / .ripgreprc run-command hooks can't be planted.",
     "trust-handoff-mcp-json": "A nested .mcp.json can't be rewritten to launch a new server.",

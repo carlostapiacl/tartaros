@@ -17,6 +17,16 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   and `trust-handoff-tool-rc` scenarios (previously tracked as a deliberate
   non-goal in `corpus-known-gaps/`).
 
+### Hardening
+- **Writable root inside a handoff surface.** A writable root named *inside* a
+  directory handoff surface (e.g. `<repo>/.git/hooks/inner`, or under `.vscode` /
+  `.claude/commands`) was granted wholesale, because the downward handoff walk
+  starts *at* the root and never sees the enclosing surface — so a hook could be
+  planted through it. The policy now also checks upward (`ancestor_handoff_denies`)
+  and denies such a root; a sibling root under `.git/objects` is untouched (not a
+  surface). Closes `trust-handoff-root-inside-hooks` (critical). Verified on macOS
+  15.7 and Linux 6.8.
+
 ### Hardening found by the cross-sandbox corpus
 Running the conformance corpus against the public test suites of other sandboxes
 (sandbox-runtime, nono, Codex, bubblewrap) surfaced real gaps. Fixed, each with a
