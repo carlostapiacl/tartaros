@@ -491,6 +491,15 @@ fn build_profile(policy: &Policy) -> String {
         emit_deny(&mut p, &rule.path, &policy.writable_roots);
     }
 
+    // A writable root named INSIDE a handoff surface (e.g. `<repo>/.git/hooks/
+    // inner`) is denied as a whole subpath: the downward handoff walk can't see
+    // the enclosing surface, so without this a hook could be planted through the
+    // root. A sibling root under `.git/objects` is not a surface and stays
+    // writable. Emitted after the root allows so the deny wins (last-match).
+    for root in policy.ancestor_handoff_denies() {
+        p.push_str(&format!("(deny file-write* (subpath {}))\n", quote(&root)));
+    }
+
     // Trust-handoff set, at ANY depth under each writable root. On macOS Seatbelt
     // we express this as regex path rules instead of walking the filesystem: it is
     // both cheap (no O(tree) stat storm at compile time — a `--write /tmp` tree can

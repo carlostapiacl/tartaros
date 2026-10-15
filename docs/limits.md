@@ -33,6 +33,16 @@ than you asked for.
   `.ripgreprc`) follows exactly this rule — top-level covered on both OS (Linux
   needs `--materialize` for the absent ones), nested-absent on Linux is the same
   bind-mount gap.
+- **Renaming a sub-directory of a writable root is currently denied (macOS).**
+  The ancestor-move-blocking that stops a secret/handoff path being relocated out
+  of its deny is too broad: it pins `file-write-unlink` on every ancestor of every
+  nested handoff NAME, including names that do not exist, so every directory under
+  a writable root is un-renamable (`mv src src2` on a plain dir fails; renaming a
+  file is fine). The intended fix is to pin ancestors only for handoff/secret paths
+  that actually EXIST — an absent name needs no ancestor pin, since the any-depth
+  regex already stops its creation wherever the dir lands. Until then, moving the
+  whole `.git` aside to swap in a planted one (`trust-handoff-git-dir-replace`) also
+  stays open, because its honest control is exactly such a legitimate rename.
 - **AF_UNIX pathname sockets are not path-filtered on Linux.** Landlock does not
   govern `connect()` to a unix socket by path, and the seccomp AF_UNIX deny is
   all-or-nothing, so a confined agent can reach a host daemon's socket
