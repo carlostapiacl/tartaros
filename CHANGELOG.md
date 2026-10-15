@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] — 2026-10-15
+
 ### Fixed
 - **`--settings`: honor srt's loopback-port convention.** An `allowedDomains`
   entry that is a loopback literal with an explicit port (`localhost:N`,
