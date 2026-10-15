@@ -111,3 +111,11 @@ than you asked for.
   top-level ones are protected. macOS (regex) covers the absent case; closing it on
   Linux (carve the absent handoff's existing ancestor even under bind mounts) is on
   the roadmap. `explain` states the active strategy.
+
+- **Relocating a protected path by moving its ancestor — partly open.** A
+  read-denied secret inside a writable root cannot be relocated out of its deny by
+  renaming an ancestor: the deny is pinned and every ancestor up to the root is
+  unlink-blocked (macOS), and Landlock's inode-based grant follows the inode
+  (Linux). Still under investigation and tracked on the roadmap: moving or swapping
+  a whole `.git` directory (rename / `RENAME_EXCHANGE`) and moving an entire
+  writable root into another writable root. Until closed, these are not claimed.
