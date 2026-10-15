@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-windows"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.3"
 dependencies = [
  "tartaros-core",
  "windows-sys 0.59.0",
