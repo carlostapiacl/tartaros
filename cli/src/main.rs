@@ -151,6 +151,18 @@ fn backend_os() -> &'static str {
         "linux/landlock+seccomp+cgroup+ns"
     } else if cfg!(target_os = "macos") {
         "macos/seatbelt"
+    } else if cfg!(target_os = "windows") {
+        #[cfg(target_os = "windows")]
+        {
+            match tartaros_windows::Tier::from_env() {
+                tartaros_windows::Tier::AppContainer => "windows/appcontainer",
+                tartaros_windows::Tier::SandboxUser => "windows/sandbox-user",
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            "windows"
+        }
     } else {
         "unsupported"
     }
@@ -466,7 +478,12 @@ fn cmd_explain(opts: &[String]) -> ! {
     let blocked = tartaros_linux::host_blocks_run(&p);
     #[cfg(target_os = "macos")]
     let blocked = tartaros_macos::host_blocks_run(&p);
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    let blocked = {
+        use tartaros_core::Backend;
+        tartaros_windows::WindowsBackend.validate(&p).err().map(|e| e.reason)
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     let blocked: Option<String> = None;
     if let Some(reason) = blocked {
         eprintln!("\ntartaros: this host cannot enforce this policy: {reason}");
@@ -499,6 +516,9 @@ struct SandboxFs {
 }
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+// Some fields drive the macOS/Linux settings path only; on Windows that code is
+// cfg'd out, so they read as dead there without being removed from the schema.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 struct SandboxNet {
     #[serde(default, rename = "allowedDomains")]
     allowed_domains: Vec<String>,
@@ -1086,7 +1106,26 @@ impl RunObserved for tartaros_macos::SeatbeltBackend {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
+fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
+    use tartaros_core::Backend;
+    // The effect log goes through collectors that sample the process tree; there
+    // are none for Windows yet. Enabling the log must never change what is
+    // enforced, so rather than silently ignore --log we refuse it (fail-closed).
+    if log.is_some() {
+        eprintln!("tartaros: --log is not available on the Windows backend yet (no effect-log collectors); run without it.");
+        return 2;
+    }
+    match tartaros_windows::WindowsBackend.run(policy, cmd) {
+        Ok(o) => o.exit_code,
+        Err(e) => {
+            eprintln!("tartaros: {}", e.reason);
+            1
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn run(_policy: &Policy, _cmd: &[String], _log: Option<&str>) -> i32 {
     eprintln!("tartaros: unsupported OS");
     1
