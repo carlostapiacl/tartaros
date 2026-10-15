@@ -63,7 +63,7 @@ fn shell_argv(cmd: &str) -> Vec<String> {
     // `exec` for it; inside an AppContainer that emulation returns 0 without
     // waiting, and the job then kills the child (measured: `sh -c "sh -c 'exit 5'"`
     // → rc 0, nothing runs). A trailing `exit $?` keeps the shell waiting, so the
-    // contract's real exit status comes back. Tracked as a compat finding (W-Q3).
+    // contract's real exit status comes back. Tracked as a Windows compat finding.
     argv.push(if cfg!(windows) { format!("{cmd}\nexit $?") } else { cmd.into() });
     argv
 }

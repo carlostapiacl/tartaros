@@ -1,13 +1,14 @@
 //! Native Windows backend: an AppContainer with no capabilities, grant-only NTFS
 //! ACLs, a private desktop and a kill-on-close job object.
 //!
-//! The model comes from the W0 spike (docs/windows-backend.md § W0 results): an
-//! AppContainer is held by what its SID is GRANTED, not by what is denied, so a
-//! protected path is one the container's grant does not reach (a protected DACL
-//! without the container's ACE), never a deny ACE.
+//! An AppContainer is held by what its SID is GRANTED, not by what is denied, so
+//! a protected path is one the container's grant does not reach (a protected DACL
+//! without the container's ACE), never a deny ACE. The dedicated-user tier
+//! (`Tier::SandboxUser`) instead protects with explicit deny ACEs, which bind a
+//! user SID.
 //!
-//! Status: W1, fail-closed. Every policy field this backend cannot enforce yet is
-//! refused by `validate`, never silently dropped.
+//! Fail-closed: every policy field this backend cannot enforce yet is refused by
+//! `validate`, never silently dropped.
 
 use std::path::{Path, PathBuf};
 use tartaros_core::{
@@ -71,6 +72,15 @@ pub fn acl_plan(policy: &Policy, program: Option<&Path>) -> Vec<(PathBuf, Grant)
         .collect();
     protect.sort();
     protect.dedup();
+    // A protected handoff / write-deny whose real path (symlinks resolved by
+    // `canon`) leaves every writable root is dropped: the container has no write
+    // there to deny, and granting ProtectReadOnly on it would hand the container
+    // read of a target outside the workspace (a `.vscode` or `.git/hooks` planted
+    // as a symlink to a secret). A gitdir relocated under ANOTHER writable root
+    // stays, because it is still under a root. read_denies are NOT filtered: a
+    // deny on a path outside the roots (e.g. ~/.ssh) is exactly the point on the
+    // sandbox-user tier, and grants nothing.
+    protect.retain(|p| roots.iter().any(|r| p.starts_with(r)));
     let read_denies: Vec<PathBuf> = read_denies_all.iter().filter(|p| p.exists()).cloned().collect();
 
     let mut plan: Vec<(PathBuf, Grant)> = Vec::new();
@@ -358,11 +368,11 @@ impl Backend for AppContainerBackend {
         match policy.network {
             None | Some(Network::Denied) => {}
             Some(Network::ProxyOnly(_)) | Some(Network::Allowed) => {
-                unsupported.push("network other than denied (broker channel is W2)")
+                unsupported.push("network other than denied (the egress broker channel is not built on Windows yet)")
             }
         }
         if !policy.allow_domains.is_empty() || !policy.allowed_hosts.is_empty() || !policy.local_ports.is_empty() {
-            unsupported.push("--allow-domain / allowed hosts / local ports (W2)");
+            unsupported.push("--allow-domain / allowed hosts / local ports (needs the egress broker channel, not built on Windows yet)");
         }
         if policy.isolate_pids {
             unsupported.push("--isolate-pids (no PID namespace; process listing not yet measured)");
@@ -393,7 +403,14 @@ impl Backend for AppContainerBackend {
                 reason: format!("unsupported on Windows (cannot be enforced here): {}", unsupported.join(", ")),
             });
         }
-        // isolate_network is satisfied by construction: no network capability.
+        // Network posture differs by tier, and this comment is the honest statement
+        // of it. AppContainer: no network capability, so no socket reaches the
+        // network OR loopback (measured). SandboxUser: egress is blocked by the
+        // per-SID firewall rules the one-time setup installs, but those are not
+        // re-checked here at run time, and the Windows firewall does not filter
+        // loopback, so a service on 127.0.0.1 stays reachable on that tier
+        // (measured). `isolate_network` (no external egress) therefore holds on
+        // both; full loopback-off holds only on AppContainer. See docs/limits.md.
         Ok(())
     }
 
@@ -443,6 +460,24 @@ pub fn is_elevated() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn protect_through_a_symlink_out_of_root_is_dropped() {
+        let tmp = std::env::temp_dir().join(format!("tt-sym-{}", std::process::id()));
+        let w = tmp.join("work");
+        let secret = tmp.join("secret");
+        std::fs::create_dir_all(&w).unwrap();
+        std::fs::create_dir_all(&secret).unwrap();
+        // .vscode in the root is a symlink to a directory outside the root.
+        std::os::unix::fs::symlink(&secret, w.join(".vscode")).unwrap();
+        let p = Policy { writable_roots: vec![w.clone()], ..Default::default() };
+        let plan = acl_plan(&p, None);
+        let csecret = canon(&secret);
+        // nothing in the plan grants or protects the external target
+        assert!(!plan.iter().any(|(q, _)| *q == csecret || q.starts_with(&csecret)), "{plan:?}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
     #[test]
     fn no_pin_inside_a_write_deny() {
         let tmp = std::env::temp_dir().join(format!("tt-pin-{}", std::process::id()));

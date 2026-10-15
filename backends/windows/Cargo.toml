@@ -1,6 +1,6 @@
 [package]
 name = "tartaros-windows"
-description = "Native Windows backend for tartaros: AppContainer, grant-only NTFS ACLs, job object (see docs/windows-backend.md)"
+description = "Native Windows backend for tartaros: AppContainer or a dedicated sandbox user, grant/deny NTFS ACLs, a kill-on-close job object"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
