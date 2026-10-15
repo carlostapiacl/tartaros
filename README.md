@@ -8,7 +8,7 @@ leaves behind runs later outside the box. Every one of those claims is a test in
 this repo that you can run on your own machine.
 
 Open source (Apache-2.0) · macOS and Linux · Windows backend (preview) · one binary · no Docker, no VM, no
-account, no login · written in Rust · `v0.1.0-alpha`
+account, no login · written in Rust · `v0.1.0-alpha.4`
 
 [Website](https://carlostapiacl.github.io/tartaros/) ·
 [Evidence](https://carlostapiacl.github.io/tartaros/evidence.html) ·
@@ -85,14 +85,14 @@ an **attack**, a **legitimate control** that must keep working, and an
 **assertion on the real effect** (the file is unchanged, the secret never shows up
 in the output). A sandbox that blocks everything fails its controls.
 
-The corpus now has 136 scenarios; 99 are derived from the public test suites of
+The corpus now has 140 scenarios; 103 are derived from the public test suites of
 other sandboxes (sandbox-runtime, nono, Codex, bubblewrap) and credited in
 [`security-bench/SOURCES.md`](security-bench/SOURCES.md).
 
 | run (2026-10-15) | result |
 |---|---|
-| Linux 6.8, Ubuntu 24.04, Landlock | **133 / 133 pass**, 0 violations |
-| macOS 15.7, Seatbelt | **106 / 106 pass** (the rest are Linux-only) |
+| Linux 6.8, Ubuntu 24.04, Landlock | **136 / 136 pass**, 0 violations |
+| macOS 15.7, Seatbelt | **110 / 110 pass** (the rest are Linux/Windows-only) |
 | Mutation check, both OS: remove one protection, the suite must catch it | **0 blind spots** |
 | microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle | **20 / 20 pass** |
 | Windows 10 19045, corpus `--ignore-os` (backend via the bench) | **AppContainer 85/111, dedicated-user 90/111**, 0 critical violations; `--allow-domain` enforced via a per-SID WFP filter + egress broker ([limits](docs/limits.md)) |

@@ -61,7 +61,7 @@
   .git/hooks/pre-commit"</code></pre>
         </div>
       </div>
-      <div class="verdict" aria-label="Result on 2026-10-14">
+      <div class="verdict" aria-label="Result on 2026-10-15">
         <span>Linux 6.8 <span class="ok">pass</span></span>
         <span>macOS 15.7 <span class="ok">pass</span></span>
         <span>gVisor microVM <span class="ok">pass</span></span>
@@ -171,10 +171,10 @@
     <p>Each guarantee is a contract with an attack, a legitimate control and an assertion on the real effect. The mutation check removes one protection at a time and requires the suite to catch it, so a green run means something.</p>
     <div class="table-scroll">
       <table class="score">
-        <thead><tr><th scope="col">Run on 2026-10-14</th><th scope="col">Result</th></tr></thead>
+        <thead><tr><th scope="col">Run on 2026-10-15</th><th scope="col">Result</th></tr></thead>
         <tbody>
-          <tr><th scope="row">Linux 6.8, Ubuntu 24.04, Landlock</th><td><span class="big pass">32 / 32</span> pass</td></tr>
-          <tr><th scope="row">macOS 15.7, Seatbelt (11 scenarios are Linux-only)</th><td><span class="big pass">21 / 21</span> pass</td></tr>
+          <tr><th scope="row">Linux 6.8, Ubuntu 24.04, Landlock</th><td><span class="big pass">136 / 136</span> pass</td></tr>
+          <tr><th scope="row">macOS 15.7, Seatbelt (the rest are Linux/Windows-only)</th><td><span class="big pass">110 / 110</span> pass</td></tr>
           <tr><th scope="row">Mutation check, both systems</th><td><span class="big pass">0</span> blind spots</td></tr>
           <tr><th scope="row">microVM phase 1, under gVisor</th><td><span class="big pass">20 / 20</span> pass</td></tr>
           <tr><th scope="row">Claude Code confined, egress to one domain (macOS)</th><td><span class="big pass">works</span></td></tr>
