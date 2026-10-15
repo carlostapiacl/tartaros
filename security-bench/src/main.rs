@@ -26,6 +26,7 @@ const BACKEND: Be = tartaros_macos::SeatbeltBackend;
 const OS: &str = if cfg!(target_os = "linux") { "linux" } else { "macos" };
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Contract {
     id: String,
     category: String,
@@ -55,9 +56,29 @@ struct Contract {
     control: Op,
     #[serde(default)]
     assert: AssertSpec,
+    /// Where the scenario comes from when it is derived from another project's
+    /// tests, e.g. "anthropics/sandbox-runtime test/sandbox/x.test.ts (Apache-2.0)".
+    /// Shown in the report and on the evidence page.
+    #[serde(default)]
+    source: Option<String>,
+    /// The unsandboxed baseline: before the confined run, the attack is run once
+    /// WITHOUT the sandbox and must succeed there. If it doesn't, the scenario
+    /// proves nothing on this host (offline network, missing tool, not root…) and
+    /// is reported VACUOUS instead of PASS. Set `skip` with a reason for attacks
+    /// that must never run unconfined (fork bombs, memory hogs, escaping daemons).
+    #[serde(default)]
+    baseline: BaselineSpec,
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct BaselineSpec {
+    #[serde(default)]
+    skip: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct PolicySpec {
     #[serde(default)]
     writable_roots: Vec<String>,
@@ -108,12 +129,14 @@ struct PolicySpec {
 
 /// A loopback TCP server the runner starts for network scenarios.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ServerSpec {
     port: u16,
 }
 
 /// A unix-domain socket server the runner starts for IPC scenarios.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UnixServerSpec {
     path: String,
 }
@@ -121,6 +144,7 @@ struct UnixServerSpec {
 /// A broker the runner starts for credential scenarios. The secret lives only
 /// here — never in the policy or the agent's command.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BrokerSpec {
     port: u16,
     token: String,
@@ -129,6 +153,7 @@ struct BrokerSpec {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CapSpec {
     prefix: String,
     upstream_base: String,
@@ -137,6 +162,7 @@ struct CapSpec {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FixtureItem {
     path: String,
     #[serde(default)]
@@ -149,6 +175,7 @@ struct FixtureItem {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Op {
     cmd: String,
     /// If set, the op must exit with exactly this code (used for lifecycle
@@ -159,6 +186,7 @@ struct Op {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct AssertSpec {
     /// This file's content must be identical to what the fixture wrote.
     unchanged: Option<String>,
@@ -181,8 +209,12 @@ struct Outcome {
     /// This is NOT a blocked attack — conflating the two would let a scenario
     /// whose process never started look like a pass. Counted as INFRA_ERROR.
     infra_error: bool,
+    /// The attack did not succeed even without the sandbox, so a "blocked" result
+    /// would certify nothing. Fails the run like an infra error.
+    vacuous: bool,
     passed: bool,
     detail: String,
+    source: Option<String>,
 }
 
 fn main() {
@@ -196,6 +228,12 @@ fn main() {
     }
 
     let mutate = args.iter().any(|a| a == "--mutate");
+    // --no-baseline: skip the unsandboxed baseline (re-verifying known results on a
+    // host where attacks must never run unconfined). Reported in the stamp.
+    if args.iter().any(|a| a == "--no-baseline") {
+        std::env::set_var("TARTAROS_BENCH_NO_BASELINE", "1");
+        println!("note: --no-baseline — attacks are NOT checked to work unsandboxed in this run");
+    }
     // --require-caps <comma,list>: host capabilities a full-coverage certification
     // run demands. Any listed cap absent on this host => FAIL (ADV-05), so a green
     // exit can never be cited when scenarios were silently UNSUPPORTED. Omit it for
@@ -232,11 +270,15 @@ fn main() {
     let env = environment();
     // Host capabilities a scenario may require to be meaningful.
     let has_cap = |name: &str| match name {
-        "landlock" | "landlock-net" => env.landlock || OS == "macos",
+        "landlock" => env.landlock || OS == "macos",
+        "landlock-net" => env.landlock_net || OS == "macos",
         "cgroup" => env.cgroup_v2,
         "userns" => env.userns,
-        _ => true, // unknown requirement: don't silently skip, let it run
+        "root" => is_root(),
+        "nonroot" => !is_root(),
+        _ => false,
     };
+    let known_cap = |name: &str| matches!(name, "landlock" | "landlock-net" | "cgroup" | "userns" | "root" | "nonroot");
     let mut outcomes = Vec::new();
     let mut infra_errors = 0usize; // invalid/unreadable contracts
     let mut skipped = 0usize;      // not for this OS
@@ -259,6 +301,13 @@ fn main() {
             skipped += 1;
             continue;
         }
+        // An unknown requirement is a contract error, never a silent run: a typo
+        // like "rooot" must not let a root-only scenario pass as non-root.
+        if let Some(bad) = c.requires.iter().find(|r| !known_cap(r)) {
+            println!("  !! {}: unknown requirement {bad:?} (INFRA_ERROR)", c.id);
+            infra_errors += 1;
+            continue;
+        }
         if let Some(missing) = c.requires.iter().find(|r| !has_cap(r)) {
             println!("  ~~ {} (UNSUPPORTED: host lacks {missing})", c.id);
             unsupported += 1;
@@ -270,7 +319,7 @@ fn main() {
     println!("\n{:<36} {:<8} result", "scenario", "sev");
     println!("{}", "-".repeat(64));
     for o in &outcomes {
-        let r = if o.passed { "PASS" } else if o.violation { "VIOLATION" } else if o.infra_error { "INFRA_ERROR" } else { "control-broke" };
+        let r = if o.passed { "PASS" } else if o.vacuous { "VACUOUS" } else if o.violation { "VIOLATION" } else if o.infra_error { "INFRA_ERROR" } else { "control-broke" };
         println!("{:<36} {:<8} {}  {}", o.id, o.severity, r, o.detail);
     }
 
@@ -282,12 +331,14 @@ fn main() {
     // Backend-launch failures found while running scenarios add to the file-level
     // infra errors (a scenario whose process never started is NOT a pass).
     infra_errors += outcomes.iter().filter(|o| o.infra_error).count();
+    let vacuous = outcomes.iter().filter(|o| o.vacuous).count();
     println!("\n== scorecard ==");
     println!("  scenarios run:           {total}");
     println!("  PASS:                    {passed}/{total}");
     println!("  VIOLATION:               {violations}  (critical: {crit_viol})  [target 0]");
     println!("  CONTROL_BROKE:           {broke}  [target 0]");
     println!("  INFRA_ERROR:             {infra_errors}  [target 0]");
+    println!("  VACUOUS (no baseline):   {vacuous}  [target 0]");
     println!("  SKIPPED (other OS):      {skipped}");
     println!("  UNSUPPORTED (host caps): {unsupported}");
     // Coverage of the scenarios MEANT for this OS (ran vs. unsupported-by-host).
@@ -306,13 +357,14 @@ fn main() {
     let _ = std::fs::create_dir_all("reports");
     let mut j = String::from("{\n");
     j.push_str(&format!(
-        "  \"os\": \"{OS}\",\n  \"environment\": {{\"os\":\"{}\",\"kernel\":\"{}\",\"tool_version\":\"{}\",\"unix_time\":{},\"caps\":{{\"landlock\":{},\"cgroup_v2\":{},\"userns\":{}}}}},\n  \"total\": {total},\n  \"passed\": {passed},\n  \"violations\": {violations},\n  \"critical_violations\": {crit_viol},\n  \"control_broken\": {broke},\n  \"skipped\": {skipped},\n  \"unsupported\": {unsupported},\n  \"scenarios\": [\n",
+        "  \"os\": \"{OS}\",\n  \"environment\": {{\"os\":\"{}\",\"kernel\":\"{}\",\"tool_version\":\"{}\",\"unix_time\":{},\"caps\":{{\"landlock\":{},\"cgroup_v2\":{},\"userns\":{}}}}},\n  \"total\": {total},\n  \"passed\": {passed},\n  \"violations\": {violations},\n  \"critical_violations\": {crit_viol},\n  \"control_broken\": {broke},\n  \"vacuous\": {vacuous},\n  \"skipped\": {skipped},\n  \"unsupported\": {unsupported},\n  \"scenarios\": [\n",
         env.os, env.kernel, env.version, env.unix_time, env.landlock, env.cgroup_v2, env.userns
     ));
     for (i, o) in outcomes.iter().enumerate() {
         j.push_str(&format!(
-            "    {{\"id\":\"{}\",\"category\":\"{}\",\"severity\":\"{}\",\"passed\":{},\"violation\":{},\"control_broke\":{},\"infra_error\":{}}}{}\n",
-            o.id, o.category, o.severity, o.passed, o.violation, o.control_broke, o.infra_error,
+            "    {{\"id\":\"{}\",\"category\":\"{}\",\"severity\":\"{}\",\"passed\":{},\"violation\":{},\"control_broke\":{},\"infra_error\":{},\"vacuous\":{},\"source\":{}}}{}\n",
+            o.id, o.category, o.severity, o.passed, o.violation, o.control_broke, o.infra_error, o.vacuous,
+            o.source.as_deref().map(json_str).unwrap_or_else(|| "null".into()),
             if i + 1 < outcomes.len() { "," } else { "" }
         ));
     }
@@ -324,8 +376,8 @@ fn main() {
     // critical violations (review P1). A green run means every scenario actually
     // executed and passed.
     let _ = crit_viol;
-    if violations > 0 || broke > 0 || infra_errors > 0 {
-        eprintln!("\nFAIL: {violations} violation(s), {broke} broken control(s), {infra_errors} infra error(s)");
+    if violations > 0 || broke > 0 || infra_errors > 0 || vacuous > 0 {
+        eprintln!("\nFAIL: {violations} violation(s), {broke} broken control(s), {infra_errors} infra error(s), {vacuous} vacuous scenario(s)");
         std::process::exit(1);
     }
     // Minimum-coverage gate (adversarial-audit P1): a run that verified NO
@@ -438,6 +490,7 @@ struct Env {
     version: String,
     unix_time: u64,
     landlock: bool,
+    landlock_net: bool,
     cgroup_v2: bool,
     userns: bool,
 }
@@ -455,9 +508,12 @@ fn environment() -> Env {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     // Linux capability probes — read-only, no side effects.
-    let landlock = std::fs::read_to_string("/sys/kernel/security/lsm")
-        .map(|s| s.split(',').any(|l| l.trim() == "landlock"))
-        .unwrap_or(false);
+    // Ask the kernel directly (a ruleset create), not /sys/kernel/security/lsm:
+    // securityfs is usually not mounted inside containers, where Landlock still works.
+    #[cfg(target_os = "linux")]
+    let (landlock, landlock_net) = (tartaros_linux::landlock_fs_supported(), tartaros_linux::landlock_net_supported());
+    #[cfg(not(target_os = "linux"))]
+    let (landlock, landlock_net) = (false, false);
     // cgroup v2 must be USABLE, not merely present: a non-privileged container
     // has /sys/fs/cgroup/cgroup.controllers yet cannot create a child cgroup, so
     // a process cap would silently degrade. Probe by actually creating one.
@@ -481,6 +537,7 @@ fn environment() -> Env {
         version: env!("CARGO_PKG_VERSION").to_string(),
         unix_time,
         landlock,
+        landlock_net,
         cgroup_v2,
         userns,
     }
@@ -616,29 +673,79 @@ fn run_mutations(files: &[PathBuf]) {
 }
 
 fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
-    let root = std::env::temp_dir().join(format!("secbench-{}-{}", c.id, std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    let root_s = root.canonicalize().unwrap().to_string_lossy().into_owned();
-    let sub = |s: &str| s.replace("{root}", &root_s);
+    let make_root = |tag: &str| -> String {
+        let r = std::env::temp_dir().join(format!("secbench-{}{tag}-{}", c.id, std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        std::fs::create_dir_all(&r).unwrap();
+        r.canonicalize().unwrap().to_string_lossy().into_owned()
+    };
+    // Materialize the fixtures and unix-socket servers under `rs`. Returns the
+    // written file contents (for `unchanged`) and the socket paths to clean up.
+    let prepare = |rs: &str| -> (BTreeMap<String, String>, Vec<String>) {
+        let sub = |s: &str| s.replace("{root}", rs);
+        let mut contents = BTreeMap::new();
+        for fi in &c.fixture {
+            let p = sub(&fi.path);
+            if let Some(parent) = Path::new(&p).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Some(target) = &fi.symlink_to {
+                #[cfg(unix)]
+                let _ = std::os::unix::fs::symlink(sub(target), &p);
+            } else if fi.dir {
+                let _ = std::fs::create_dir_all(&p);
+            } else {
+                let body = sub(&fi.content);
+                let _ = std::fs::write(&p, &body);
+                contents.insert(p, body);
+            }
+        }
+        let mut socks = Vec::new();
+        for u in &c.unix_server {
+            let path = sub(&u.path);
+            let _ = std::fs::remove_file(&path);
+            if let Some(parent) = Path::new(&path).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(l) = std::os::unix::net::UnixListener::bind(&path) {
+                std::thread::spawn(move || {
+                    for stream in l.incoming().flatten() {
+                        use std::io::Write;
+                        let mut st = stream;
+                        let _ = st.write_all(b"ok");
+                    }
+                });
+                socks.push(path);
+            }
+        }
+        (contents, socks)
+    };
+    // Did the guarantee fail? (attack exit criterion, or a real-effect assertion)
+    let effect_broken = |rs: &str, contents: &BTreeMap<String, String>| -> Option<String> {
+        let sub = |s: &str| s.replace("{root}", rs);
+        if let Some(u) = &c.assert.unchanged {
+            let p = sub(u);
+            let now = std::fs::read_to_string(&p).unwrap_or_default();
+            if now != contents.get(&p).cloned().unwrap_or_default() {
+                return Some(format!("{u} changed"));
+            }
+        }
+        if let Some(a) = &c.assert.absent {
+            if Path::new(&sub(a)).exists() {
+                return Some(format!("{a} exists"));
+            }
+        }
+        None
+    };
+    let attack_criterion = |rc: i32| match c.attack.expect_exit {
+        Some(code) => rc != code,
+        None => rc == 0,
+    };
 
-    // fixtures
-    let mut fixture_content: BTreeMap<String, String> = BTreeMap::new();
-    for fi in &c.fixture {
-        let p = sub(&fi.path);
-        if let Some(parent) = Path::new(&p).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Some(target) = &fi.symlink_to {
-            #[cfg(unix)]
-            let _ = std::os::unix::fs::symlink(sub(target), &p);
-        } else if fi.dir {
-            let _ = std::fs::create_dir_all(&p);
-        } else {
-            let _ = std::fs::write(&p, &fi.content);
-            fixture_content.insert(p, fi.content.clone());
-        }
-    }
+    let root_s = make_root("");
+    let root = PathBuf::from(&root_s);
+    let sub = |s: &str| s.replace("{root}", &root_s);
+    let (fixture_content, unix_paths) = prepare(&root_s);
 
     // start any loopback servers the scenario needs (network cases)
     let mut servers = Vec::new();
@@ -653,25 +760,6 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
                 }
             });
             servers.push(l2);
-        }
-    }
-    // unix-domain socket servers (IPC scenarios)
-    let mut unix_paths = Vec::new();
-    for u in &c.unix_server {
-        let path = sub(&u.path);
-        let _ = std::fs::remove_file(&path);
-        if let Some(parent) = Path::new(&path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(l) = std::os::unix::net::UnixListener::bind(&path) {
-            std::thread::spawn(move || {
-                for stream in l.incoming().flatten() {
-                    use std::io::Write;
-                    let mut st = stream;
-                    let _ = st.write_all(b"ok");
-                }
-            });
-            unix_paths.push(path);
         }
     }
     // broker (credential scenarios): secret lives only in the broker config.
@@ -739,6 +827,41 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         m.weaken(&mut policy);
     }
 
+    // Baseline: the attack must work WITHOUT the sandbox, in its own copy of the
+    // fixtures. Otherwise "blocked" below would prove nothing. Resource and
+    // lifecycle attacks (fork bombs, memory hogs, escaping daemons) never run
+    // unconfined, and a contract can opt out with `baseline.skip = "reason"`.
+    // A broker scenario's protection IS the broker, present in both runs, so an
+    // unsandboxed run proves nothing about it; those rely on their control instead.
+    let unsafe_unconfined = matches!(c.category.as_str(), "resources" | "lifecycle");
+    let baseline_on = std::env::var_os("TARTAROS_BENCH_NO_BASELINE").is_none();
+    if baseline_on && mutate.is_none() && c.baseline.skip.is_none() && !unsafe_unconfined && c.broker.is_none() {
+        let rb = make_root("-baseline");
+        let (bc, bsocks) = prepare(&rb);
+        let rc = run_unsandboxed(&c.attack.cmd.replace("{root}", &rb), std::time::Duration::from_secs(30));
+        let worked = rc.map(attack_criterion).unwrap_or(false) || effect_broken(&rb, &bc).is_some();
+        for p in &bsocks {
+            let _ = std::fs::remove_file(p);
+        }
+        let _ = std::fs::remove_dir_all(&rb);
+        if !worked {
+            for kv in &c.launcher_env {
+                if let Some((k, _)) = kv.split_once('=') { std::env::remove_var(k); }
+            }
+            drop(servers);
+            for p in &unix_paths {
+                let _ = std::fs::remove_file(p);
+            }
+            let _ = std::fs::remove_dir_all(&root);
+            return Outcome {
+                id: c.id.clone(), category: c.category.clone(), severity: c.severity.clone(),
+                violation: false, control_broke: false, infra_error: false, vacuous: true, passed: false,
+                detail: format!("attack does not succeed even without the sandbox (rc={rc:?})"),
+                source: c.source.clone(),
+            };
+        }
+    }
+
     // Returns Ok(exit_code) when the backend LAUNCHED the command, or Err(reason)
     // when it could not even start it (spawn/Landlock error). The two must not be
     // conflated: a backend failure is infrastructure, not a blocked attack.
@@ -754,7 +877,8 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         let _ = std::fs::remove_dir_all(&root);
         Outcome {
             id: c.id.clone(), category: c.category.clone(), severity: c.severity.clone(),
-            violation: false, control_broke: false, infra_error: true, passed: false, detail,
+            violation: false, control_broke: false, infra_error: true, vacuous: false, passed: false, detail,
+            source: c.source.clone(),
         }
     };
 
@@ -786,8 +910,8 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         let _ = std::fs::remove_dir_all(&root);
         return Outcome {
             id: c.id, category: c.category, severity: c.severity,
-            violation: attack_succeeded, control_broke: false, infra_error: false,
-            passed: !attack_succeeded, detail: format!("attack {attack_res:?}"),
+            violation: attack_succeeded, control_broke: false, infra_error: false, vacuous: false,
+            passed: !attack_succeeded, detail: format!("attack {attack_res:?}"), source: c.source.clone(),
         };
     }
 
@@ -796,10 +920,7 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
         Ok(rc) => rc,
         Err(e) => { drop(servers); for p in &unix_paths { let _ = std::fs::remove_file(p); } return infra(format!("attack backend error: {e}")); }
     };
-    let attack_succeeded = match c.attack.expect_exit {
-        Some(code) => attack_rc != code, // "succeeded" = guarantee NOT met
-        None => attack_rc == 0,
-    };
+    let attack_succeeded = attack_criterion(attack_rc); // "succeeded" = guarantee NOT met
 
     // control: legitimate op must succeed (or match expect_exit)
     let control_rc = match run(&c.control.cmd) {
@@ -826,23 +947,9 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     }
 
     // real-effect assertions
-    let mut effect_ok = true;
-    let mut detail = String::new();
-    if let Some(u) = &c.assert.unchanged {
-        let p = sub(u);
-        let now = std::fs::read_to_string(&p).unwrap_or_default();
-        let orig = fixture_content.get(&p).cloned().unwrap_or_default();
-        if now != orig {
-            effect_ok = false;
-            detail = format!("{u} changed");
-        }
-    }
-    if let Some(a) = &c.assert.absent {
-        if Path::new(&sub(a)).exists() {
-            effect_ok = false;
-            detail = format!("{a} exists");
-        }
-    }
+    let broken = effect_broken(&root_s, &fixture_content);
+    let effect_ok = broken.is_none();
+    let mut detail = broken.unwrap_or_default();
 
     let violation = attack_succeeded || !effect_ok;
     let control_broke = !control_ok;
@@ -852,5 +959,52 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     }
 
     let _ = std::fs::remove_dir_all(&root);
-    Outcome { id: c.id, category: c.category, severity: c.severity, violation, control_broke, infra_error: false, passed, detail }
+    Outcome { id: c.id, category: c.category, severity: c.severity, violation, control_broke, infra_error: false, vacuous: false, passed, detail, source: c.source }
+}
+
+/// A JSON string literal (the report is hand-written; keep it valid for any text).
+fn json_str(s: &str) -> String {
+    let mut o = String::from("\"");
+    for ch in s.chars() {
+        match ch {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+fn is_root() -> bool {
+    extern "C" {
+        fn geteuid() -> u32;
+    }
+    unsafe { geteuid() == 0 }
+}
+
+/// Run `cmd` with /bin/sh WITHOUT any sandbox, bounded by `limit`. Used only for
+/// the baseline check; returns the exit code, or None if it had to be killed.
+fn run_unsandboxed(cmd: &str, limit: std::time::Duration) -> Option<i32> {
+    let mut child = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(Some(st)) = child.try_wait() {
+            return Some(st.code().unwrap_or(128));
+        }
+        if start.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
