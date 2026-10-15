@@ -158,6 +158,95 @@ pub const WINDOWS_ENV_BASELINE: &[&str] = &[
     "ProgramFiles(x86)", "ProgramW6432", "CommonProgramFiles",
 ];
 
+/// How the agent is confined. The policy model is the same for both; what
+/// differs is how much of it each tier can enforce without admin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// Default, no admin ever: an AppContainer. Reads are deny-by-default (only
+    /// granted paths are readable), stricter than the neutral model.
+    AppContainer,
+    /// Admin once (`setup/sandbox-user.ps1 install`), unprivileged per run: a
+    /// dedicated local user. Reads follow the neutral model (everything the
+    /// setup made readable, minus per-run deny ACEs, which bind a user SID).
+    SandboxUser,
+}
+
+impl Tier {
+    /// `TARTAROS_WINDOWS_TIER=sandbox-user` selects the dedicated user; anything
+    /// else (or unset) the AppContainer.
+    pub fn from_env() -> Tier {
+        match std::env::var("TARTAROS_WINDOWS_TIER").as_deref() {
+            Ok("sandbox-user") => Tier::SandboxUser,
+            _ => Tier::AppContainer,
+        }
+    }
+}
+
+const DELETE: u32 = 0x1_0000;
+const FILE_GENERIC_READ: u32 = 0x12_0089;
+const FILE_GENERIC_WRITE: u32 = 0x12_0116;
+const FILE_GENERIC_EXECUTE: u32 = 0x12_00A0;
+const FILE_ALL_ACCESS: u32 = 0x1F_01FF;
+/// Write data/append/EA/attributes, delete, delete-child, change DACL or owner.
+/// Not SYNCHRONIZE or READ_CONTROL: denying those breaks reads too.
+const DENY_WRITE: u32 = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | DELETE | 0x4_0000 | 0x8_0000;
+
+/// The ACEs the sandbox user gets on one path for `grant`, as SDDL ACE strings.
+/// Unlike an AppContainer, a deny ACE binds a user SID, so protection is an
+/// explicit deny (which wins over the inherited write grant) and the object's
+/// DACL is never frozen. No FILE_DELETE_CHILD is ever granted: a child is only
+/// deleted through its own DELETE, which a deny can withhold.
+pub fn user_aces(grant: Grant, sid: &str) -> Vec<String> {
+    let rwx = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+    let rx = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+    match grant {
+        Grant::Write => vec![format!("A;;0x{rwx:x};;;{sid}"), format!("A;OICIIO;0x{:x};;;{sid}", rwx | DELETE)],
+        Grant::Read => vec![format!("A;OICI;0x{rx:x};;;{sid}")],
+        Grant::ExecFile => vec![format!("A;;0x{rx:x};;;{sid}")],
+        // The ancestor itself cannot be deleted or renamed; its children keep
+        // the inherited write grant.
+        Grant::Pin => vec![format!("D;;0x{DELETE:x};;;{sid}")],
+        Grant::ProtectReadOnly => vec![format!("D;OICI;0x{DENY_WRITE:x};;;{sid}")],
+        Grant::ProtectNoAccess => vec![format!("D;OICI;0x{FILE_ALL_ACCESS:x};;;{sid}")],
+    }
+}
+
+/// The Windows backend; the tier comes from [`Tier::from_env`] at each call.
+pub struct WindowsBackend;
+
+impl Backend for WindowsBackend {
+    fn name(&self) -> &str {
+        match Tier::from_env() {
+            Tier::AppContainer => "windows-appcontainer",
+            Tier::SandboxUser => "windows-sandbox-user",
+        }
+    }
+
+    fn validate(&self, policy: &Policy) -> Result<(), PolicyError> {
+        AppContainerBackend.validate(policy)
+    }
+
+    fn run(&self, policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError> {
+        match Tier::from_env() {
+            Tier::AppContainer => AppContainerBackend.run(policy, command),
+            Tier::SandboxUser => {
+                self.validate(policy).map_err(|e| RunError { reason: e.reason })?;
+                if command.is_empty() {
+                    return Err(RunError { reason: "empty command".into() });
+                }
+                #[cfg(windows)]
+                {
+                    sys::run_sandbox_user(policy, command)
+                }
+                #[cfg(not(windows))]
+                {
+                    Err(RunError { reason: "the Windows backend only runs on Windows".into() })
+                }
+            }
+        }
+    }
+}
+
 pub struct AppContainerBackend;
 
 impl Backend for AppContainerBackend {
@@ -253,6 +342,23 @@ pub fn is_elevated() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sandbox_user_protects_with_deny_aces() {
+        let sid = "S-1-5-21-1-2-3-1001";
+        let w = user_aces(Grant::Write, sid);
+        // write grant: never FILE_DELETE_CHILD (0x40), DELETE only for children
+        assert!(w.iter().all(|a| u32::from_str_radix(a.split(';').nth(2).unwrap().trim_start_matches("0x"), 16).unwrap() & 0x40 == 0));
+        assert!(w[0].starts_with("A;;") && w[1].starts_with("A;OICIIO;"));
+        assert!(user_aces(Grant::Pin, sid)[0].starts_with("D;;0x10000;"));
+        let ro = &user_aces(Grant::ProtectReadOnly, sid)[0];
+        assert!(ro.starts_with("D;OICI;"));
+        let mask = u32::from_str_radix(ro.split(';').nth(2).unwrap().trim_start_matches("0x"), 16).unwrap();
+        // write, delete and DACL change denied; read/synchronize untouched
+        assert_eq!(mask & (0x2 | 0x10000 | 0x40000), 0x2 | 0x10000 | 0x40000);
+        assert_eq!(mask & (0x1 | 0x10_0000 | 0x2_0000), 0);
+        assert!(user_aces(Grant::ProtectNoAccess, sid)[0].starts_with("D;OICI;0x1f01ff;"));
+    }
+
     use std::fs;
 
     fn tmp(tag: &str) -> PathBuf {

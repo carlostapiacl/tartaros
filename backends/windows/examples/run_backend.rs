@@ -25,7 +25,7 @@ fn main() {
             other => panic!("unknown flag {other}"),
         }
     }
-    match tartaros_windows::AppContainerBackend.run(&p, &cmd) {
+    match tartaros_windows::WindowsBackend.run(&p, &cmd) {
         Ok(o) => {
             eprintln!("[run_backend] exit {}", o.exit_code);
             std::process::exit(o.exit_code);
