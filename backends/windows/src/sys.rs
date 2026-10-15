@@ -8,7 +8,7 @@ use std::ptr::{null, null_mut};
 
 use tartaros_core::{Policy, RunError, RunOutcome};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, WAIT_TIMEOUT,
+    CloseHandle, LocalFree, SetHandleInformation, FILETIME, HANDLE, HANDLE_FLAG_INHERIT, STILL_ACTIVE, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW, ConvertStringSidToSidW,
@@ -41,7 +41,7 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     GetUserObjectInformationW, SetProcessWindowStation, UOI_NAME,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateProcessAsUserW, CreateProcessW, CreateProcessWithLogonW, GetCurrentProcess, LOGON_WITH_PROFILE, STARTUPINFOW, GetExitCodeProcess, InitializeProcThreadAttributeList,
+    CreateProcessAsUserW, CreateProcessW, CreateProcessWithLogonW, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, GetCurrentProcess, LOGON_WITH_PROFILE, STARTUPINFOW, GetExitCodeProcess, InitializeProcThreadAttributeList,
     OpenProcessToken, ResumeThread, TerminateProcess, UpdateProcThreadAttribute, CREATE_NO_WINDOW,
     WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
@@ -299,6 +299,160 @@ unsafe fn apply_user(path: &Path, sid: &str, grant: Grant) -> Result<Saved, Stri
     Ok(Saved { path: wp, sddl: before })
 }
 
+// ------------------------------------------------------------------ journal
+
+/// Write-ahead record of every DACL a run changes, so a run that dies (killed,
+/// crashed, power loss) does not leave its grants behind: the next run puts the
+/// recorded DACLs back. One file per run in %LOCALAPPDATA%\tartaros\journal:
+///
+/// ```text
+/// run <pid> <process creation time>
+/// container <AppContainer profile name>      (AppContainer tier only)
+/// acl <path>\t<SDDL before the change>        (one per path, before it changes)
+/// ```
+///
+/// Tab and newline cannot appear in a Windows path, so the format needs no
+/// escaping. Recovery restores a dead run's entries in reverse order, except a
+/// path that a live run's journal also names: rolling that back would also undo
+/// the live run's change (possibly a deny), so it waits until that run is gone.
+struct Journal {
+    path: PathBuf,
+    file: std::fs::File,
+}
+
+fn journal_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("tartaros").join("journal"))
+}
+
+unsafe fn creation_time(process: HANDLE) -> Option<u64> {
+    let (mut c, mut e, mut k, mut u): (FILETIME, FILETIME, FILETIME, FILETIME) = (zeroed(), zeroed(), zeroed(), zeroed());
+    if GetProcessTimes(process, &mut c, &mut e, &mut k, &mut u) == 0 {
+        return None;
+    }
+    Some(((c.dwHighDateTime as u64) << 32) | c.dwLowDateTime as u64)
+}
+
+/// Whether the run that wrote a journal is still alive (same pid AND same start
+/// time, so a recycled pid does not count).
+unsafe fn run_alive(pid: u32, created: u64) -> bool {
+    let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if h.is_null() {
+        return false;
+    }
+    let mut code = 0u32;
+    let alive = GetExitCodeProcess(h, &mut code) != 0 && code == STILL_ACTIVE as u32 && creation_time(h) == Some(created);
+    CloseHandle(h);
+    alive
+}
+
+impl Journal {
+    unsafe fn open(tag: &str, container: Option<&str>) -> Result<Journal, String> {
+        use std::io::Write;
+        let dir = journal_dir().ok_or("LOCALAPPDATA is not set: no place for the ACL journal")?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("journal dir {}: {e}", dir.display()))?;
+        let path = dir.join(format!("{tag}.journal"));
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .map_err(|e| format!("journal {}: {e}", path.display()))?;
+        let created = creation_time(GetCurrentProcess()).unwrap_or(0);
+        let mut head = format!("run {} {created}\n", std::process::id());
+        if let Some(c) = container {
+            head.push_str(&format!("container {c}\n"));
+        }
+        file.write_all(head.as_bytes()).and_then(|_| file.sync_data()).map_err(|e| format!("journal write: {e}"))?;
+        Ok(Journal { path, file })
+    }
+
+    /// Record `path`'s current DACL; durable before the caller changes it.
+    fn record(&mut self, path: &Path, sddl: &str) -> Result<(), String> {
+        use std::io::Write;
+        self.file
+            .write_all(format!("acl {}\t{sddl}\n", path.display()).as_bytes())
+            .and_then(|_| self.file.sync_data())
+            .map_err(|e| format!("journal write: {e}"))
+    }
+
+    /// The run restored everything: the journal is no longer needed.
+    fn finish(self) {
+        drop(self.file);
+        std::fs::remove_file(&self.path).ok();
+    }
+}
+
+/// Put back what dead runs left behind. Called at the start of every run.
+/// Returns a note for stderr when something was recovered or could not be.
+/// One journal file, parsed.
+struct JournalFile {
+    path: PathBuf,
+    pid: u32,
+    alive: bool,
+    container: Option<String>,
+    entries: Vec<(String, String)>,
+}
+
+fn parse_journal(path: PathBuf) -> Option<JournalFile> {
+    let text = std::fs::read_to_string(&path).ok()?;
+    let mut lines = text.lines();
+    let mut head = lines.next()?.split(' ');
+    let (pid, created) = match (head.next(), head.next(), head.next()) {
+        (Some("run"), Some(p), Some(c)) => (p.parse::<u32>().ok()?, c.parse::<u64>().ok()?),
+        _ => return None,
+    };
+    let mut container = None;
+    let mut entries = Vec::new();
+    for l in lines {
+        if let Some(c) = l.strip_prefix("container ") {
+            container = Some(c.to_string());
+        } else if let Some((p, sddl)) = l.strip_prefix("acl ").and_then(|r| r.split_once('\t')) {
+            entries.push((p.to_string(), sddl.to_string()));
+        }
+    }
+    let alive = unsafe { run_alive(pid, created) };
+    Some(JournalFile { path, pid, alive, container, entries })
+}
+
+unsafe fn recover_orphans() -> Option<String> {
+    let dir = journal_dir()?;
+    let journals: Vec<JournalFile> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map_or(false, |e| e == "journal"))
+        .filter_map(parse_journal)
+        .collect();
+    let live: Vec<&str> = journals.iter().filter(|j| j.alive).flat_map(|j| j.entries.iter().map(|(p, _)| p.as_str())).collect();
+    let mut notes = Vec::new();
+    for j in journals.iter().filter(|j| !j.alive) {
+        let (path, pid, container, entries) = (&j.path, j.pid, &j.container, &j.entries);
+        if entries.iter().any(|(p, _)| live.iter().any(|l| l.eq_ignore_ascii_case(p))) {
+            notes.push(format!("dead run {pid} shares paths with a live run; its ACLs are restored once that run ends"));
+            continue;
+        }
+        let mut failed = Vec::new();
+        for (p, sddl) in entries.iter().rev() {
+            if let Err(e) = write_sddl(&native(Path::new(p)), sddl) {
+                // A path that is gone has no grant left to undo.
+                if Path::new(p).exists() {
+                    failed.push(format!("{p} ({e})"));
+                }
+            }
+        }
+        if let Some(c) = &container {
+            DeleteAppContainerProfile(wide(OsStr::new(c)).as_ptr());
+        }
+        if failed.is_empty() {
+            std::fs::remove_file(path).ok();
+            notes.push(format!("restored {} ACL(s) left by dead run {pid}", entries.len()));
+        } else {
+            notes.push(format!("could not restore ACLs left by dead run {pid}: {}", failed.join(", ")));
+        }
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
 // ------------------------------------------------------------ desktop / winsta
 
 unsafe fn grant_handle(h: HANDLE, sid: PSID, mask: u32) -> Result<(*mut c_void, *mut ACL), String> {
@@ -529,19 +683,25 @@ pub(crate) fn run(policy: &Policy, command: &[String]) -> Result<RunOutcome, Run
         COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     unsafe {
+        if let Some(note) = recover_orphans() {
+            eprintln!("tartaros: {note}");
+        }
         let container = Container::create(&tag).map_err(err)?;
         prepare(policy)?;
         let program = Path::new(&command[0]);
         let program = program.is_absolute().then_some(program);
 
-        let saved = apply_plan(policy, program, |path, grant| apply(path, &container.sid_str, grant))?;
+        let mut journal = Journal::open(&tag, Some(&format!("tartaros.{tag}"))).map_err(err)?;
+        let saved = apply_plan(policy, program, &mut journal, |path, grant| apply(path, &container.sid_str, grant))?;
 
         let outcome = spawn(policy, command, &container, &tag);
         let failed = restore(saved);
         drop(container);
         if !failed.is_empty() {
+            // The journal stays: the next run retries the restore.
             return Err(err(format!("run finished but ACL restore failed:{}", restore_note(&failed))));
         }
+        journal.finish();
         outcome
     }
 }
@@ -568,6 +728,7 @@ fn prepare(policy: &Policy) -> Result<(), RunError> {
 unsafe fn apply_plan(
     policy: &Policy,
     program: Option<&Path>,
+    journal: &mut Journal,
     apply_one: impl Fn(&Path, Grant) -> Result<Saved, String>,
 ) -> Result<Vec<Saved>, RunError> {
     let mut saved = Vec::new();
@@ -576,7 +737,13 @@ unsafe fn apply_plan(
         if debug {
             eprintln!("[acl] {grant:?} {}", path.display());
         }
-        match apply_one(&path, grant) {
+        // Journal first: if this process dies right after the change, the next
+        // run can still put the DACL back.
+        let recorded = read_sddl(&native(&path))
+            .map_err(|e| format!("{}: {e}", path.display()))
+            .and_then(|before| journal.record(&path, &before));
+        let result = recorded.and_then(|_| apply_one(&path, grant));
+        match result {
             Ok(s) => {
                 if debug {
                     eprintln!("      -> {}", read_sddl(&native(&path)).unwrap_or_default());
@@ -812,16 +979,22 @@ pub(crate) fn run_sandbox_user(policy: &Policy, command: &[String]) -> Result<Ru
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let tag = format!("u{}.{}", std::process::id(), COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     unsafe {
+        if let Some(note) = recover_orphans() {
+            eprintln!("tartaros: {note}");
+        }
         let user = SandboxUser::load().map_err(err)?;
         prepare(policy)?;
         let program = Path::new(&command[0]);
         let program = program.is_absolute().then_some(program);
-        let saved = apply_plan(policy, program, |path, grant| apply_user(path, &user.sid_str, grant))?;
+        let mut journal = Journal::open(&tag, None).map_err(err)?;
+        let saved = apply_plan(policy, program, &mut journal, |path, grant| apply_user(path, &user.sid_str, grant))?;
         let outcome = spawn_user(policy, command, &user, &tag);
         let failed = restore(saved);
         if !failed.is_empty() {
+            // The journal stays: the next run retries the restore.
             return Err(err(format!("run finished but ACL restore failed:{}", restore_note(&failed))));
         }
+        journal.finish();
         outcome
     }
 }
