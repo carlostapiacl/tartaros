@@ -34,6 +34,7 @@ impl Backend for SeatbeltBackend {
                 });
             }
         }
+        policy.check_symlinked_roots().map_err(|reason| PolicyError { reason })?;
         // Fail closed on Linux-only hardening: Seatbelt cannot provide a PID /
         // network namespace or a seccomp syscall filter, so honouring a policy
         // that requested one by silently running WITHOUT it would hand back a
@@ -690,31 +691,8 @@ fn regex_escape(s: &str) -> String {
     out
 }
 
-/// Canonicalize a path, resolving symlinks, even when the path does not exist
-/// yet: walk up to the nearest existing ancestor, canonicalize that, and reattach
-/// the remaining components. Seatbelt matches real paths, so a rule under a
-/// symlinked root (e.g. /tmp -> /private/tmp) must be resolved or it will not
-/// match. Falls back to the original path if nothing resolves.
 fn canonical_best_effort(path: &Path) -> PathBuf {
-    if let Ok(c) = path.canonicalize() {
-        return c;
-    }
-    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
-    let mut cur = path;
-    while let Some(parent) = cur.parent() {
-        if let Some(name) = cur.file_name() {
-            suffix.push(name.to_owned());
-        }
-        if let Ok(c) = parent.canonicalize() {
-            let mut out = c;
-            for s in suffix.iter().rev() {
-                out.push(s);
-            }
-            return out;
-        }
-        cur = parent;
-    }
-    path.to_path_buf()
+    tartaros_core::resolve_best_effort(path)
 }
 
 /// Insert `(with message "<tag>")` into every `deny` rule of a compiled profile,

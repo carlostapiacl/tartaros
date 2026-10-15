@@ -68,6 +68,11 @@ struct Contract {
     /// that must never run unconfined (fork bombs, memory hogs, escaping daemons).
     #[serde(default)]
     baseline: BaselineSpec,
+    /// The correct answer is for the sandbox to REFUSE this policy (fail closed):
+    /// a backend that rejects it before running anything passes, one that runs
+    /// the attack is judged as usual. The control is not run.
+    #[serde(default)]
+    expect_refusal: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -913,6 +918,25 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
             violation: attack_succeeded, control_broke: false, infra_error: false, vacuous: false,
             passed: !attack_succeeded, detail: format!("attack {attack_res:?}"), source: c.source.clone(),
         };
+    }
+
+    // A policy the sandbox is expected to refuse: a refusal before running is the
+    // pass; if it ran, the attack and its effects are judged below as usual.
+    if c.expect_refusal {
+        if let Err(e) = &attack_res {
+            drop(servers);
+            for p in &unix_paths { let _ = std::fs::remove_file(p); }
+            for kv in &c.launcher_env {
+                if let Some((k, _)) = kv.split_once('=') { std::env::remove_var(k); }
+            }
+            let _ = std::fs::remove_dir_all(&root);
+            return Outcome {
+                id: c.id, category: c.category, severity: c.severity,
+                violation: false, control_broke: false, infra_error: false, vacuous: false,
+                passed: true, detail: format!("refused: {}", e.chars().take(80).collect::<String>()),
+                source: c.source,
+            };
+        }
     }
 
     // A backend that could not launch the attack is INFRA_ERROR, not "blocked".

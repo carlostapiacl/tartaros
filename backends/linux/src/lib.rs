@@ -32,6 +32,7 @@ mod namespace;
 mod cgroup;
 #[cfg(target_os = "linux")]
 mod landlock_probe;
+#[cfg(target_os = "linux")]
 pub use landlock_probe::{landlock_fs_supported, landlock_net_supported};
 
 pub struct LandlockBackend;
@@ -81,6 +82,7 @@ impl Backend for LandlockBackend {
                     .into(),
             });
         }
+        policy.check_symlinked_roots().map_err(|reason| PolicyError { reason })?;
         // TartarOS can always express the rest of the policy by restructuring.
         let _allow = policy.linux_write_allowlist();
         Ok(())
