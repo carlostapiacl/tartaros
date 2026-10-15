@@ -511,34 +511,103 @@ impl Policy {
         out
     }
 
-    /// Resolved handoff surfaces (`hooks/`, `config`, submodule `modules/`) of any
-    /// git repo whose `.git` is a POINTER FILE (`gitdir: <path>`) and whose target
-    /// lands under a writable root. A regex/pattern deny can't express these: the
-    /// target directory has no `.git` of its own and its name is arbitrary, so it
-    /// is found only by reading the pointer. The macOS backend (pattern-based) adds
-    /// these as literal denies; on Linux the walk already covers them.
+    /// Handoff surfaces reached through a SYMLINK whose name is a handoff segment
+    /// (e.g. `proj/.claude -> ../dotfiles/claude`). The Seatbelt pattern rules match
+    /// the literal `.claude/...` spelling, but the kernel canonicalises through the
+    /// link, so the resolved target (`dotfiles/claude/commands`, with no handoff
+    /// name in its real path) would be writable. These are found by a BOUNDED scan
+    /// that inspects only directory-entry names and types (no per-path stat storm)
+    /// and resolves just the matching symlinks; it descends at most `cap`
+    /// directories, then stops and reports `capped = true`. The non-symlinked
+    /// surfaces stay fully covered by the patterns regardless, so a hit on the cap
+    /// (a huge writable root like a cache) degrades only this symlink edge, with a
+    /// warning — it never hangs and never refuses a large root.
+    pub fn symlinked_handoff_denies(&self, cap: usize) -> (Vec<PathBuf>, bool) {
+        // Split each handoff name into (first segment, remainder) once.
+        let splits: Vec<(&str, Option<&str>)> = HANDOFF_CONFIG_NAMES
+            .iter()
+            .map(|n| match n.split_once('/') {
+                Some((a, b)) => (a, Some(b)),
+                None => (*n, None),
+            })
+            .collect();
+        let mut out: Vec<PathBuf> = Vec::new();
+        let mut seen = 0usize;
+        let mut capped = false;
+        for root in &self.writable_roots {
+            let mut stack = vec![resolve_best_effort(root)];
+            while let Some(dir) = stack.pop() {
+                seen += 1;
+                if seen > cap {
+                    capped = true;
+                    break;
+                }
+                let entries = match std::fs::read_dir(&dir) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                for entry in entries.flatten() {
+                    let ft = match entry.file_type() {
+                        Ok(t) => t,
+                        Err(_) => continue,
+                    };
+                    if ft.is_symlink() {
+                        let name = entry.file_name();
+                        let name = name.to_string_lossy();
+                        for (first, rest) in &splits {
+                            if name == *first {
+                                let target = resolve_best_effort(&entry.path());
+                                out.push(match rest {
+                                    Some(r) => target.join(r),
+                                    None => target,
+                                });
+                            }
+                        }
+                    } else if ft.is_dir() {
+                        // Do not descend into a real `.git` dir (internals handled
+                        // by the patterns) — and never follow a symlinked dir.
+                        if entry.file_name() != ".git" {
+                            stack.push(entry.path());
+                        }
+                    }
+                }
+            }
+            if capped {
+                break;
+            }
+        }
+        out.sort();
+        out.dedup();
+        (out, capped)
+    }
+
+    /// Resolved handoff surfaces (`hooks/`, `config`, submodule `modules/`) of a
+    /// git checkout whose `.git` is a POINTER FILE (`gitdir: <path>`). A
+    /// regex/pattern deny can't express these: the target directory has no `.git`
+    /// of its own and its name is arbitrary, so it is found only by reading the
+    /// pointer. The macOS backend (pattern-based) adds these as literal denies.
+    ///
+    /// Anchored at each writable ROOT — O(number of roots), NOT O(tree). The only
+    /// relocated gitdir a pattern misses is a worktree/submodule *checkout* whose
+    /// own `.git` is a pointer file; that `.git` sits at the checkout root, i.e. at
+    /// a writable root. (A nested real `.git` dir, a submodule's
+    /// `.git/modules/.../hooks`, and the main repo's `.git/hooks` are all covered
+    /// any-depth by the pattern rules.) This is what Codex/srt do — resolve the
+    /// workspace's gitdir — rather than walk the whole writable tree, which on a
+    /// large root (a cache, `node_modules`) cost tens of seconds and a huge profile.
     pub fn gitdir_pointer_handoff(&self) -> Vec<PathBuf> {
-        let mut out = Vec::new();
-        for r in self.trust_handoff_rules() {
-            // trust_handoff_rules already resolves pointers; keep the deny paths
-            // that fall under a writable root but are NOT under a `.git` directory
-            // named in the tree (those are the pointer targets).
-            let under_root = self
-                .writable_roots
-                .iter()
-                .any(|w| r.path.starts_with(&resolve_best_effort(w)));
-            let is_dotgit_path = r.path.components().any(|c| c.as_os_str() == ".git");
-            // Only EXISTING surfaces. A pointer target is a real relocated gitdir;
-            // the absent config-handoff NAMES (`.mcp.json`, `.vscode`, … at any
-            // depth) are already covered any-depth by the Seatbelt regex, so adding
-            // them here is redundant — and because the macOS backend emits these as
-            // literal denies with ancestor move-blocking, an absent name would pin
-            // `file-write-unlink` on every ancestor DIRECTORY, making a plain
-            // sub-directory un-renamable (`mv src src2` fails) for no protection
-            // gain. Gating on existence keeps the pointer-target protection and lets
-            // legitimate directory renames through.
-            if under_root && !is_dotgit_path && r.path.exists() {
-                out.push(r.path);
+        let mut out: Vec<PathBuf> = Vec::new();
+        for root in &self.writable_roots {
+            let dotgit = root.join(".git");
+            if !dotgit.is_file() {
+                continue; // a real `.git` dir (or none): patterns cover it
+            }
+            if let Some(gitdir) = read_gitdir_pointer(&dotgit, root) {
+                out.push(gitdir.join("hooks"));
+                out.push(gitdir.join("config"));
+                let mut modules = Vec::new();
+                deny_git_modules_handoff(&gitdir.join("modules"), 0, &mut modules);
+                out.extend(modules.into_iter().map(|r| r.path));
             }
         }
         out.sort();
@@ -1194,27 +1263,58 @@ mod tests {
     }
 
     #[test]
-    fn gitdir_pointer_handoff_only_returns_existing_surfaces() {
-        let tmp = std::env::temp_dir().join(format!("sbx-ptr-{}", std::process::id()));
-        fs::create_dir_all(tmp.join("work/src")).unwrap();
-        // An EXISTING config-handoff dir is a live surface; absent names are not.
-        fs::create_dir_all(tmp.join("work/.vscode")).unwrap();
-        // Canonicalize so the raw rule paths and the under-root check align on the
-        // real path (macOS temp dirs are /var -> /private/var symlinks).
+    fn symlinked_handoff_dir_is_resolved_but_scan_is_bounded() {
+        let tmp = std::env::temp_dir().join(format!("sbx-slh-{}", std::process::id()));
+        // proj/.claude is a symlink into a dotfiles tree inside the root.
+        fs::create_dir_all(tmp.join("work/dotfiles/claude/commands")).unwrap();
+        fs::create_dir_all(tmp.join("work/proj/src")).unwrap();
         let root = tmp.join("work").canonicalize().unwrap();
+        std::os::unix::fs::symlink("../dotfiles/claude", root.join("proj/.claude")).unwrap();
+
+        let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
+        let (denies, capped) = policy.symlinked_handoff_denies(10_000);
+        assert!(!capped, "a tiny tree must not hit the cap");
+        let resolved_commands = resolve_best_effort(&root.join("dotfiles/claude/commands"));
+        assert!(denies.iter().any(|p| p == &resolved_commands),
+            "the symlink's resolved .claude/commands target must be denied");
+        // A plain sub-directory is never pinned by this scan.
+        assert!(!denies.iter().any(|p| p == &root.join("proj/src")));
+
+        // The cap is honoured: cap 0 reports capped and resolves nothing.
+        let (empty, capped0) = policy.symlinked_handoff_denies(0);
+        assert!(capped0 && empty.is_empty());
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn gitdir_pointer_handoff_resolves_root_pointer_not_the_tree() {
+        let tmp = std::env::temp_dir().join(format!("sbx-ptr-{}", std::process::id()));
+        // A worktree/submodule checkout: `.git` at the writable root is a POINTER
+        // FILE to a relocated gitdir elsewhere. Also a config-handoff dir and a
+        // plain sub-dir, to prove neither is enumerated here.
+        fs::create_dir_all(tmp.join("work/src")).unwrap();
+        fs::create_dir_all(tmp.join("work/.vscode")).unwrap();
+        fs::create_dir_all(tmp.join("gitdir/hooks")).unwrap();
+        let root = tmp.join("work").canonicalize().unwrap();
+        let gitdir = tmp.join("gitdir").canonicalize().unwrap();
+        fs::write(root.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
 
         let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
         let surfaces = policy.gitdir_pointer_handoff();
-        // The existing .vscode is returned (so the macOS backend pins it).
-        assert!(surfaces.iter().any(|p| p == &root.join(".vscode")),
-            "an existing handoff dir must be returned");
-        // Absent config names (e.g. src/.mcp.json) are NOT — they are covered by the
-        // any-depth regex, and returning them would pin unlink on `src` (breaking a
-        // plain `mv src src2`).
-        assert!(!surfaces.iter().any(|p| p == &resolve_best_effort(&root.join("src/.mcp.json"))),
-            "an absent handoff name must not be returned");
-        assert!(!surfaces.iter().any(|p| p == &resolve_best_effort(&root.join("src"))),
-            "a plain sub-directory must not be pinned");
+        // The relocated gitdir's hooks/config ARE resolved (a regex can't express
+        // this arbitrary path).
+        assert!(surfaces.iter().any(|p| p == &gitdir.join("hooks")),
+            "the relocated gitdir's hooks must be resolved");
+        assert!(surfaces.iter().any(|p| p == &gitdir.join("config")),
+            "the relocated gitdir's config must be resolved");
+        // Config-handoff dirs and plain sub-dirs are NOT enumerated here — the
+        // pattern rules cover the former, and enumerating the latter is what made
+        // the cost scale with the tree.
+        assert!(!surfaces.iter().any(|p| p == &root.join(".vscode")),
+            ".vscode is covered by the pattern rules, not enumerated here");
+        assert!(!surfaces.iter().any(|p| p == &root.join("src")),
+            "a plain sub-directory must never be pinned");
 
         fs::remove_dir_all(&tmp).ok();
     }

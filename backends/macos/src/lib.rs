@@ -81,7 +81,7 @@ impl Backend for SeatbeltBackend {
             return Err(RunError { reason: "empty command".into() });
         }
         use tartaros_core::VecSink;
-        let child = self.spawn(policy, command)?;
+        let (child, _prof) = self.spawn(policy, command)?;
         Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut [], &mut VecSink::default()) })
     }
 }
@@ -89,7 +89,7 @@ impl Backend for SeatbeltBackend {
 impl SeatbeltBackend {
     /// Spawn the confined command without waiting, so collectors can observe its
     /// process tree by pid while it runs (used by the CLI's `--log`).
-    pub fn spawn(&self, policy: &Policy, command: &[String]) -> Result<std::process::Child, RunError> {
+    pub fn spawn(&self, policy: &Policy, command: &[String]) -> Result<(std::process::Child, TempProfile), RunError> {
         self.validate(policy).map_err(|e| RunError { reason: e.reason })?;
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
@@ -98,8 +98,13 @@ impl SeatbeltBackend {
         // attributable in the macOS unified log (consumers filter on "_SBX").
         let tag = log_tag(command);
         let profile = compile_profile_tagged(policy, Some(&tag));
+        // Deliver the profile by FILE (`-f`), not `-p <string>` on argv: a profile
+        // for a policy with many writable roots can exceed ARG_MAX ("Argument list
+        // too long"). The temp file is 0600 and deleted when the returned guard
+        // drops (after the run is supervised).
+        let prof = TempProfile::write(&profile)?;
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
-        cmd.arg("-p").arg(&profile).arg("--").args(command);
+        cmd.arg("-f").arg(prof.path()).arg("--").args(command);
         // Scrub the inherited environment to the policy's allowlist (F-13): a secret
         // in the launcher's env is inherited at exec and is NOT governed by the
         // Seatbelt profile, so by default we hand the child only the safe allowlist.
@@ -160,7 +165,8 @@ impl SeatbeltBackend {
                 Ok(())
             });
         }
-        cmd.spawn().map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })
+        let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })?;
+        Ok((child, prof))
     }
 
     /// Run confined AND observe with collectors, under the SAME supervisor as
@@ -176,7 +182,7 @@ impl SeatbeltBackend {
     where
         F: FnOnce(u32) -> Vec<Box<dyn Collector>>,
     {
-        let child = self.spawn(policy, command)?;
+        let (child, _prof) = self.spawn(policy, command)?;
         let mut cols = make_collectors(child.id());
         Ok(RunOutcome { exit_code: supervise(child, policy.timeout, &mut cols, sink) })
     }
@@ -517,6 +523,26 @@ fn build_profile(policy: &Policy) -> String {
     for gitdir_surface in policy.gitdir_pointer_handoff() {
         emit_deny(&mut p, &gitdir_surface, &policy.writable_roots);
     }
+    // Handoff dirs reached through a symlink (e.g. `proj/.claude -> dotfiles/claude`)
+    // canonicalise to a target the patterns miss. Resolve them with a BOUNDED scan
+    // (cheap, dirent-type only) and deny the resolved target. The scan stops after
+    // SYMLINK_SCAN_CAP directories so a huge writable root (a cache, node_modules)
+    // never hangs — if it caps out we warn and keep the pattern protection, rather
+    // than refuse the root.
+    const SYMLINK_SCAN_CAP: usize = 10_000;
+    let (symlinked, capped) = policy.symlinked_handoff_denies(SYMLINK_SCAN_CAP);
+    for surface in symlinked {
+        emit_deny(&mut p, &surface, &policy.writable_roots);
+    }
+    if capped {
+        eprintln!(
+            "tartaros: warning: a writable root has more than {SYMLINK_SCAN_CAP} directories; \
+             the scan for symlinked handoff dirs (e.g. a `.claude` symlink into a dotfiles tree) \
+             stopped early. Named handoff surfaces (.git/.claude/.vscode/…) are still fully \
+             protected by pattern; a symlinked handoff below the cap may not be. Narrow the \
+             writable root to pin it."
+        );
+    }
 
     // Read carve: deny-reads and re-allow-reads interleave by SPECIFICITY — the
     // most specific (deepest) path wins, which is the sandbox-runtime rule. A naive
@@ -840,6 +866,49 @@ fn quote(path: &Path) -> String {
     let s = path.to_string_lossy();
     let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
+}
+
+/// A Seatbelt profile written to a private temp file, passed to `sandbox-exec -f`
+/// (so the profile never rides argv and cannot hit ARG_MAX). The file is created
+/// 0600 under a unique name and deleted when this guard drops — which the run
+/// paths hold until after the confined process is supervised.
+pub struct TempProfile {
+    path: std::path::PathBuf,
+}
+
+impl TempProfile {
+    fn write(contents: &str) -> Result<Self, RunError> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut path = std::env::temp_dir();
+        path.push(format!("tartaros-sbx-{}-{nanos}-{seq}.sb", std::process::id()));
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| RunError { reason: format!("creating sandbox profile file: {e}") })?;
+        f.write_all(contents.as_bytes())
+            .map_err(|e| RunError { reason: format!("writing sandbox profile file: {e}") })?;
+        Ok(TempProfile { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempProfile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 #[cfg(test)]
