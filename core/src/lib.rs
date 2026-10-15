@@ -686,8 +686,17 @@ impl Profile {
 pub fn resolve_best_effort(path: &Path) -> PathBuf {
     use std::collections::VecDeque;
     use std::path::Component;
+    // The prefix and root of an absolute path (`/` on Unix; `C:\`, `\\server\share\`
+    // or `\\?\C:\` on Windows). Starting from a bare `/` would drop the drive, and
+    // `/Users\x` is not absolute on Windows: resolving it again would land under
+    // the current directory.
+    let anchor = |p: &Path| -> PathBuf {
+        p.components()
+            .take_while(|c| matches!(c, Component::Prefix(_) | Component::RootDir))
+            .collect()
+    };
     let mut out = if path.is_absolute() {
-        PathBuf::from("/")
+        anchor(path)
     } else {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
     };
@@ -723,7 +732,7 @@ pub fn resolve_best_effort(path: &Path) -> PathBuf {
                 match std::fs::read_link(&cand) {
                     Ok(target) => {
                         if target.is_absolute() {
-                            out = PathBuf::from("/");
+                            out = anchor(&target);
                         }
                         push_all(&target, &mut pending, true);
                     }
