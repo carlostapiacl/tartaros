@@ -530,6 +530,7 @@ dependencies = [
  "tartaros-core",
  "tartaros-linux",
  "tartaros-macos",
+ "tartaros-windows",
  "toml",
 ]
 

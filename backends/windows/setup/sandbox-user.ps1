@@ -135,12 +135,15 @@ function Install {
     Set-ItemProperty -Path $HideKey -Name $UserName -Value 0 -Type DWord
     Set-Rights $sid $true
 
-    # Network off for this identity: block every outbound/inbound connection it
-    # makes, scoped to its SID (the rule never touches other users).
+    # Network off for this identity, loopback included. The Windows firewall
+    # exempts loopback, so a per-SID WFP filter is used instead (tartaros-wfp,
+    # next to this script). Old firewall rules from a previous version are removed.
     Get-NetFirewallRule -Group $FwGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-    $sddl = "O:LSD:(A;;CC;;;$sid)"
-    New-NetFirewallRule -DisplayName "$FwGroup (out)" -Group $FwGroup -Direction Outbound -Action Block -LocalUser $sddl -Profile Any | Out-Null
-    New-NetFirewallRule -DisplayName "$FwGroup (in)" -Group $FwGroup -Direction Inbound -Action Block -LocalUser $sddl -Profile Any | Out-Null
+    $wfp = Join-Path $PSScriptRoot 'tartaros-wfp.exe'
+    if (-not (Test-Path $wfp)) { throw "tartaros-wfp.exe not found next to this script ($wfp); build it (cargo build -p tartaros-windows --bin tartaros-wfp) and place it here." }
+    & $wfp uninstall | Out-Null
+    & $wfp install $sid
+    if ($LASTEXITCODE -ne 0) { throw "tartaros-wfp install failed ($LASTEXITCODE)" }
 
     # Read on the runner's profile: the neutral model reads everything except
     # what the policy denies; the backend adds those denies per run. Note: this
@@ -164,6 +167,8 @@ function Uninstall {
     $sid = (Get-ItemProperty -Path $KeyPath -Name Sid -ErrorAction SilentlyContinue).Sid
     $prof = (Get-ItemProperty -Path $KeyPath -Name ProfileDir -ErrorAction SilentlyContinue).ProfileDir
     Get-NetFirewallRule -Group $FwGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    $wfp = Join-Path $PSScriptRoot 'tartaros-wfp.exe'
+    if (Test-Path $wfp) { & $wfp uninstall | Out-Null }
     if ($sid) { Set-Rights $sid $false }
     if ($prof -and $gsid -and (Test-Path $prof)) { icacls $prof /remove:g "*$gsid" /C /Q | Out-Null }
     Remove-ItemProperty -Path $HideKey -Name $UserName -ErrorAction SilentlyContinue
@@ -174,7 +179,7 @@ function Uninstall {
     if (Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $UserName }
     if (Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue) { Remove-LocalGroup -Name $GroupName }
     if (Test-Path $KeyPath) { Remove-Item -Path $KeyPath -Recurse -Force }
-    # Drop the now-empty parent key if nothing else lives under HKLM\SOFTWARE	artaros.
+    # Drop the now-empty parent key if nothing else lives under HKLM\SOFTWARE\tartaros.
     $parent = Split-Path $KeyPath -Parent
     if ((Test-Path $parent) -and -not (Get-ChildItem $parent -ErrorAction SilentlyContinue) -and -not (Get-ItemProperty $parent -ErrorAction SilentlyContinue).PSObject.Properties.Where({ $_.Name -notlike 'PS*' })) {
         Remove-Item -Path $parent -Force -ErrorAction SilentlyContinue
@@ -190,7 +195,7 @@ function Status {
         Group         = if (Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue) { $GroupName } else { 'missing' }
         Credential    = if ($k -and $k.Blob) { "stored ($($k.Blob.Length) bytes)" } else { 'missing' }
         ProfileDir    = if ($k) { $k.ProfileDir } else { '' }
-        FirewallRules = @(Get-NetFirewallRule -Group $FwGroup -ErrorAction SilentlyContinue).Count
+        EgressBlock   = $($wfp = Join-Path $PSScriptRoot 'tartaros-wfp.exe'; if (Test-Path $wfp) { & $wfp check | Out-Null; if ($LASTEXITCODE -eq 0) { 'WFP filter installed' } else { 'MISSING' } } else { 'tartaros-wfp.exe not found' })
         Hidden        = [bool](Get-ItemProperty -Path $HideKey -Name $UserName -ErrorAction SilentlyContinue)
     } | Format-List
 }

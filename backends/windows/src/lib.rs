@@ -18,6 +18,9 @@ use tartaros_core::{
 #[cfg(windows)]
 mod sys;
 
+#[cfg(windows)]
+pub mod wfp;
+
 /// What the container gets on one path. Applied in this order, so a deeper or
 /// later rule (a protect inside a grant) wins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,6 +430,40 @@ impl Backend for AppContainerBackend {
         {
             Err(RunError { reason: "the Windows backend only runs on Windows".into() })
         }
+    }
+}
+
+/// Entry point of `tartaros-wfp.exe` (admin setup helper). Returns a process
+/// exit code. See `wfp` for what it installs.
+#[cfg(windows)]
+pub fn wfp_main(args: Vec<String>) -> i32 {
+    let fail = |m: String| {
+        eprintln!("tartaros-wfp: {m}");
+        2
+    };
+    match args.first().map(String::as_str) {
+        Some("install") => {
+            let Some(sid) = args.get(1) else { return fail("usage: install <sid> [--allow-loopback-port <port>]".into()) };
+            let port = match args.iter().position(|a| a == "--allow-loopback-port") {
+                Some(i) => match args.get(i + 1).and_then(|p| p.parse::<u16>().ok()) {
+                    Some(p) => Some(p),
+                    None => return fail("--allow-loopback-port needs a port number".into()),
+                },
+                None => None,
+            };
+            match unsafe { wfp::install(sid, port) } {
+                Ok(()) => 0,
+                Err(e) => fail(e),
+            }
+        }
+        Some("uninstall") => match unsafe { wfp::uninstall() } {
+            Ok(()) => 0,
+            Err(e) => fail(e),
+        },
+        Some("check") => {
+            if unsafe { wfp::block_installed() } { 0 } else { 1 }
+        }
+        _ => fail("usage: tartaros-wfp install|uninstall|check".into()),
     }
 }
 
