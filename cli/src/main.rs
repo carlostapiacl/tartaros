@@ -29,7 +29,8 @@
 //!   --max-mem BYTES        address-space limit
 //!   --max-procs N          process limit
 //!   --max-cpu SECS         total CPU-seconds limit (RLIMIT_CPU; root-proof)
-//!   --log FILE             write the effect log (JSON Lines) here (Linux)
+//!   --log FILE             write the effect log here, the egress broker's decisions included
+//!   --log-format F         jsonl (default) or otlp (OpenTelemetry, with the launcher's TRACEPARENT)
 //!   --settings FILE        map a sandbox-runtime settings.json onto the generic
 //!                          policy; refuses (exit 78) on anything it can't guarantee
 //!
@@ -301,7 +302,10 @@ LIMITS:
   --max-cpu SECS         total CPU-seconds cap
 
 OBSERVABILITY:
-  --log FILE             write the first-hand effect log (JSON Lines)
+  --log FILE             write the first-hand effect log (JSON Lines), the egress
+                         broker's connect decisions included
+  --log-format F         jsonl (default) or otlp: OpenTelemetry log records in the
+                         open effect schema, with the launcher's TRACEPARENT
 
 Exit code is the command's (128+signal on signal death, 124 on timeout). TartarOS's own:
   78  the policy was refused (this backend cannot enforce it); nothing ran
@@ -334,7 +338,7 @@ fn cmd_run(rest: &[String]) -> ! {
     // Domain-scoped egress: start the capability broker and route the agent
     // through it. On Linux-as-root this builds a scoped network namespace (NET-01);
     // the returned guard tears it (netns + veth + firewall rule) down after the run.
-    let egress_guard = start_egress_broker(&mut p);
+    let egress_guard = start_egress_broker(&mut p, log.as_ref());
     start_credential_broker(&mut p);
     // Print the profile's honest caveat before running — a tier must never
     // silently overclaim (esp. multi-tenant on a shared kernel).
@@ -345,7 +349,7 @@ fn cmd_run(rest: &[String]) -> ! {
     }
     let private_tmp = setup_private_tmp(&mut p);
     warn_reachable_host_sockets(&p);
-    let code = run(&p, &cmd, log.as_deref());
+    let code = run(&p, &cmd, log.as_ref());
     // Tear down the run-private temp dir (our own ephemeral scratch for this run).
     if let Some(dir) = private_tmp {
         let _ = std::fs::remove_dir_all(&dir);
@@ -492,7 +496,7 @@ fn warn_reachable_host_sockets(p: &Policy) {
 /// is a veth to the broker (no default route) — the broker becomes the one door out
 /// at the network layer, fail-closed. macOS filters egress by address (no gap). The
 /// non-root fallback is the bare port grant with a loud NET-01 warning.
-fn start_egress_broker(p: &mut Policy) -> EgressGuard {
+fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
     if p.allow_domains.is_empty() {
         return Default::default();
     }
@@ -506,6 +510,22 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
         exit(2);
     }
     let hosts = p.allow_domains.clone();
+    // The broker's decisions go to the run's --log (its own append handle, the same
+    // filter as the supervisor's), or nowhere: before, they went to an in-memory sink
+    // nobody read, so a run's egress decisions were lost.
+    let open_sink = {
+        let log = log.cloned();
+        move || -> Box<dyn tartaros_core::EffectSink> {
+            match log.as_ref().map(|l| (l, l.open())) {
+                Some((_, Ok(s))) => Box::new(tartaros_core::FilterSink::new(s, tartaros_core::RecordMode::Boundary)),
+                Some((l, Err(e))) => {
+                    eprintln!("tartaros: cannot open log {} for the egress broker: {e}", l.path);
+                    Box::new(tartaros_core::DiscardSink)
+                }
+                None => Box::new(tartaros_core::DiscardSink),
+            }
+        }
+    };
     // The role's declared loopback ports (--port): the agent may reach these local
     // services (MCP core, model proxy) THROUGH the broker too, for clients that
     // route everything via HTTP_PROXY. Captured before the broker's own port is
@@ -547,10 +567,11 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
     if !p.isolate_network && egress_ns::available() {
         let broker = make_broker();
         let hosts_for_log = hosts.clone();
+        let open_ns_sink = open_sink.clone();
         let bind_on = move |ip: &str| -> std::io::Result<u16> {
             let (listener, port) = broker.bind_addr(ip, 0)?;
             std::thread::spawn(move || {
-                let mut sink = tartaros_broker::RefusalReport::stderr();
+                let mut sink = Tee(tartaros_broker::RefusalReport::stderr(), open_ns_sink());
                 let _ = broker.serve(listener, &mut sink);
             });
             let _ = &hosts_for_log;
@@ -614,7 +635,7 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
     #[cfg(target_os = "linux")]
     eprintln!("tartaros: warning: {NET01_FALLBACK}");
     std::thread::spawn(move || {
-        let mut sink = tartaros_broker::RefusalReport::stderr();
+        let mut sink = Tee(tartaros_broker::RefusalReport::stderr(), open_sink());
         let _ = broker.serve(listener, &mut sink);
     });
     Default::default()
@@ -1050,9 +1071,60 @@ fn parse_num_or_exit<T: std::str::FromStr>(v: &str, flag: &str) -> T {
     })
 }
 
+/// Two sinks fed the same events: the egress broker's refusals go to stderr and
+/// to the run's --log.
+struct Tee<A, B>(A, B);
+
+impl<A: tartaros_core::EffectSink, B: tartaros_core::EffectSink + ?Sized> tartaros_core::EffectSink for Tee<A, Box<B>> {
+    fn emit(&mut self, e: &tartaros_core::EffectEvent) {
+        self.0.emit(e);
+        self.1.emit(e);
+    }
+}
+
+/// Where and how `--log` writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LogSpec {
+    path: String,
+    format: LogFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogFormat {
+    Jsonl,
+    Otlp,
+}
+
+/// The `--log` sink: one of the two formats over an append-mode file. Each line
+/// goes out in one write, so the supervisor and the egress broker can append to
+/// the same file from their own handles.
+enum LogSink {
+    Jsonl(tartaros_core::JsonlSink<std::fs::File>),
+    Otlp(tartaros_core::OtlpSink<std::fs::File>),
+}
+
+impl tartaros_core::EffectSink for LogSink {
+    fn emit(&mut self, e: &tartaros_core::EffectEvent) {
+        match self {
+            LogSink::Jsonl(s) => s.emit(e),
+            LogSink::Otlp(s) => s.emit(e),
+        }
+    }
+}
+
+impl LogSpec {
+    fn open(&self) -> std::io::Result<LogSink> {
+        let f = std::fs::OpenOptions::new().create(true).append(true).open(&self.path)?;
+        Ok(match self.format {
+            LogFormat::Jsonl => LogSink::Jsonl(tartaros_core::JsonlSink::new(f)),
+            LogFormat::Otlp => LogSink::Otlp(tartaros_core::OtlpSink::new(f, tartaros_core::TraceContext::from_env())),
+        })
+    }
+}
+
 /// Build the Policy from --config (if any) + --profile + flags. Returns the
-/// policy, the optional --log path, and the selected profile (for its caveat).
-fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Option<Profile>) {
+/// policy, the optional --log (path and format), and the selected profile (for its caveat).
+fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Option<Profile>) {
     // Shell rc files, .gitconfig and .ripgreprc in a writable root are protected
     // by default, as sandbox-runtime does: a trusted shell or git later runs what
     // the agent planted there. --allow-home-handoff is the dotfiles-repo opt-out.
@@ -1119,6 +1191,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
     }
 
     let mut log: Option<String> = None;
+    let mut log_format: Option<LogFormat> = None;
     let mut it = opts.iter();
     while let Some(o) = it.next() {
         let mut val = || it.next().cloned().unwrap_or_else(|| { eprintln!("error: {o} needs a value"); exit(2); });
@@ -1153,9 +1226,19 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             "--max-cpu" => p.max_cpu_secs = Some(parse_num_or_exit(&val(), "--max-cpu (seconds)")),
             "--isolate-proc" => p.isolate_process_info = true,
             "--log" => log = Some(val()),
+            "--log-format" => log_format = Some(match val().as_str() {
+                "jsonl" => LogFormat::Jsonl,
+                "otlp" => LogFormat::Otlp,
+                other => { eprintln!("error: --log-format is jsonl or otlp, not {other:?}"); exit(2); }
+            }),
             other => { eprintln!("unknown option: {other}"); exit(2); }
         }
     }
+    if log_format.is_some() && log.is_none() {
+        eprintln!("error: --log-format needs --log FILE");
+        exit(2);
+    }
+    let log = log.map(|path| LogSpec { path, format: log_format.unwrap_or(LogFormat::Jsonl) });
     (p, log, profile)
 }
 
@@ -1289,12 +1372,12 @@ fn explain(p: &Policy) {
 }
 
 #[cfg(target_os = "linux")]
-fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
+fn run(policy: &Policy, cmd: &[String], log: Option<&LogSpec>) -> i32 {
     run_common(&tartaros_linux::LandlockBackend, policy, cmd, log, true)
 }
 
 #[cfg(target_os = "macos")]
-fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
+fn run(policy: &Policy, cmd: &[String], log: Option<&LogSpec>) -> i32 {
     run_common(&tartaros_macos::SeatbeltBackend, policy, cmd, log, true)
 }
 
@@ -1303,12 +1386,12 @@ fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
 /// changes the enforcement guarantees (review P0). `net` selects whether to add
 /// the network collector.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn run_common<B>(be: &B, policy: &Policy, cmd: &[String], log: Option<&str>, net: bool) -> i32
+fn run_common<B>(be: &B, policy: &Policy, cmd: &[String], log: Option<&LogSpec>, net: bool) -> i32
 where
     B: RunObserved,
 {
     use tartaros_collect::{FileCollector, NetworkCollector, ProcessCollector, SecretCollector};
-    use tartaros_core::{Collector, FilterSink, JsonlSink, RecordMode};
+    use tartaros_core::{Collector, FilterSink, RecordMode};
     // Refuse an unenforceable policy before anything starts, with its own exit
     // code, so a caller can tell "refused your policy" from "could not start".
     if let Err(e) = be.validate(policy) {
@@ -1316,12 +1399,12 @@ where
         return EXIT_POLICY_REFUSED;
     }
     match log {
-        Some(path) => {
-            let f = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                Ok(f) => f,
-                Err(e) => { eprintln!("tartaros: cannot open log {path}: {e}"); return 1; }
+        Some(spec) => {
+            let s = match spec.open() {
+                Ok(s) => s,
+                Err(e) => { eprintln!("tartaros: cannot open log {}: {e}", spec.path); return 1; }
             };
-            let mut sink = FilterSink::new(JsonlSink::new(f), RecordMode::Boundary);
+            let mut sink = FilterSink::new(s, RecordMode::Boundary);
             let pol = policy.clone();
             let res = be.run_observed(policy, cmd, &mut sink, move |pid| {
                 let mut v: Vec<Box<dyn Collector>> = Vec::new();
@@ -1373,7 +1456,7 @@ impl RunObserved for tartaros_macos::SeatbeltBackend {
 }
 
 #[cfg(target_os = "windows")]
-fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
+fn run(policy: &Policy, cmd: &[String], log: Option<&LogSpec>) -> i32 {
     use tartaros_core::Backend;
     // The effect log goes through collectors that sample the process tree; there
     // are none for Windows yet. Enabling the log must never change what is
@@ -1396,7 +1479,7 @@ fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn run(_policy: &Policy, _cmd: &[String], _log: Option<&str>) -> i32 {
+fn run(_policy: &Policy, _cmd: &[String], _log: Option<&LogSpec>) -> i32 {
     eprintln!("tartaros: unsupported OS");
     1
 }
