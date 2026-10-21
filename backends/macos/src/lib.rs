@@ -344,6 +344,34 @@ pub fn compile_profile_tagged(policy: &Policy, log_tag: Option<&str>) -> String 
     }
 }
 
+/// Essential system services opened whenever mach-lookup is scoped — the curated
+/// base sandbox-runtime ships (exact names, not prefixes). Without them the keychain
+/// (`security`), user/group lookups, logging and notifications fail.
+const MACH_LOOKUP_BASE: &[&str] = &[
+    "com.apple.audio.systemsoundserver",
+    "com.apple.distributed_notifications@Uv3",
+    "com.apple.FontObjectsServer",
+    "com.apple.fonts",
+    "com.apple.logd",
+    "com.apple.lsd.mapdb",
+    "com.apple.PowerManagement.control",
+    "com.apple.system.logger",
+    "com.apple.system.notification_center",
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.bsd.dirhelper",
+    "com.apple.securityd.xpc",
+    "com.apple.coreservices.launchservicesd",
+    "com.apple.SecurityServer",
+];
+
+/// Added to the base only under direct egress (`Network::Allowed`): in-box DNS
+/// resolution reads the resolver configuration from configd.
+const MACH_LOOKUP_NET: &[&str] = &[
+    "com.apple.SystemConfiguration.configd",
+    "com.apple.SystemConfiguration.DNSConfiguration",
+];
+
 fn build_profile(policy: &Policy) -> String {
     // Seatbelt matches real paths, so resolve symlinked roots (e.g. macOS
     // /var -> /private/var) before emitting. Trust-handoff paths are derived
@@ -374,13 +402,26 @@ fn build_profile(policy: &Policy) -> String {
     // mach-lookup. Broad by default: the dynamic linker and ordinary tools look up a
     // wide, version-dependent set of system services, and a single denied lookup can
     // break them — so closing it requires a curated allow-list of the essential
-    // services (what srt ships). When the role PROVIDES such a list (via
-    // `network.allowMachLookup` in --settings), we honour it: deny-by-default (the
-    // profile's `(deny default)`) and open ONLY those name prefixes — the tight,
-    // opt-in posture. With no list, stay broad (back-compat; nothing silently breaks).
+    // services (what srt ships). When the role PROVIDES a list (via
+    // `network.allowMachLookup` in --settings), it ADDS to that curated base, as in
+    // srt: deny-by-default (the profile's `(deny default)`), then the base, then the
+    // role's prefixes. `mach_lookup_only` drops the base for the strict posture. With
+    // no list, stay broad (back-compat; nothing silently breaks).
     if policy.allow_mach_lookup.is_empty() {
         p.push_str("(allow mach-lookup)\n");
     } else {
+        if !policy.mach_lookup_only {
+            for name in MACH_LOOKUP_BASE {
+                p.push_str(&format!("(allow mach-lookup (global-name \"{name}\"))\n"));
+            }
+            // Direct egress (`--net`) resolves names in-box, which needs the
+            // resolver configuration. Broker/proxy egress resolves outside the box.
+            if matches!(policy.network, Some(Network::Allowed)) {
+                for name in MACH_LOOKUP_NET {
+                    p.push_str(&format!("(allow mach-lookup (global-name \"{name}\"))\n"));
+                }
+            }
+        }
         for prefix in &policy.allow_mach_lookup {
             let escaped = prefix.replace('\\', "\\\\").replace('"', "\\\"");
             p.push_str(&format!(
@@ -1044,5 +1085,28 @@ mod tests {
         assert!(prof.contains("(allow network-outbound (remote ip \"localhost:8081\"))"));
         assert!(!prof.contains("localhost:8787"));
         assert!(!prof.contains("(allow network*)"));
+    }
+
+    #[test]
+    fn allow_mach_lookup_adds_to_the_curated_base() {
+        let chromium = "org.chromium.Chromium.MachPortRendezvousServer.".to_string();
+        let policy = Policy {
+            writable_roots: vec![PathBuf::from("/work")],
+            allow_mach_lookup: vec![chromium.clone()],
+            ..Default::default()
+        };
+        let prof = compile_profile(&policy);
+        assert!(!prof.contains("(allow mach-lookup)\n"));
+        assert!(prof.contains("(allow mach-lookup (global-name \"com.apple.SecurityServer\"))"));
+        assert!(prof.contains(&format!("(allow mach-lookup (global-name-prefix \"{chromium}\"))")));
+        // Broker/no egress: the resolver services stay closed.
+        assert!(!prof.contains("SystemConfiguration.configd"));
+
+        let net = compile_profile(&Policy { network: Some(Network::Allowed), ..policy.clone() });
+        assert!(net.contains("(allow mach-lookup (global-name \"com.apple.SystemConfiguration.configd\"))"));
+
+        let only = compile_profile(&Policy { mach_lookup_only: true, ..policy });
+        assert!(!only.contains("com.apple.SecurityServer"));
+        assert!(only.contains(&format!("(allow mach-lookup (global-name-prefix \"{chromium}\"))")));
     }
 }

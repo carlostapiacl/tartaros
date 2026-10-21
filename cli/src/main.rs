@@ -22,6 +22,7 @@
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
 //!   --protect-home-handoff also deny shell rc / .gitconfig / .ripgreprc (opt-in)
 //!   --private-tmp          run-private TMPDIR, AF_UNIX scoped to it (headless browsers)
+//!   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes (no curated base)
 //!   --env KEY[=VALUE]      carry one launcher var through, or set it (default: env is scrubbed)
 //!   --inherit-env          inherit the full launcher env (opt into leaking secrets)
 //!   --timeout SECS         kill the process group after SECS (exit 124)
@@ -205,6 +206,8 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --protect-home-handoff also deny shell rc / .gitconfig / .ripgreprc (NOT for dotfiles repos)
   --private-tmp          run-private TMPDIR; AF_UNIX scoped to it (headless browsers)
   --browser              macOS: minimal extra Seatbelt grants for headless Chromium/Chrome
+  --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes, without the
+                         curated base of system services (breaks the keychain, etc.)
 
 ENVIRONMENT (secrets in the launcher's env are NOT governed by Landlock/Seatbelt):
   (default)              scrub env to a safe allowlist (PATH/HOME/LANG/... + LC_*)
@@ -283,20 +286,13 @@ fn setup_private_tmp(p: &mut Policy) -> Option<std::path::PathBuf> {
     if !p.private_tmp {
         return None;
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("tartaros-tmp-{}-{}", std::process::id(), nanos));
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("tartaros: cannot create private tmp dir {}: {e}", dir.display());
-        exit(1);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
+    let dir = match create_private_tmp() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("tartaros: cannot create private tmp dir: {e}");
+            exit(1);
+        }
+    };
     // The child (and any tool that reads os.tmpdir()/TMPDIR) publishes here.
     for k in ["TMPDIR", "TMP", "TEMP"] {
         std::env::set_var(k, &dir);
@@ -308,6 +304,62 @@ fn setup_private_tmp(p: &mut Policy) -> Option<std::path::PathBuf> {
         dir.display()
     );
     Some(dir)
+}
+
+/// Create the run-private temp dir with a SHORT path. AF_UNIX socket paths are
+/// capped at 104 bytes (macOS) / 108 (Linux), and tools nest their sockets a few
+/// levels under `$TMPDIR` (Playwright's socket dir landed at 107 bytes under a
+/// `/var/folders/…` TMPDIR). So: a short per-user base, `/private/tmp/tartaros-<uid>`
+/// (`/tmp/…` on Linux), 0700 and verified to be ours, holding `tt-<6 random>`.
+#[cfg(unix)]
+fn create_private_tmp() -> std::io::Result<std::path::PathBuf> {
+    use std::io::{Error, ErrorKind, Read};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let uid = unsafe { libc::getuid() };
+    let root = if cfg!(target_os = "macos") { "/private/tmp" } else { "/tmp" };
+    let base = std::path::PathBuf::from(format!("{root}/tartaros-{uid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&base) {
+        Ok(()) => {}
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(Error::new(e.kind(), format!("{}: {e}", base.display()))),
+    }
+    // /tmp is world-writable: the base may have been planted by someone else, or be
+    // a symlink. lstat (never follow) and require a real dir we own, then 0700.
+    let md = std::fs::symlink_metadata(&base)?;
+    if !md.file_type().is_dir() || md.uid() != uid {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            format!("{} is not a directory owned by uid {uid}; refusing to use it", base.display()),
+        ));
+    }
+    if md.mode() & 0o077 != 0 {
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
+    }
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut urandom = std::fs::File::open("/dev/urandom")?;
+    for _ in 0..16 {
+        let mut b = [0u8; 6];
+        urandom.read_exact(&mut b)?;
+        let suffix: String = b.iter().map(|x| ALPHABET[*x as usize % ALPHABET.len()] as char).collect();
+        let dir = base.join(format!("tt-{suffix}"));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(Error::new(e.kind(), format!("{}: {e}", dir.display()))),
+        }
+    }
+    Err(Error::new(ErrorKind::AlreadyExists, format!("no free name under {}", base.display())))
+}
+
+#[cfg(not(unix))]
+fn create_private_tmp() -> std::io::Result<std::path::PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("tt-{}-{}", std::process::id(), nanos));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 /// Never leave a host-escape silent (F-3). On Linux there is no per-path AF_UNIX
@@ -751,7 +803,9 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
         refuse("blanket local binding (grant a concrete port with a port rule instead)");
     }
     // Mach rendezvous (headless browsers): sandbox-runtime writes a name with a
-    // trailing `*` meaning a prefix; map it to a global-name-prefix. macOS-only —
+    // trailing `*` meaning a prefix; map it to a global-name-prefix. As in
+    // sandbox-runtime, lookups ADD to the curated base of system services (the
+    // backend emits it); `--mach-lookup-only` is the strict variant. macOS-only —
     // Mach is a Darwin primitive, so a non-empty list refuses on Linux.
     #[cfg(target_os = "macos")]
     {
@@ -915,6 +969,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             "--protect-home-handoff" => p.protect_home_handoff = true,
             "--private-tmp" => p.private_tmp = true,
             "--browser" => p.browser = true,
+            "--mach-lookup-only" => p.mach_lookup_only = true,
             "--inherit-env" => p.inherit_env = true,
             "--env" => p.env_passthrough.push(val()),
             "--timeout" => p.timeout = Some(Duration::from_secs(parse_num_or_exit(&val(), "--timeout (seconds)"))),
@@ -945,7 +1000,8 @@ fn explain(p: &Policy) {
         println!("macOS Mach register (prefix): {}", p.allow_mach_register.join(", "));
     }
     if !p.allow_mach_lookup.is_empty() {
-        println!("macOS Mach lookup (prefix): {}", p.allow_mach_lookup.join(", "));
+        let base = if p.mach_lookup_only { "only these" } else { "curated base +" };
+        println!("macOS Mach lookup ({base} prefix): {}", p.allow_mach_lookup.join(", "));
     }
     if p.private_tmp {
         println!("private tmp: a run-private TMPDIR is created, made writable, and AF_UNIX-scoped (macOS)");
