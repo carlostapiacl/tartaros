@@ -5,6 +5,20 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **The egress broker passes a forwarded request's body on.** As a plain-HTTP
+  forward proxy it sent the request line and headers and never the body, so a
+  POST through it reached the upstream as headers alone and hung until a
+  timeout (curl got no answer; Claude Code retried until `ECONNRESET` against an
+  MCP server on a declared loopback port). The body is now streamed exactly as
+  framed, by `Content-Length` or chunked. A request whose framing is ambiguous
+  (both headers, two lengths that disagree, a coding other than `chunked`) is
+  refused with 400 instead of guessed at. Hop-by-hop headers (`Connection`,
+  `Proxy-Connection`, `Keep-Alive`, `TE`, `Trailer`, `Upgrade`) are no longer
+  passed upstream: a client's `keep-alive` next to the broker's own `close` let
+  the upstream hold the connection open after answering. Capability mode
+  (origin-form requests) still sends no request body; that is separate.
+
 ## [0.1.0-alpha.7] — 2026-10-21
 
 Linux parity with bubblewrap-based sandboxes where the host allows namespaces
