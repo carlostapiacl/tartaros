@@ -5,6 +5,34 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **A refused policy exits 78 (EX_CONFIG).** A policy the backend cannot enforce
+  (a `validate` refusal, or a `--settings` field it cannot guarantee, also from
+  `explain`) used to exit 1 or 2, the same codes as a startup failure or a bad command
+  line, so a caller could not tell "refused your policy" from "could not start". Now:
+  78 refused, nothing ran; 2 bad command line; 1 could not start or run. Callers that
+  treat any non-zero as a refusal are unaffected.
+
+### Fixed
+- **`--isolate-proc` no longer hides the agent's own `/proc/self` (Linux).** The
+  Landlock read-deny on `/proc` also denied `/proc/self/status` and `/proc/self/maps`,
+  breaking ordinary tools. Where the host allows namespaces it now runs the agent in
+  a private PID namespace with a fresh `/proc`: every host process (the supervisor
+  included) is invisible and `/proc/self` works. Without namespaces the read-deny
+  stays. `explain` says which one applies.
+- **A writable root inside a `--read-deny` is readable.** `--write V/w --read-deny V`
+  left `V/w` writable but unreadable. Writable roots are now re-allowed for reading
+  like `--read-allow`, on Linux and macOS; a deny deeper inside the root still wins.
+- **`/dev/shm` is private by default (Linux).** It was isolated only under
+  `--isolate-pids`/`--isolate-net`, so a default run could leave files in the host's
+  `/dev/shm` or use it as a channel. Every run that can have its own mount namespace
+  (root, or a host that allows unprivileged user namespaces) now gets a fresh tmpfs
+  there. Where the host forbids namespaces it stays shared, and `explain` says so.
+- **`--isolate-net` alone could mount over the host's `/dev/shm` (Linux, root).** It
+  unshares only the network namespace, and the private `/dev/shm` tmpfs was mounted
+  without a mount namespace of its own. It now always gets one (non-root, the same
+  mount failed and aborted the run).
+
 ## [0.1.0-alpha.5] — 2026-10-21
 
 ### Fixed

@@ -31,9 +31,10 @@
 //!   --max-cpu SECS         total CPU-seconds limit (RLIMIT_CPU; root-proof)
 //!   --log FILE             write the effect log (JSON Lines) here (Linux)
 //!   --settings FILE        map a sandbox-runtime settings.json onto the generic
-//!                          policy; refuses (exit 2) on anything it can't guarantee
+//!                          policy; refuses (exit 78) on anything it can't guarantee
 //!
-//! Exit code is the command's (128+signal on signal death, 124 on timeout).
+//! Exit code is the command's (128+signal on signal death, 124 on timeout); TartarOS's
+//! own are 78 (policy refused, nothing ran), 2 (bad command line), 1 (could not run).
 
 use tartaros_core::{Access, FsRule, Network, Policy, Profile};
 use serde::Deserialize;
@@ -50,6 +51,12 @@ type EgressGuard = ();
 use std::path::PathBuf;
 use std::process::exit;
 use std::time::Duration;
+
+/// Exit code when TartarOS refuses the POLICY — a field or combination this backend
+/// cannot enforce, so nothing ran. Distinct from 1 (TartarOS could not start or run:
+/// broker, log, temp dir, a host missing a requested guarantee) and 2 (bad command
+/// line). 78 is sysexits' EX_CONFIG.
+const EXIT_POLICY_REFUSED: i32 = 78;
 
 /// A policy file (TOML) — declare a role's confinement once, apply it on any OS.
 /// Flags on the command line override / append to it.
@@ -224,7 +231,10 @@ LIMITS:
 OBSERVABILITY:
   --log FILE             write the first-hand effect log (JSON Lines)
 
-Exit code is the command's (128+signal on signal death, 124 on timeout).
+Exit code is the command's (128+signal on signal death, 124 on timeout). TartarOS's own:
+  78  the policy was refused (this backend cannot enforce it); nothing ran
+  2   bad command line
+  1   TartarOS could not start or run the command
 ";
 
 fn cmd_run(rest: &[String]) -> ! {
@@ -568,7 +578,7 @@ fn cmd_explain(opts: &[String]) -> ! {
     let blocked: Option<String> = None;
     if let Some(reason) = blocked {
         eprintln!("\ntartaros: this host cannot enforce this policy: {reason}");
-        exit(2);
+        exit(EXIT_POLICY_REFUSED);
     }
     exit(0);
 }
@@ -689,11 +699,11 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     let s: SandboxSettings = serde_json::from_str(&text).unwrap_or_else(|e| { eprintln!("parse {path}: {e}"); exit(2); });
     let refuse = |what: &str| -> ! {
         eprintln!("tartaros: --settings: cannot guarantee {what} on this backend; refusing to run (apply-fully-or-refuse).");
-        exit(2);
+        exit(EXIT_POLICY_REFUSED);
     };
     let refuse_glob = |x: &str| -> ! {
         eprintln!("tartaros: --settings: cannot enforce the glob pattern '{x}' on this backend — TartarOS has no general glob engine (Landlock matches by inode). Use a concrete path, the built-in trust-handoff set (.git/.claude/.codex/.mcp.json/…), or the macOS backend for single-* globs. Refusing (apply-fully-or-refuse).");
-        exit(2);
+        exit(EXIT_POLICY_REFUSED);
     };
     // Filesystem. Each pattern is classified after unwrapping single-char classes
     // (a caller.s `.vscod[e]` is really a literal path). Literals map to the generic
@@ -773,7 +783,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
                      grant a local service by an explicit port (localhost:N / 127.0.0.1:N / [::1]:N), \
                      not a bare host or a wildcard. Refusing (apply-fully-or-refuse)."
                 );
-                exit(2);
+                exit(EXIT_POLICY_REFUSED);
             }
         }
     }
@@ -796,7 +806,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
             p.deny_unix_sockets = true; // [] = no AF_UNIX at all
         } else {
             eprintln!("tartaros: --settings: cannot allow a specific AF_UNIX socket by path — the Linux/seccomp backend filters AF_UNIX all-or-nothing, not per path. Use an empty list to deny all, or run the macOS (Seatbelt) backend for per-path allow. Refusing (apply-fully-or-refuse).");
-            exit(2);
+            exit(EXIT_POLICY_REFUSED);
         }
     }
     if s.network.allow_local_binding {
@@ -817,7 +827,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     {
         if !s.network.allow_mach_lookup.is_empty() || !s.network.allow_mach_register.is_empty() {
             eprintln!("tartaros: --settings: allowMachLookup/allowMachRegister are macOS-only (Mach is a Darwin IPC primitive with no Linux equivalent). Run a headless-browser role under the macOS (Seatbelt) backend. Refusing (apply-fully-or-refuse).");
-            exit(2);
+            exit(EXIT_POLICY_REFUSED);
         }
     }
     // Strict: a settings-driven run is guaranteed-or-abort.
@@ -1134,6 +1144,12 @@ where
 {
     use tartaros_collect::{FileCollector, NetworkCollector, ProcessCollector, SecretCollector};
     use tartaros_core::{Collector, FilterSink, JsonlSink, RecordMode};
+    // Refuse an unenforceable policy before anything starts, with its own exit
+    // code, so a caller can tell "refused your policy" from "could not start".
+    if let Err(e) = be.validate(policy) {
+        eprintln!("tartaros: {}", e.reason);
+        return EXIT_POLICY_REFUSED;
+    }
     match log {
         Some(path) => {
             let f = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -1200,6 +1216,10 @@ fn run(policy: &Policy, cmd: &[String], log: Option<&str>) -> i32 {
     if log.is_some() {
         eprintln!("tartaros: --log is not available on the Windows backend yet (no effect-log collectors); run without it.");
         return 2;
+    }
+    if let Err(e) = tartaros_windows::WindowsBackend.validate(policy) {
+        eprintln!("tartaros: {}", e.reason);
+        return EXIT_POLICY_REFUSED;
     }
     match tartaros_windows::WindowsBackend.run(policy, cmd) {
         Ok(o) => o.exit_code,

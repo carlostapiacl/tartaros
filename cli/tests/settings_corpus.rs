@@ -2,7 +2,7 @@
 //!
 //! `--settings` maps a sandbox-runtime `settings.json` onto the generic policy.
 //! The contract is **apply-fully-or-refuse**: a field the backend cannot enforce
-//! must make the launch REFUSE (exit 2), never be silently dropped or widened
+//! must make the launch REFUSE (exit 78), never be silently dropped or widened
 //! into an allow. This corpus drives the real CLI binary with `explain --settings`
 //! over valid and invalid patterns and asserts the exit code, so a regression that
 //! makes a non-translatable pattern "succeed" (silently permissive) fails the test.
@@ -79,7 +79,7 @@ fn applied_literal_deny_read() {
     assert_eq!(explain_settings("denyread", &json), 0, "a concrete denyRead path must apply");
 }
 
-// ---- REFUSED (exit 2): a non-translatable field must refuse, never widen ----
+// ---- REFUSED (exit 78): a non-translatable field must refuse, never widen ----
 
 #[test]
 fn refused_anydepth_not_covered() {
@@ -89,7 +89,7 @@ fn refused_anydepth_not_covered() {
     let p = ws();
     let p = p.display().to_string();
     let json = format!(r#"{{"filesystem":{{"allowWrite":["{p}"],"denyWrite":["**/node_modules"]}}}}"#);
-    assert_eq!(explain_settings("anydepth", &json), 2, "an uncovered **/ glob must refuse, not no-op");
+    assert_eq!(explain_settings("anydepth", &json), 78, "an uncovered **/ glob must refuse, not no-op");
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn refused_glob_in_allow_write() {
         r#"{{"filesystem":{{"allowWrite":["{}/*/build"]}}}}"#,
         std::env::temp_dir().display()
     );
-    assert_eq!(explain_settings("allowglob", &json), 2, "a glob in allowWrite must refuse");
+    assert_eq!(explain_settings("allowglob", &json), 78, "a glob in allowWrite must refuse");
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn refused_glob_in_allow_read() {
     let p = ws();
     let p = p.display().to_string();
     let json = format!(r#"{{"filesystem":{{"allowWrite":["{p}"],"allowRead":["{p}/**"]}}}}"#);
-    assert_eq!(explain_settings("readglob", &json), 2, "a glob in allowRead must refuse");
+    assert_eq!(explain_settings("readglob", &json), 78, "a glob in allowRead must refuse");
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn refused_denied_domains() {
     // Per-domain DENY lists cannot be enforced in-sandbox (default-deny egress is
     // the model), so they must refuse rather than be silently ignored.
     let json = r#"{"network":{"deniedDomains":["evil.com"]}}"#;
-    assert_eq!(explain_settings("denydom", json), 2, "deniedDomains must refuse");
+    assert_eq!(explain_settings("denydom", json), 78, "deniedDomains must refuse");
 }
 
 // ---- OS-DIFFERENTIAL but never permissive ----
@@ -123,7 +123,7 @@ fn refused_denied_domains() {
 #[test]
 fn single_glob_deny_write_is_enforced_or_refused_never_ignored() {
     // A single-segment glob in denyWrite: macOS compiles it to a Seatbelt regex
-    // (applied -> exit 0), Linux has no glob engine (refused -> exit 2). Either
+    // (applied -> exit 0), Linux has no glob engine (refused -> exit 78). Either
     // way it is non-permissive — it is never silently dropped.
     let p = ws();
     let p = p.display().to_string();
@@ -132,6 +132,6 @@ fn single_glob_deny_write_is_enforced_or_refused_never_ignored() {
     if cfg!(target_os = "macos") {
         assert_eq!(code, 0, "macOS compiles a single-* deny to a Seatbelt regex (applied)");
     } else {
-        assert_eq!(code, 2, "Linux has no glob engine, so a single-* deny must refuse");
+        assert_eq!(code, 78, "Linux has no glob engine, so a single-* deny must refuse");
     }
 }

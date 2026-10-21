@@ -600,6 +600,15 @@ fn build_profile(policy: &Policy) -> String {
     for path in &policy.read_allows {
         read_rules.push((canonical_best_effort(path), true));
     }
+    // A writable root inside a read-deny is readable: granting writes to a dir the
+    // agent cannot read back breaks ordinary work (sandbox-runtime does the same).
+    // It joins the specificity sort, so a deeper deny inside the root still wins.
+    for root in &policy.writable_roots {
+        let real = canonical_best_effort(root);
+        if read_rules.iter().any(|(d, is_allow)| !*is_allow && real.starts_with(d) && real != *d) {
+            read_rules.push((real, true));
+        }
+    }
     // Specificity = number of path components, then string length. On an EXACT tie
     // (the same path both denied and re-allowed) the deny must win (fail-safe), so
     // break the tie by emitting allow BEFORE deny — Seatbelt is last-match-wins, so
