@@ -5,7 +5,7 @@ handled responsibly.
 
 ## Supported versions
 
-TartarOS is pre-1.0 (`v0.1.0-alpha.5`). Only the latest release and `main` are
+TartarOS is pre-1.0 (`v0.1.0-alpha.6`). Only the latest release and `main` are
 supported. The security model and its honest limits are documented in the
 README ("Honest limits") and in the threat-model profiles
 (`--profile local-agent | hostile-code | multi-tenant`).
