@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] — 2026-10-21
+
 ### Changed
 - **A refused policy exits 78 (EX_CONFIG).** A policy the backend cannot enforce
   (a `validate` refusal, or a `--settings` field it cannot guarantee, also from
