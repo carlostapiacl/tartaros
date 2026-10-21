@@ -262,6 +262,23 @@ fn confined_command(
 
     let err = |m: String| RunError { reason: m };
 
+    // Can this run have its own mount namespace? Root with CAP_SYS_ADMIN can;
+    // otherwise only if the host allows an unprivileged user namespace (probed).
+    let ns_capable = namespace::mount_ns_capable();
+    // --isolate-proc: with namespaces available, give the agent a private PID
+    // namespace and a fresh /proc instead of the Landlock read-deny on /proc. The
+    // deny also hid the agent's OWN /proc/self (status, maps), breaking ordinary
+    // tools; the namespace hides every host process (the supervisor included)
+    // while /proc/self keeps working. Without namespaces the deny stays: it still
+    // protects, it is just blunter.
+    let pidns_policy;
+    let policy = if policy.isolate_process_info && ns_capable {
+        pidns_policy = Policy { isolate_pids: true, isolate_process_info: false, ..policy.clone() };
+        &pidns_policy
+    } else {
+        policy
+    };
+
     // Fail closed with an actionable diagnostic. --isolate-pids / --isolate-net
     // need a private PID/mount/net namespace, which a non-root user can only create
     // inside a user namespace. If the host forbids unprivileged user namespaces
@@ -442,6 +459,11 @@ fn confined_command(
     let harden_syscalls = policy.harden_syscalls;
     let isolate_pids = policy.isolate_pids;
     let isolate_network = policy.isolate_network;
+    // A private /dev/shm whenever this run can have its own mount namespace: the
+    // host-shared POSIX shm dir is otherwise a cross-process channel out of the
+    // box (and a place to leave files behind). On a host that forbids namespaces
+    // the dir stays shared — the same as before, reported by `explain`.
+    let private_shm = ns_capable;
     // Compile the seccomp BPF programs HERE in the parent (allocation is fine),
     // not in pre_exec — building a BPF program after fork could deadlock a child of
     // a multithreaded parent (broker/collector threads) on the malloc lock (review
@@ -527,8 +549,8 @@ fn confined_command(
             // Must precede the Landlock lockdown (mounting /proc, loopback, and the
             // binds need CAP_SYS_ADMIN and an unrestricted mount tree). Fails closed.
             let not_root = libc::geteuid() != 0;
-            let need_userns =
-                not_root && (isolate_pids || isolate_network || !robind_cstrings.is_empty());
+            let need_userns = not_root
+                && (isolate_pids || isolate_network || !robind_cstrings.is_empty() || private_shm);
             if need_userns {
                 namespace::enter_user_namespace(&userns_uid_map, &userns_gid_map)?;
             }
@@ -543,10 +565,15 @@ fn confined_command(
             if !robind_cstrings.is_empty() {
                 namespace::setup_ro_binds(&robind_cstrings, !isolate_pids)?;
             }
-            // Isolate /dev/shm from the host whenever a mount namespace exists (an
-            // isolation tier): a fresh private tmpfs so the shared POSIX shm dir is
-            // not a side channel. local-agent (no namespace) keeps the shared dir.
-            if isolate_pids || isolate_network {
+            // Isolate /dev/shm from the host: a fresh private tmpfs so the shared
+            // POSIX shm dir is not a side channel. It needs a mount namespace of
+            // our own — --isolate-pids or the binds made one; otherwise (including
+            // --isolate-net alone, which unshares only the network) make one here,
+            // so the tmpfs can never land on the host's /dev/shm.
+            if private_shm || isolate_pids || isolate_network {
+                if !isolate_pids && robind_cstrings.is_empty() {
+                    namespace::enter_private_mount_ns()?;
+                }
                 namespace::mount_private_shm()?;
             }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
@@ -794,6 +821,19 @@ pub fn enforcement_report(policy: &Policy) -> Vec<String> {
     if policy.isolate_pids {
         out.push("pid isolation (--isolate-pids): GUARANTEED via namespaces if CAP_SYS_ADMIN — run aborts otherwise".into());
     }
+    let ns_capable = namespace::mount_ns_capable();
+    if policy.isolate_process_info && !policy.isolate_pids {
+        out.push(if ns_capable {
+            "process info (--isolate-proc): GUARANTEED (private PID namespace + fresh /proc; /proc/self readable)".into()
+        } else {
+            "process info (--isolate-proc): GUARANTEED (Landlock read-deny on /proc; also hides the agent's own /proc/self — no namespaces on this host)".into()
+        });
+    }
+    out.push(if ns_capable {
+        "/dev/shm: PRIVATE (fresh tmpfs in the run's mount namespace)".into()
+    } else {
+        "/dev/shm: SHARED with the host (this host forbids the mount namespace a private one needs)".into()
+    });
     if policy.harden_syscalls {
         out.push("seccomp hardening (--seccomp-strict): GUARANTEED (fails closed)".into());
     }

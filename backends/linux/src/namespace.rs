@@ -181,14 +181,16 @@ unsafe fn write_proc_self(path: &std::ffi::CStr, data: &[u8]) -> std::io::Result
 }
 
 /// Probe whether this process can create a usable mount namespace for the
-/// read-only bind-mount strategy. Returns true as real root (CAP_SYS_ADMIN
-/// already), otherwise forks a throwaway child that tries the unprivileged path —
+/// read-only bind-mount strategy. As root, true only with CAP_SYS_ADMIN;
+/// otherwise forks a throwaway child that tries the unprivileged path —
 /// user namespace + uid maps + a no-op private remount of `/` — and reports
 /// success via its exit code. The probe runs in its own namespaces, so it never
 /// affects this process; a false result means we fall back to the Landlock carve.
 pub(crate) fn mount_ns_capable() -> bool {
     if unsafe { libc::geteuid() } == 0 {
-        return true;
+        // Root has the privilege only with CAP_SYS_ADMIN: a container's root
+        // usually runs without it (Docker's default set), and unshare fails.
+        return has_cap_sys_admin();
     }
     // Build the maps BEFORE the fork (allocation in the parent is fine).
     let (uid_map, gid_map) = uid_gid_maps();
@@ -224,6 +226,20 @@ pub(crate) fn mount_ns_capable() -> bool {
         }
         (status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0
     }
+}
+
+/// Whether CAP_SYS_ADMIN is in this process's effective set (`CapEff` in
+/// /proc/self/status, bit 21).
+fn has_cap_sys_admin() -> bool {
+    const CAP_SYS_ADMIN: u32 = 21;
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("CapEff:"))
+                .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
+        })
+        .is_some_and(|eff| eff & (1 << CAP_SYS_ADMIN) != 0)
 }
 
 /// Best-effort explanation of WHY unprivileged user namespaces are unavailable,
@@ -286,21 +302,7 @@ pub(crate) unsafe fn setup_ro_binds(
     need_unshare: bool,
 ) -> std::io::Result<()> {
     if need_unshare {
-        if libc::unshare(libc::CLONE_NEWNS) != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // Make the mount tree private so our binds do not propagate to the host.
-        let root = c"/";
-        if libc::mount(
-            std::ptr::null(),
-            root.as_ptr(),
-            std::ptr::null(),
-            libc::MS_REC | libc::MS_PRIVATE,
-            std::ptr::null(),
-        ) != 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
+        enter_private_mount_ns()?;
     }
     for p in paths {
         // Bind the path onto itself (one recursive mount).
@@ -330,10 +332,30 @@ pub(crate) unsafe fn setup_ro_binds(
     Ok(())
 }
 
+/// Enter a new mount namespace whose tree is private, so nothing mounted in it
+/// propagates to the host. Needs CAP_SYS_ADMIN (root, or a user namespace).
+pub(crate) unsafe fn enter_private_mount_ns() -> std::io::Result<()> {
+    if libc::unshare(libc::CLONE_NEWNS) != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let root = c"/";
+    if libc::mount(
+        std::ptr::null(),
+        root.as_ptr(),
+        std::ptr::null(),
+        libc::MS_REC | libc::MS_PRIVATE,
+        std::ptr::null(),
+    ) != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Mount a fresh, private tmpfs over `/dev/shm` inside the current mount namespace,
 /// so the agent cannot use the host-shared POSIX shared-memory dir as a cross-
-/// process/-container channel or fill it (a DoS). Called only when a mount
-/// namespace already exists (an isolation tier). Fails closed: a requested
+/// process/-container channel or fill it (a DoS). Called only inside a mount
+/// namespace of our own. Fails closed: a requested
 /// isolation that cannot be installed aborts the launch.
 pub(crate) unsafe fn mount_private_shm() -> std::io::Result<()> {
     let shm = c"/dev/shm";

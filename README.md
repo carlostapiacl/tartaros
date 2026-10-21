@@ -75,7 +75,7 @@ process spawn, MCP server and file write, allowed or denied, as JSON Lines that
 any tool can read (`--log effects.jsonl`).
 
 **Already using sandbox-runtime?** `--settings settings.json` applies an existing
-sandbox-runtime config. It enforces every field it can and refuses, with exit 2,
+sandbox-runtime config. It enforces every field it can and refuses, with exit 78,
 the ones it can't, instead of dropping them.
 
 ## Don't take our word for it

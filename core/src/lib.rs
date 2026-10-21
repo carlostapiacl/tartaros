@@ -486,7 +486,15 @@ impl Policy {
         // would re-open the deeper secret (security bug). So we carve the
         // re-allowed subtree too, excluding any denies that fall within it. The
         // deepest rule wins, matching the macOS specificity order.
-        for given in &self.read_allows {
+        // Writable roots are re-allowed like explicit read_allows: a root inside a
+        // read-deny must stay readable (writing to a dir the agent cannot read
+        // back breaks ordinary work; sandbox-runtime does the same). Denies deeper
+        // inside the root are still carved out below.
+        let roots_in_denies = self.writable_roots.iter().filter(|r| {
+            let r = resolve_best_effort(r);
+            denied.iter().any(|d| r.starts_with(d) && r != *d)
+        });
+        for given in self.read_allows.iter().chain(roots_in_denies) {
             if !given.exists() {
                 continue;
             }
@@ -1662,5 +1670,25 @@ mod tests {
         assert!(!granted(&allow, &runs.join("ajeno")), "sibling under the deny stays denied");
 
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn writable_root_inside_a_read_deny_stays_readable() {
+        let base = std::env::temp_dir().join(format!("sbx-nested-root-{}", std::process::id()));
+        let vault = base.join("vault");
+        let w = vault.join("w");
+        fs::create_dir_all(&w).unwrap();
+        fs::write(vault.join("other.txt"), "x").unwrap();
+        let p = Policy {
+            writable_roots: vec![base.join("work"), w.clone()],
+            read_denies: vec![vault.clone()],
+            ..Default::default()
+        };
+        let reads = p.linux_read_allowlist();
+        let w = resolve_best_effort(&w);
+        let vault = resolve_best_effort(&vault);
+        assert!(reads.iter().any(|r| r == &w), "the nested root is re-allowed");
+        assert!(!reads.iter().any(|r| r == &vault || vault.join("other.txt").starts_with(r) && r.starts_with(&vault)), "the rest of the deny stays closed");
+        fs::remove_dir_all(&base).ok();
     }
 }
