@@ -209,10 +209,16 @@ pub struct Policy {
     /// `MachPortRendezvousServer.*` service at startup and its children look it up;
     /// without register it dies, without lookup the children loop. Scoped to a
     /// prefix — never a blanket `(allow mach-register)`. The Linux backend rejects a
-    /// non-empty list (Mach is a macOS primitive). `allow_mach_lookup` is accepted
-    /// for parity even though the base profile already allows mach-lookup broadly.
+    /// non-empty list (Mach is a macOS primitive). A non-empty `allow_mach_lookup`
+    /// closes the otherwise broad mach-lookup down to a curated base of essential
+    /// system services (sandbox-runtime's) PLUS these prefixes — additive, the same
+    /// meaning the field has in sandbox-runtime settings.
     pub allow_mach_lookup: Vec<String>,
     pub allow_mach_register: Vec<String>,
+    /// macOS-only: with a non-empty `allow_mach_lookup`, drop the curated base and
+    /// open ONLY the listed prefixes (strict deny-by-default). Off by default because
+    /// it breaks ordinary tools (the keychain, user/group lookups, notifications).
+    pub mach_lookup_only: bool,
     /// macOS-only: directories under which the agent may BIND and CONNECT AF_UNIX
     /// sockets (`local`/`remote unix-socket (subpath …)`). Used by `--private-tmp`
     /// so a headless browser can publish its control socket in a run-private dir

@@ -5,6 +5,25 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.5] — 2026-10-21
+
+### Fixed
+- **`allowMachLookup` from `--settings` is additive again, as in sandbox-runtime
+  (macOS).** alpha.4 read the list as the *complete* set of allowed services, so a
+  headless-browser role that only lists `org.chromium.Chromium.MachPortRendezvousServer.*`
+  lost everything else: the keychain failed (`security: SecKeychainSearchCreateFromAttributes
+  … not valid`) and configd, opendirectoryd.libinfo, notification_center and others
+  were denied. A non-empty list now opens sandbox-runtime's curated base of essential
+  system services plus the listed prefixes (plus configd/DNSConfiguration under direct
+  egress, `--net`). The strict posture — only the listed prefixes — is opt-in with
+  the new `--mach-lookup-only`.
+- **`--private-tmp` uses a short path.** The dir was `tartaros-tmp-<pid>-<ns>` under
+  the launcher's `$TMPDIR`; under `/var/folders/…` Playwright's socket dir reached
+  107 bytes and failed (`Socket directory path is too long`). It is now
+  `/private/tmp/tartaros-<uid>/tt-<6 random>` (`/tmp/…` on Linux): the base is 0700
+  and must be a real directory owned by the caller (a symlink or someone else's dir
+  is refused); the run dir is created exclusively, 0700, and removed after the run.
+
 ## [0.1.0-alpha.4] — 2026-10-15
 
 ### Fixed
