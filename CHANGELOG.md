@@ -5,6 +5,49 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] — 2026-10-21
+
+Linux parity with bubblewrap-based sandboxes where the host allows namespaces
+(root, or unprivileged user namespaces). Measured against sandbox-conformance's
+frozen corpus: 132 → 151 contained, 26 → 7 escaped.
+
+### Changed
+- **Every Linux run gets a private PID namespace** where namespaces are available,
+  with a small init as PID 1 and the agent as PID 2 (as bubblewrap does). The agent
+  cannot see or signal a host process, and when the run ends or the supervisor dies
+  the whole tree goes with it, background children included. The init runs under
+  the agent's seccomp filters. `--isolate-pids` is now implied there.
+- **No network grant means an empty network namespace** (no `--net`, port, domain
+  or egress namespace): abstract unix sockets live per network namespace, and
+  Landlock on kernels before 6.12 does not scope them.
+- **Outside the writable roots the tree is read-only** (a private mount namespace
+  with every other mount remounted read-only, flags kept): Landlock does not
+  mediate chmod, utimes or extended attributes, so these were possible on any file
+  the agent could reach.
+- **Shell rc files, `.gitconfig` and `.ripgreprc` in a writable root are
+  protected by default**, as sandbox-runtime does (they were opt-in with
+  `--protect-home-handoff`, still accepted). `--allow-home-handoff` lifts it for a
+  dotfiles repo; a config file can set `protect_home_handoff = false`.
+
+### Fixed
+- **Absent handoff paths can no longer be created on Linux** (`.mcp.json`,
+  `.claude/…`, a repo's absent `.git/hooks`, the rc files). With a mount namespace
+  an empty read-only placeholder sits at the first missing component for the run
+  and is removed after it; with namespaces `--materialize` no longer leaves
+  permanent files.
+- **Renaming a directory that holds a protected path no longer frees it (Linux).**
+  `mv .git .git-old && mkdir .git`, a `renameat2` exchange of `.git`, and moving
+  the directory above an explicit `--write-deny`/`--read-deny` all fail (the
+  directory is a mount point, EBUSY).
+- **A unix socket inside a read-denied directory is unreachable (Linux):** the
+  directory is covered by an empty tmpfs; Landlock does not mediate `connect()`.
+- **A read-allow that is a symlink planted in a writable root re-opens nothing new
+  (Linux).** In the granted model (`--read-deny /` plus allows) `work/docs ->
+  ~/.ssh` re-opened the secret; such an allow now counts only where another allow
+  already covers its target.
+- **A nested tartaros under tartaros keeps its writable root (Linux):** denies that
+  already sit on a read-only mount (the outer run's binds) are not carved again.
+
 ## [0.1.0-alpha.6] — 2026-10-21
 
 ### Changed

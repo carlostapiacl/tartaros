@@ -18,30 +18,31 @@ than you asked for.
   "kern.procargs2"))` remains available as defense-in-depth for older macOS.
 - **Resource caps on a cgroup-less host degrade to RLIMIT** (bypassable by root)
   and TartarOS warns on stderr rather than pretending to confine.
-- **Not-yet-existing handoff paths: macOS yes, Linux limited.** The real-world
-  Trust-Handoff attack — poisoning a config/hook that *already exists* in the repo
-  the agent works in — is blocked on both OS at any depth. Protecting a handoff
+- **Not-yet-existing handoff paths: covered where Linux has namespaces.** The
+  real-world Trust-Handoff attack — poisoning a config/hook that *already exists*
+  in the repo the agent works in — is blocked on both OS at any depth. A handoff
   path that does **not exist yet** (pre-planting: a new top-level
-  `.claude/settings.json`, or a brand-new nested git repo's `.git/hooks`) is a
-  macOS property (Seatbelt matches by regex, so absent paths are covered). On
-  Linux it is inode-based: the carve + opt-in `--materialize` covers absent
-  **top-level** configs (at the cost of placeholder residue), but under the
-  whole-root-writable **bind-mount** strategy a not-yet-existing handoff path is
-  not protected, and a newly-created nested repo's hooks are never auto-protected.
-  `explain` states this for the active strategy. Measured, not hidden. The opt-in
-  home-handoff surface (`--protect-home-handoff`: shell rc, `.gitconfig`,
-  `.ripgreprc`) follows exactly this rule — top-level covered on both OS (Linux
-  needs `--materialize` for the absent ones), nested-absent on Linux is the same
-  bind-mount gap.
-- **Moving the whole `.git` dir aside: blocked on macOS, open on Linux.** An agent
-  can `mv .git .git-moved && mkdir .git` and plant a fresh `.git/config`/hooks at
-  the original path (the protected inodes travel with the moved dir). macOS denies
-  `file-write-unlink` on the `.git` directory itself, so the move fails. On Linux,
-  Landlock governs a rename by the parent directory's write access, not per entry,
-  so blocking just `.git`'s rename inside a writable root is not expressible without
-  breaking legitimate renames — the scenario `trust-handoff-git-dir-replace` is
-  macOS-only until a Landlock-side approach exists (a read-only bind mount of `.git`
-  under the mount-namespace strategy is the likely path).
+  `.claude/settings.json`, `.mcp.json`, a repo's absent `.git/hooks`) is covered on
+  macOS by regex. On Linux, since 0.1.0-alpha.7, a run with a mount namespace puts
+  an empty read-only placeholder at the first missing component of each top-level
+  name and each repo's git internals (sandbox-runtime does the same with
+  /dev/null) and removes it when the run ends; a run killed outright leaves them
+  behind, empty. Two gaps remain on Linux: an absent handoff name in a **nested**
+  directory (`sub/.bashrc`, macOS covers it by pattern), and a repository the agent
+  **creates during the run** (its hooks are new; no sandbox measured protects
+  that). Without namespaces Linux falls back to the carve and opt-in
+  `--materialize`. The home-handoff surface (shell rc, `.gitconfig`,
+  `.ripgreprc`) is protected **by default** since 0.1.0-alpha.7, as
+  sandbox-runtime does; `--allow-home-handoff` lifts it for a dotfiles repo.
+- **Moving the whole `.git` dir aside: blocked on both OS.** `mv .git .git-moved
+  && mkdir .git` would plant a fresh `.git/config`/hooks at the original path (the
+  protected inodes travel with the moved dir). macOS denies `file-write-unlink` on
+  the `.git` directory itself. On Linux with a mount namespace, every dot-directory
+  that holds a protected path (and every directory above an explicit
+  `--write-deny`/`--read-deny` inside a root) is bound onto itself, so renaming or
+  exchanging it fails with EBUSY. Side effect: moving a file across one of those
+  directories is a cross-mount rename (EXDEV), which `mv` handles by copying.
+  Without namespaces the Linux gap remains.
 - **Symlinked handoff dirs in a very large writable root (macOS).** A handoff dir
   reached through a symlink (`proj/.claude -> dotfiles/claude`) canonicalises to a
   target the pattern rules don't name, so it is resolved by a bounded scan. The
@@ -84,10 +85,15 @@ than you asked for.
   roots or to a handoff path) is blocked before the fd opens, so it is enforced,
   not logged. Use the log for visibility and intent, never as the enforcement
   boundary — that is the kernel policy.
-- **Namespaces need root or an unprivileged user namespace on Linux.** The mount
-  namespace (for the create-at-root bind mounts) and the PID/net namespaces
-  (`--isolate-pids`/`--isolate-net`) require CAP_SYS_ADMIN; a non-root user gets it
-  by entering a user namespace first (as bubblewrap does). Where a host forbids
+- **Namespaces need root or an unprivileged user namespace on Linux.** Where the
+  host allows them, every run (since 0.1.0-alpha.7) gets a private PID namespace
+  with a small init as PID 1, a private mount namespace in which everything outside
+  the writable roots and /dev is read-only (Landlock does not mediate chmod,
+  utimes or xattrs), read-denied directories covered by an empty tmpfs (so a unix
+  socket there stops resolving), and, when the policy grants no network at all, an
+  empty network namespace (abstract unix sockets are per network namespace). These
+  require CAP_SYS_ADMIN; a non-root user gets it by entering a user namespace first
+  (as bubblewrap does). Where a host forbids
   unprivileged user namespaces (hardened Ubuntu with
   `apparmor_restrict_unprivileged_userns=1`, Debian/Arch with
   `unprivileged_userns_clone=0`, or a container without CAP_SYS_ADMIN) the two

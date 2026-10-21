@@ -755,6 +755,14 @@ fn run_mutations(files: &[PathBuf]) {
             println!("{:<20} {:<10} (no scenario uses this protection)", m.name(), "n/a");
             continue;
         }
+        // Where the host allows namespaces the Linux backend puts every run in a
+        // private PID namespace, so a policy cannot remove that protection and
+        // the mutation has nothing to weaken.
+        #[cfg(target_os = "linux")]
+        if matches!(m, Mutation::DropIsolatePids) && tartaros_linux::namespaces_by_default() {
+            println!("{:<20} {:<10} (on by default on this host; no policy removes it)", m.name(), "n/a");
+            continue;
+        }
         let mut flipped = Vec::new();
         for f in &applicable {
             // re-parse fresh so each mutated run starts from the clean contract
