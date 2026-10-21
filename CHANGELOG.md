@@ -5,6 +5,10 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.8] — 2026-10-21
+
+The egress broker's forward proxy, which dropped request bodies.
+
 ### Fixed
 - **The egress broker passes a forwarded request's body on.** As a plain-HTTP
   forward proxy it sent the request line and headers and never the body, so a
