@@ -19,7 +19,7 @@
 //! so one slow, slowloris, or idle client cannot block others or pin the broker.
 
 use tartaros_core::{Axis, Direction, EffectEvent, EffectSink, Outcome};
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -500,6 +500,17 @@ impl Broker {
             }
         };
 
+        // The request body: how it is delimited is decided once, before a byte
+        // goes upstream, and a request whose framing is ambiguous — both
+        // Content-Length and Transfer-Encoding, two lengths that disagree, a
+        // coding other than `chunked` — is refused rather than guessed at. A
+        // proxy that reads a body one way while the upstream reads it another is
+        // a request-smuggling hole.
+        let framing = match body_framing(&headers) {
+            Some(f) => f,
+            None => return bad_request(&mut client),
+        };
+
         // Forward to the real upstream (the verified, non-internal address).
         // Bound the connect and every read/write with a timeout so a slow or
         // unresponsive upstream cannot pin a broker thread (the broker runs in
@@ -513,11 +524,20 @@ impl Broker {
         if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("host")) {
             req.push_str(&format!("Host: {host}\r\n"));
         }
-        for (k, v) in &headers {
+        // Hop-by-hop headers are the client's with this proxy, not with the
+        // upstream: a `Connection: keep-alive` passed on next to our own `close`
+        // let the upstream hold the connection open after its answer, and the
+        // copy below waited on it until the timeout.
+        for (k, v) in headers.iter().filter(|(k, _)| !is_hop_by_hop(k)) {
             req.push_str(&format!("{k}: {v}\r\n"));
         }
         req.push_str("Connection: close\r\n\r\n");
         upstream.write_all(req.as_bytes())?;
+        // Then the body, which was never passed on: a POST reached the upstream
+        // as headers alone, and the upstream waited for the Content-Length it
+        // had been promised (curl got no answer; Claude Code retried until
+        // ECONNRESET). It is streamed from what the head left buffered.
+        relay_body(&framing, &mut reader, &mut upstream)?;
 
         // Stream the response back to the client, bounded to MAX_RESPONSE_BYTES
         // (P0): the HTTP forward-proxy must cap the body like the capability
@@ -791,6 +811,87 @@ fn ct_eq(a: &str, b: &str) -> bool {
 }
 
 /// "http://host:port/path" -> (host, port, "/path"). Defaults port 80.
+/// How a forwarded request's body is delimited (RFC 9112 §6).
+#[derive(Debug, PartialEq)]
+enum BodyFraming {
+    None,
+    Length(u64),
+    Chunked,
+}
+
+/// The framing of a request's body from its headers, or `None` when it is
+/// ambiguous and the request must be refused (see the caller).
+fn body_framing(headers: &[(String, String)]) -> Option<BodyFraming> {
+    let values = |name: &str| -> Vec<String> {
+        headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+            .flat_map(|(_, v)| v.split(',').map(|x| x.trim().to_ascii_lowercase()).collect::<Vec<_>>())
+            .collect()
+    };
+    let te = values("transfer-encoding");
+    let cl = values("content-length");
+    if !te.is_empty() {
+        if !cl.is_empty() || te != ["chunked"] {
+            return None;
+        }
+        return Some(BodyFraming::Chunked);
+    }
+    let mut len: Option<u64> = None;
+    for v in &cl {
+        if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let n: u64 = v.parse().ok()?;
+        if len.is_some_and(|m| m != n) {
+            return None;
+        }
+        len = Some(n);
+    }
+    Some(len.map_or(BodyFraming::None, BodyFraming::Length))
+}
+
+/// Headers that belong to one hop, never forwarded (RFC 9110 §7.6.1).
+fn is_hop_by_hop(name: &str) -> bool {
+    ["connection", "proxy-connection", "keep-alive", "te", "trailer", "upgrade"]
+        .iter()
+        .any(|h| name.eq_ignore_ascii_case(h))
+}
+
+/// Pass a request body on, exactly as framed: `Length` bytes, or chunks up to
+/// and including the last one and its trailers. Streamed, never buffered whole;
+/// a body that ends early is an error, so the upstream is not left waiting.
+fn relay_body(framing: &BodyFraming, from: &mut impl BufRead, to: &mut impl Write) -> std::io::Result<()> {
+    let short = || std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "request body ended early");
+    let copy_exact = |from: &mut dyn Read, to: &mut dyn Write, n: u64| -> std::io::Result<()> {
+        if std::io::copy(&mut from.take(n), to)? < n {
+            return Err(short());
+        }
+        Ok(())
+    };
+    match framing {
+        BodyFraming::None => Ok(()),
+        BodyFraming::Length(n) => copy_exact(from, to, *n),
+        BodyFraming::Chunked => loop {
+            let line = read_line_capped(from, MAX_LINE_BYTES)?.ok_or_else(short)?;
+            let size = line.trim_end().split(';').next().unwrap_or("").trim();
+            let size = u64::from_str_radix(size, 16)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad chunk size"))?;
+            to.write_all(line.as_bytes())?;
+            if size == 0 {
+                loop {
+                    let t = read_line_capped(from, MAX_LINE_BYTES)?.ok_or_else(short)?;
+                    to.write_all(t.as_bytes())?;
+                    if t == "\r\n" || t == "\n" {
+                        return Ok(());
+                    }
+                }
+            }
+            copy_exact(from, to, size + 2)?; // the chunk and its CRLF
+        },
+    }
+}
+
 fn parse_abs_uri(uri: &str) -> Option<(String, u16, String)> {
     let rest = uri.strip_prefix("http://")?;
     let (authority, path) = match rest.find('/') {
@@ -1194,6 +1295,106 @@ mod tests {
         let mut resp = String::new();
         let _ = c.read_to_string(&mut resp);
         assert!(resp.contains("403") || resp.contains("400"), "broker should still respond, got: {resp:?}");
+    }
+
+    #[test]
+    fn body_framing_is_one_reading_or_a_refusal() {
+        let h = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        };
+        assert_eq!(body_framing(&h(&[])), Some(BodyFraming::None));
+        assert_eq!(body_framing(&h(&[("Content-Length", "7")])), Some(BodyFraming::Length(7)));
+        assert_eq!(body_framing(&h(&[("content-length", "7"), ("Content-Length", "7")])), Some(BodyFraming::Length(7)));
+        assert_eq!(body_framing(&h(&[("Transfer-Encoding", "chunked")])), Some(BodyFraming::Chunked));
+        // ambiguous: refused
+        assert_eq!(body_framing(&h(&[("Content-Length", "7"), ("Content-Length", "8")])), None);
+        assert_eq!(body_framing(&h(&[("Content-Length", "7, 8")])), None);
+        assert_eq!(body_framing(&h(&[("Content-Length", "-1")])), None);
+        assert_eq!(body_framing(&h(&[("Content-Length", "7"), ("Transfer-Encoding", "chunked")])), None);
+        assert_eq!(body_framing(&h(&[("Transfer-Encoding", "gzip, chunked")])), None);
+    }
+
+    /// A loopback upstream that answers with the body it received, then closes —
+    /// unless the request asked to keep the connection alive, which it honours.
+    fn echo_upstream() -> u16 {
+        let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    let mut s = s;
+                    let (mut len, mut chunked, mut keep) = (0usize, false, false);
+                    loop {
+                        let mut line = String::new();
+                        if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" { break; }
+                        let l = line.to_ascii_lowercase();
+                        if let Some(v) = l.strip_prefix("content-length:") { len = v.trim().parse().unwrap(); }
+                        if l.starts_with("transfer-encoding:") && l.contains("chunked") { chunked = true; }
+                        if l.starts_with("connection:") && l.contains("keep-alive") { keep = true; }
+                    }
+                    let mut body = Vec::new();
+                    if chunked {
+                        loop {
+                            let mut size = String::new();
+                            r.read_line(&mut size).unwrap();
+                            let n = usize::from_str_radix(size.trim(), 16).unwrap();
+                            let mut chunk = vec![0; n + 2];
+                            r.read_exact(&mut chunk).unwrap();
+                            if n == 0 { break; }
+                            body.extend_from_slice(&chunk[..n]);
+                        }
+                    } else {
+                        body.resize(len, 0);
+                        r.read_exact(&mut body).unwrap();
+                    }
+                    let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                    let _ = s.write_all(&body);
+                    if keep { std::thread::sleep(Duration::from_secs(20)); }
+                });
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn live_forward_passes_the_request_body_on() {
+        // The forward path sent the head and never the body: a POST to a declared
+        // loopback port reached the upstream as headers alone and hung there
+        // (tartaros 0.1.0-alpha.7, reported from a Claude Code run behind it).
+        let up = echo_upstream();
+        let b = Broker::new("qa", vec![]).insecure_no_auth().with_loopback_ports(vec![up]);
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let ask = |req: String| -> (String, Duration) {
+            let start = std::time::Instant::now();
+            let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.write_all(req.as_bytes()).unwrap();
+            let mut resp = String::new();
+            let _ = c.read_to_string(&mut resp);
+            (resp, start.elapsed())
+        };
+        let body = "{\"x\":1}";
+        // Content-Length, and the client's keep-alive, which must not reach the upstream.
+        let (resp, took) = ask(format!(
+            "POST http://127.0.0.1:{up}/mcp HTTP/1.1\r\nHost: 127.0.0.1:{up}\r\nConnection: keep-alive\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()));
+        assert!(resp.starts_with("HTTP/1.1 200") && resp.ends_with(body), "got: {resp:?}");
+        assert!(took < Duration::from_secs(5), "answered only after {took:?}: the upstream was kept waiting");
+        // Chunked.
+        let (resp, _) = ask(format!(
+            "POST http://127.0.0.1:{up}/mcp HTTP/1.1\r\nHost: 127.0.0.1:{up}\r\nTransfer-Encoding: chunked\r\n\r\n\
+             4\r\n{{\"x\"\r\n3\r\n:1}}\r\n0\r\n\r\n"));
+        assert!(resp.starts_with("HTTP/1.1 200") && resp.ends_with(body), "got: {resp:?}");
+        // Ambiguous framing: refused, nothing forwarded.
+        let (resp, _) = ask(format!(
+            "POST http://127.0.0.1:{up}/mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 7\r\nTransfer-Encoding: chunked\r\n\r\n{body}"));
+        assert!(resp.starts_with("HTTP/1.1 400"), "got: {resp:?}");
     }
 
     #[test]
