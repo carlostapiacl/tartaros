@@ -110,7 +110,11 @@ impl LandlockBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
-        let mut cmd = confined_command(policy, command, None)?;
+        let (mut cmd, placeholders) = confined_command(policy, command, None)?;
+        // The caller owns the child, so nothing here knows when the run ends: the
+        // absent-handoff placeholders stay (empty, read-only). Removing them now
+        // would detach the read-only binds the agent relies on.
+        std::mem::forget(placeholders);
         cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })
     }
 
@@ -153,10 +157,11 @@ impl LandlockBackend {
         let procs = cg.as_ref().map(|c| c.procs_path());
         // If confined_command or spawn fails here, `cg` drops and tears down the
         // cgroup — no explicit cleanup, no leak on the error paths.
-        let mut cmd = confined_command(policy, command, procs)?;
+        let (mut cmd, placeholders) = confined_command(policy, command, procs)?;
         let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
         let mut cols = make_collectors(child.id());
         let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut cols, sink);
+        drop(placeholders);
         Ok(RunOutcome { exit_code: code }) // cg drops here -> cgroup torn down
     }
 
@@ -192,9 +197,10 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
     }
     let procs = cg.as_ref().map(|c| c.procs_path());
     // `cg` drops on every exit path (incl. the `?` below) -> cgroup torn down.
-    let mut cmd = confined_command(policy, command, procs)?;
+    let (mut cmd, placeholders) = confined_command(policy, command, procs)?;
     let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
     let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut [], &mut VecSink::default());
+    drop(placeholders); // the run is over: remove the absent-handoff placeholders
     Ok(RunOutcome { exit_code: code })
 }
 
@@ -237,6 +243,228 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
     paths
 }
 
+/// Is `p` an existing path on a read-only mount? Such a path cannot be written,
+/// unlinked or renamed whatever Landlock allows (a read-only bind of an outer
+/// sandbox, say), so the write carve need not withhold its parent.
+#[cfg(target_os = "linux")]
+fn on_readonly_mount(p: &std::path::Path) -> bool {
+    let Some(c) = cstring(p) else { return false };
+    let mut sv: libc::statvfs = unsafe { std::mem::zeroed() };
+    unsafe { libc::statvfs(c.as_ptr(), &mut sv) == 0 && sv.f_flag & libc::ST_RDONLY != 0 }
+}
+
+#[cfg(target_os = "linux")]
+fn cstring(p: &std::path::Path) -> Option<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(p.as_os_str().as_bytes()).ok()
+}
+
+/// The empty files this run put at absent handoff paths. Dropping it removes
+/// each one that is still an empty regular file, so the workspace is left as it
+/// was found. A run that is killed outright leaves them behind, empty and
+/// read-only (sandbox-runtime leaves its /dev/null mount points the same way).
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+pub(crate) struct Placeholders(Vec<PathBuf>);
+
+#[cfg(target_os = "linux")]
+impl Placeholders {
+    fn paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.0.iter()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Placeholders {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            if std::fs::symlink_metadata(p).map(|m| m.is_file() && m.len() == 0).unwrap_or(false) {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+}
+
+/// Create the placeholder for every absent trust-handoff path under a writable
+/// root: an empty 0444 file at its first missing component. Never through a
+/// symlinked component (it could point anywhere), created O_EXCL. Fails closed.
+#[cfg(target_os = "linux")]
+fn create_placeholders(policy: &Policy) -> Result<Placeholders, String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let roots: Vec<PathBuf> = policy.writable_roots.iter().map(|r| tartaros_core::resolve_best_effort(r)).collect();
+    let mut firsts: Vec<PathBuf> = Vec::new();
+    for rule in policy.trust_handoff_rules() {
+        let mut p = rule.path.clone();
+        if std::fs::symlink_metadata(&p).is_ok() {
+            continue;
+        }
+        let in_git = p.components().any(|c| c.as_os_str() == ".git");
+        while let Some(parent) = p.parent() {
+            if std::fs::symlink_metadata(parent).is_ok() {
+                break;
+            }
+            p = parent.to_path_buf();
+        }
+        // Only at a root's top level (`.mcp.json`, `.claude` for
+        // `.claude/settings.json`) and in a repository's git internals: the rules
+        // also name every absent handoff file in every nested directory (macOS
+        // denies those by pattern), and a placeholder in each would litter the
+        // whole tree.
+        let at_top = p.parent().map(|d| roots.iter().any(|r| d == r.as_path())).unwrap_or(false);
+        if !at_top && !in_git {
+            continue;
+        }
+        let parent_is_dir = p.parent().map(|d| d.is_dir()).unwrap_or(false);
+        let in_root = p.parent().map(|d| roots.iter().any(|r| d.starts_with(r))).unwrap_or(false);
+        if parent_is_dir && in_root && !has_symlink_component(&p) {
+            firsts.push(p);
+        }
+    }
+    firsts.sort();
+    firsts.dedup();
+    let mut made = Placeholders::default();
+    for p in firsts {
+        match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // A directory we cannot write to is one the agent cannot create in
+            // either (same user, and Landlock grants no more than the mode).
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => continue,
+            Err(e) => return Err(format!("handoff placeholder {}: {e}; refusing to run with it unprotected", p.display())),
+        }
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444));
+        made.0.push(p);
+    }
+    Ok(made)
+}
+
+/// Mount-level hardening for a run with its own mount namespace, built in the
+/// parent (the child must not allocate): `pins` are bound onto themselves
+/// read-write, `seal` remounted read-only, `hide` covered with an empty tmpfs.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct MountPlan {
+    pins: Vec<std::ffi::CString>,
+    seal: Vec<std::ffi::CString>,
+    hide: Vec<std::ffi::CString>,
+}
+
+#[cfg(target_os = "linux")]
+fn mount_plan(policy: &Policy, binds: &[PathBuf]) -> MountPlan {
+    use tartaros_core::resolve_best_effort;
+    let roots: Vec<PathBuf> = policy
+        .writable_roots
+        .iter()
+        .map(|r| resolve_best_effort(r))
+        .filter(|r| r.exists())
+        .collect();
+    let under = |p: &std::path::Path, set: &[PathBuf]| set.iter().any(|r| p.starts_with(r));
+    // Pins: the roots and /dev (kept writable), then every dot-directory between
+    // a root and a protected path (`.git` for `.git/config`), outermost first. A
+    // root inside a protected path is not pinned: the read-only bind over that
+    // path must cover it (`--write-deny work/proj` with a root `work/proj/out`).
+    let mut pins: Vec<PathBuf> = roots.iter().filter(|r| !under(r, binds)).cloned().collect();
+    pins.push(PathBuf::from("/dev"));
+    let mut holders: Vec<PathBuf> = Vec::new();
+    for b in binds {
+        let Some(root) = roots.iter().filter(|r| b.starts_with(r)).max_by_key(|r| r.components().count()) else {
+            continue;
+        };
+        let mut a = b.parent();
+        while let Some(d) = a {
+            if d == root.as_path() || !d.starts_with(root) {
+                break;
+            }
+            if d.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) && d.is_dir() {
+                holders.push(d.to_path_buf());
+            }
+            a = d.parent();
+        }
+    }
+    // An explicit deny inside a root (`--write-deny`, `--read-deny`) pins every
+    // directory between the root and it, whatever its name: `mv dir aside &&
+    // mkdir dir` would otherwise put a fresh, writable (or readable) path where
+    // the deny was.
+    let explicit = policy
+        .fs_rules
+        .iter()
+        .filter(|r| r.access == tartaros_core::Access::Deny)
+        .map(|r| resolve_best_effort(&r.path))
+        .chain(policy.read_denies.iter().map(|d| resolve_best_effort(d)));
+    for d in explicit {
+        let Some(root) = roots.iter().filter(|r| d.starts_with(r)).max_by_key(|r| r.components().count()) else {
+            continue;
+        };
+        let mut a = d.parent();
+        while let Some(dir) = a {
+            if dir == root.as_path() || !dir.starts_with(root) {
+                break;
+            }
+            if dir.is_dir() {
+                holders.push(dir.to_path_buf());
+            }
+            a = dir.parent();
+        }
+    }
+    holders.sort_by_key(|h| h.components().count());
+    holders.dedup();
+    pins.extend(holders);
+    // Seal: every mount point outside the roots, /dev, /proc and /sys.
+    let keep: Vec<PathBuf> = ["/dev", "/proc", "/sys"].iter().map(PathBuf::from).chain(roots.iter().cloned()).collect();
+    let mut seal: Vec<PathBuf> = mount_points().into_iter().filter(|m| !under(m, &keep)).collect();
+    seal.sort();
+    seal.dedup();
+    // Hide: read-denied directories that hold no root and no read-allow, and do not
+    // sit inside a root (a deny inside the workspace stays a Landlock deny).
+    let allows: Vec<PathBuf> = policy.read_allows.iter().map(|a| resolve_best_effort(a)).collect();
+    let mut hide: Vec<PathBuf> = policy
+        .read_denies
+        .iter()
+        .map(|d| resolve_best_effort(d))
+        .filter(|d| d.is_dir() && d.parent().is_some())
+        .filter(|d| !under(d, &roots))
+        .filter(|d| !roots.iter().chain(allows.iter()).any(|r| r.starts_with(d)))
+        .collect();
+    hide.sort();
+    hide.dedup();
+    let cs = |v: Vec<PathBuf>| v.iter().filter_map(|p| cstring(p)).collect();
+    MountPlan { pins: cs(pins), seal: cs(seal), hide: cs(hide) }
+}
+
+/// The mount points of this process's mount namespace (field 5 of
+/// /proc/self/mountinfo, with its octal escapes undone).
+#[cfg(target_os = "linux")]
+fn mount_points() -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let text = std::fs::read("/proc/self/mountinfo").unwrap_or_default();
+    let mut out = Vec::new();
+    for line in text.split(|b| *b == b'\n') {
+        let Some(field) = line.split(|b| *b == b' ').nth(4) else { continue };
+        let mut bytes = Vec::with_capacity(field.len());
+        let mut i = 0;
+        while i < field.len() {
+            if field[i] == b'\\' && i + 3 < field.len() && field[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)) {
+                bytes.push((field[i + 1] - b'0') * 64 + (field[i + 2] - b'0') * 8 + (field[i + 3] - b'0'));
+                i += 4;
+            } else {
+                bytes.push(field[i]);
+                i += 1;
+            }
+        }
+        out.push(PathBuf::from(std::ffi::OsString::from_vec(bytes)));
+    }
+    out
+}
+
+/// Does every run on this host get a private PID namespace (and the rest of the
+/// mount-level hardening) by default? True wherever a mount namespace can be
+/// created: root with CAP_SYS_ADMIN, or a host that allows unprivileged user
+/// namespaces.
+#[cfg(target_os = "linux")]
+pub fn namespaces_by_default() -> bool {
+    namespace::mount_ns_capable()
+}
+
 /// Would this policy be enforced with the read-only bind-mount strategy (whole
 /// workspace writable + handoff bound read-only), rather than the write carve?
 /// Used by the CLI to decide whether to warn about the carve's create-at-root
@@ -251,7 +479,7 @@ fn confined_command(
     policy: &Policy,
     command: &[String],
     cgroup_procs: Option<String>,
-) -> Result<std::process::Command, RunError> {
+) -> Result<(std::process::Command, Placeholders), RunError> {
     use landlock::{
         ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, PathBeneath, PathFd,
         Ruleset, RulesetAttr, RulesetCreatedAttr,
@@ -271,10 +499,28 @@ fn confined_command(
     // tools; the namespace hides every host process (the supervisor included)
     // while /proc/self keeps working. Without namespaces the deny stays: it still
     // protects, it is just blunter.
-    let pidns_policy;
-    let policy = if policy.isolate_process_info && ns_capable {
-        pidns_policy = Policy { isolate_pids: true, isolate_process_info: false, ..policy.clone() };
-        &pidns_policy
+    //
+    // With namespaces available every run gets that PID namespace, as bubblewrap
+    // gives sandbox-runtime and Codex: the agent cannot signal or trace a host
+    // process (it cannot name one), and when the supervisor goes away the whole
+    // namespace goes with it, background children included. A run with no
+    // network grant at all (no --net, port, domain or egress namespace) also gets
+    // an empty network namespace: abstract unix sockets live per network
+    // namespace, and Landlock on this kernel generation does not scope them.
+    let default_netns = ns_capable
+        && !matches!(policy.network, Some(Network::Allowed))
+        && policy.local_ports.is_empty()
+        && policy.allow_domains.is_empty()
+        && policy.egress_netns.is_none();
+    let nsdefault_policy;
+    let policy = if ns_capable {
+        nsdefault_policy = Policy {
+            isolate_pids: true,
+            isolate_process_info: false,
+            isolate_network: policy.isolate_network || default_netns,
+            ..policy.clone()
+        };
+        &nsdefault_policy
     } else {
         policy
     };
@@ -301,7 +547,9 @@ fn confined_command(
     // trust-handoff placeholders so Landlock (inode-based) can carve them. This
     // FAILS CLOSED (never runs with partial protection), refuses to act through a
     // symlinked ancestor (anti-TOCTOU), creates with O_EXCL, and verifies.
-    if policy.materialize_absent_handoff {
+    // With a mount namespace the temporary placeholders below cover the same
+    // paths and leave nothing behind, so the permanent files are not made.
+    if policy.materialize_absent_handoff && !ns_capable {
         use std::os::unix::fs::PermissionsExt;
         for p in policy.handoff_placeholders() {
             if has_symlink_component(&p) {
@@ -412,8 +660,24 @@ fn confined_command(
     let use_bind_mounts = !robind_paths.is_empty();
 
     // Write grant: whole roots when bind mounts protect the handoff; else the carve.
-    let write_grants: Vec<PathBuf> =
-        if use_bind_mounts { policy.writable_roots.clone() } else { policy.linux_write_allowlist() };
+    let write_grants: Vec<PathBuf> = if use_bind_mounts {
+        policy.writable_roots.clone()
+    } else {
+        policy.linux_write_allowlist_except(&on_readonly_mount)
+    };
+    // Absent handoff paths: with a mount namespace, an empty read-only file is
+    // put at the first missing component of each (`.git/hooks`, `.mcp.json`,
+    // `.claude` for `.claude/settings.json`) and bound read-only, so the agent can
+    // neither create the path nor a symlink in its place. sandbox-runtime does the
+    // same with /dev/null. The files are removed when the run ends. Created after
+    // the carve above, which must not see them as existing denies.
+    let placeholders = if ns_capable { create_placeholders(policy).map_err(err)? } else { Placeholders::default() };
+    let plan = if ns_capable {
+        let binds: Vec<PathBuf> = robind_paths.iter().chain(placeholders.paths()).cloned().collect();
+        mount_plan(policy, &binds)
+    } else {
+        MountPlan::default()
+    };
     for p in &write_grants {
         let fd = match PathFd::new(p) {
             Ok(fd) => fd,
@@ -472,13 +736,10 @@ fn confined_command(
         .map_err(|e| err(format!("seccomp compile: {e}")))?;
     // Read-only bind-mount targets (built here in the parent; the pre_exec closure
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
-    let robind_cstrings: Vec<std::ffi::CString> = {
-        use std::os::unix::ffi::OsStrExt;
-        robind_paths
-            .iter()
-            .filter_map(|p| std::ffi::CString::new(p.as_os_str().as_bytes()).ok())
-            .collect()
-    };
+    let robind_cstrings: Vec<std::ffi::CString> =
+        robind_paths.iter().chain(placeholders.paths()).filter_map(|p| cstring(p)).collect();
+    let MountPlan { pins, seal, hide } = plan;
+    let mount_ns = ns_capable || isolate_pids || isolate_network;
     // Pre-build (in the parent) everything pre_exec would otherwise allocate after
     // the fork (review #7): the cgroup.procs path as a CString, and the user-ns
     // uid/gid maps (euid/egid are preserved across fork).
@@ -555,39 +816,54 @@ fn confined_command(
                 namespace::enter_user_namespace(&userns_uid_map, &userns_gid_map)?;
             }
             if isolate_pids || isolate_network {
-                namespace::enter_namespaces(isolate_pids, isolate_network)?;
+                namespace::enter_namespaces(isolate_pids, isolate_network, &seccomp_progs)?;
             }
+            // Everything below mounts, so it needs a mount namespace of our own:
+            // isolate_pids already made one; otherwise (including --isolate-net
+            // alone, which unshares only the network) make it here, so nothing can
+            // land on the host's tree. We hold CAP_SYS_ADMIN now, as root or via
+            // the user namespace above.
+            if mount_ns && !isolate_pids {
+                namespace::enter_private_mount_ns()?;
+            }
+            // Pins first, while every mount still has its own flags: the writable
+            // roots and /dev keep write access through the seal below, and the
+            // directories that hold a protected path become mount points that
+            // cannot be renamed away. Fails closed.
+            namespace::pin_mounts(&pins)?;
             // Read-only bind mounts for the trust-handoff set (so the workspace can
-            // be granted writable without the handoff being writable). need_unshare:
-            // isolate_pids already made a mount namespace; otherwise create one here
-            // (we hold CAP_SYS_ADMIN now, root or via the userns above). Fails closed
-            // — a mount error aborts before the workspace is ever exposed writable.
+            // be granted writable without the handoff being writable), and for the
+            // placeholders of the absent handoff paths. Fails closed — a mount
+            // error aborts before the workspace is ever exposed writable.
             if !robind_cstrings.is_empty() {
-                namespace::setup_ro_binds(&robind_cstrings, !isolate_pids)?;
+                namespace::setup_ro_binds(&robind_cstrings, false)?;
             }
+            // Hide the read-denied directories (unix sockets there stop resolving).
+            namespace::hide_dirs(&hide)?;
+            // Everything that is not a writable root or /dev goes read-only, so
+            // chmod/utimes/xattrs outside the roots fail too.
+            namespace::seal_readonly(&seal);
             // Isolate /dev/shm from the host: a fresh private tmpfs so the shared
-            // POSIX shm dir is not a side channel. It needs a mount namespace of
-            // our own — --isolate-pids or the binds made one; otherwise (including
-            // --isolate-net alone, which unshares only the network) make one here,
-            // so the tmpfs can never land on the host's /dev/shm.
-            if private_shm || isolate_pids || isolate_network {
-                if !isolate_pids && robind_cstrings.is_empty() {
-                    namespace::enter_private_mount_ns()?;
-                }
+            // POSIX shm dir is not a side channel.
+            if mount_ns {
                 namespace::mount_private_shm()?;
             }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
             // SIGKILL of the supervisor that never runs destroy_cgroup.
-            //   - With --isolate-pids this is a COMPLETE tree-kill: the parent is
-            //     the init shim (which carries the same request against the
-            //     supervisor), and the agent is PID 1 of its namespace, so the
-            //     chain supervisor→shim→agent collapses and the whole namespace —
+            //   - In a PID namespace this is a COMPLETE tree-kill: the agent's
+            //     parent is the namespace's PID 1 init, whose parent is the shim
+            //     (each carries the same request one level up), so the chain
+            //     supervisor→shim→init→agent collapses and the whole namespace —
             //     every descendant — is torn down. Nothing outlives the box.
             //   - Without it, PR_SET_PDEATHSIG reaps only THIS (direct child)
             //     process; a grandchild the agent forked can be reparented to init
             //     and survive. The full guarantee needs the PID namespace (which
             //     the hostile-code / multi-tenant profiles enable by default).
-            namespace::set_pdeathsig_kill();
+            if isolate_pids {
+                namespace::set_pdeathsig_kill_under_init();
+            } else {
+                namespace::set_pdeathsig_kill();
+            }
             // Resource limits (P1-B) before dropping into the sandbox.
             set_rlimit(libc::RLIMIT_AS as libc::c_int, max_memory)?;
             set_rlimit(libc::RLIMIT_NPROC as libc::c_int, max_processes)?;
@@ -630,7 +906,7 @@ fn confined_command(
             Ok(())
         });
     }
-    Ok(cmd)
+    Ok((cmd, placeholders))
 }
 
 /// Apply one `setrlimit` (cur=max=limit) when a limit is set. Returns an io error
@@ -818,17 +1094,29 @@ pub fn enforcement_report(policy: &Policy) -> Vec<String> {
     if policy.max_cpu_secs.is_some() {
         out.push("cpu cap (--max-cpu): GUARANTEED (RLIMIT_CPU, no capability bypass)".into());
     }
-    if policy.isolate_pids {
-        out.push("pid isolation (--isolate-pids): GUARANTEED via namespaces if CAP_SYS_ADMIN — run aborts otherwise".into());
-    }
     let ns_capable = namespace::mount_ns_capable();
-    if policy.isolate_process_info && !policy.isolate_pids {
-        out.push(if ns_capable {
-            "process info (--isolate-proc): GUARANTEED (private PID namespace + fresh /proc; /proc/self readable)".into()
-        } else {
-            "process info (--isolate-proc): GUARANTEED (Landlock read-deny on /proc; also hides the agent's own /proc/self — no namespaces on this host)".into()
-        });
+    if ns_capable {
+        out.push("pid isolation: ON by default (private PID namespace + fresh /proc: host processes cannot be seen or signalled; the whole tree dies with the run)".into());
+    } else if policy.isolate_pids {
+        out.push("pid isolation (--isolate-pids): GUARANTEED via namespaces if CAP_SYS_ADMIN — run aborts otherwise".into());
+    } else {
+        out.push("pid isolation: OFF (this host forbids namespaces; host processes are visible and a background child can outlive the run)".into());
     }
+    if policy.isolate_process_info && !ns_capable {
+        out.push("process info (--isolate-proc): GUARANTEED (Landlock read-deny on /proc; also hides the agent's own /proc/self — no namespaces on this host)".into());
+    }
+    let no_net_grant = !matches!(policy.network, Some(Network::Allowed))
+        && policy.local_ports.is_empty()
+        && policy.allow_domains.is_empty()
+        && policy.egress_netns.is_none();
+    if ns_capable && no_net_grant && !policy.isolate_network {
+        out.push("network namespace: ON by default (no network grant: no egress on any protocol, abstract unix sockets of the host unreachable)".into());
+    }
+    out.push(if ns_capable {
+        "outside the writable roots: READ-ONLY mounts (chmod, utimes, xattrs refused too); absent handoff paths blocked by read-only placeholders; read-denied dirs hidden".into()
+    } else {
+        "outside the writable roots: Landlock only (chmod, utimes and xattrs are not mediated; absent handoff paths can be created — no namespaces on this host)".into()
+    });
     out.push(if ns_capable {
         "/dev/shm: PRIVATE (fresh tmpfs in the run's mount namespace)".into()
     } else {

@@ -19,7 +19,11 @@
 /// Fails closed: if any step is denied (e.g. no CAP_SYS_ADMIN inside an
 /// undelegated container), it returns an error and the launch is aborted rather
 /// than running without the requested isolation.
-pub(crate) unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> std::io::Result<()> {
+pub(crate) unsafe fn enter_namespaces(
+    isolate_pids: bool,
+    isolate_net: bool,
+    init_filters: &[seccompiler::BpfProgram],
+) -> std::io::Result<()> {
     // CLONE_NEWNET and CLONE_NEWNS apply to this process immediately; CLONE_NEWPID
     // takes effect on the next fork (this process stays in the old PID ns and its
     // first child is PID 1 of the new one).
@@ -93,6 +97,41 @@ pub(crate) unsafe fn enter_namespaces(isolate_pids: bool, isolate_net: bool) -> 
         ) != 0
         {
             return Err(std::io::Error::last_os_error());
+        }
+        // PID 1 stays a small init and the agent runs as PID 2, as bubblewrap
+        // does. The kernel drops every signal PID 1 has no handler for, so an
+        // agent running as PID 1 would ignore `kill -TERM $$` and a SIGTERM from
+        // the supervisor alike. This init reaps orphans and exits with the
+        // agent's status the moment the agent exits, which tears the namespace
+        // down: nothing the agent left running outlives it.
+        let agent = libc::fork();
+        if agent < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if agent > 0 {
+            close_inherited_fds();
+            set_pdeathsig_kill();
+            // The init runs under the agent's seccomp filters too: it is the one
+            // process in the namespace the agent can always name.
+            if crate::seccomp::apply_all(init_filters).is_err() {
+                libc::_exit(1);
+            }
+            let mut status: libc::c_int = 0;
+            loop {
+                let r = libc::waitpid(-1, &mut status, 0);
+                if r == agent {
+                    break;
+                }
+                if r < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    libc::_exit(1);
+                }
+            }
+            let code = if (status & 0x7f) == 0 {
+                (status >> 8) & 0xff // WEXITSTATUS
+            } else {
+                128 + (status & 0x7f) // 128 + WTERMSIG
+            };
+            libc::_exit(code);
         }
     }
     // Bring up loopback inside the new netns so 127.0.0.1-to-self works; there is
@@ -332,6 +371,81 @@ pub(crate) unsafe fn setup_ro_binds(
     Ok(())
 }
 
+/// Bind each path onto itself (recursively), read-write, so it becomes a mount
+/// point of its own. Two uses: a writable root keeps its write access when the
+/// rest of the tree is sealed read-only (the bind copies the flags it has now),
+/// and a directory that holds a protected path cannot be renamed or exchanged
+/// away (rename fails with EBUSY on a mount point), so `mv .git .git-old && mkdir
+/// .git` cannot swap a fresh config in. Fails closed.
+pub(crate) unsafe fn pin_mounts(paths: &[std::ffi::CString]) -> std::io::Result<()> {
+    for p in paths {
+        if libc::mount(
+            p.as_ptr(),
+            p.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Remount each mount point read-only, keeping the flags it already has (inside a
+/// user namespace a remount that drops a locked nosuid/nodev/noexec/atime flag is
+/// refused, so they are read back with statvfs and passed again). Landlock does
+/// not mediate chmod, chown, utimes or xattrs, so without this the agent could
+/// change the metadata of any file it can reach; a read-only mount refuses them.
+/// Best effort per mount: one that cannot be resolved or remounted (an exotic
+/// filesystem, a path the user cannot reach) is left as it was, which is the
+/// behaviour without sealing.
+pub(crate) unsafe fn seal_readonly(mountpoints: &[std::ffi::CString]) {
+    const KEEP: [(libc::c_ulong, libc::c_ulong); 6] = [
+        (libc::ST_NOSUID, libc::MS_NOSUID),
+        (libc::ST_NODEV, libc::MS_NODEV),
+        (libc::ST_NOEXEC, libc::MS_NOEXEC),
+        (libc::ST_NOATIME, libc::MS_NOATIME),
+        (libc::ST_NODIRATIME, libc::MS_NODIRATIME),
+        (libc::ST_RELATIME, libc::MS_RELATIME),
+    ];
+    for m in mountpoints {
+        let mut sv: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(m.as_ptr(), &mut sv) != 0 {
+            continue;
+        }
+        let mut flags = libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY;
+        for (st, ms) in KEEP {
+            if sv.f_flag & st != 0 {
+                flags |= ms;
+            }
+        }
+        let _ = libc::mount(std::ptr::null(), m.as_ptr(), std::ptr::null(), flags, std::ptr::null());
+    }
+}
+
+/// Cover each read-denied directory with an empty, read-only tmpfs. Landlock
+/// already denies reading inside it, but not connecting to a unix socket there
+/// (an agent socket in `~/.gnupg`, say): with the directory's entries hidden the
+/// socket path no longer resolves. Fails closed.
+pub(crate) unsafe fn hide_dirs(dirs: &[std::ffi::CString]) -> std::io::Result<()> {
+    let opts = c"mode=000,size=4k";
+    for d in dirs {
+        if libc::mount(
+            c"tmpfs".as_ptr(),
+            d.as_ptr(),
+            c"tmpfs".as_ptr(),
+            libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+            opts.as_ptr() as *const libc::c_void,
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Enter a new mount namespace whose tree is private, so nothing mounted in it
 /// propagates to the host. Needs CAP_SYS_ADMIN (root, or a user namespace).
 pub(crate) unsafe fn enter_private_mount_ns() -> std::io::Result<()> {
@@ -478,6 +592,13 @@ pub(crate) unsafe fn set_pdeathsig_kill() {
     if libc::getppid() == 1 {
         libc::_exit(1);
     }
+}
+
+/// `set_pdeathsig_kill` for the agent under our own PID 1 init: its parent IS
+/// pid 1, so the reparenting check above would always fire. No race to cover
+/// here either: if the init dies the kernel kills the whole namespace.
+pub(crate) unsafe fn set_pdeathsig_kill_under_init() {
+    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
 }
 
 /// Close every inherited fd >= 3 (keep stdio). Used by the init shim, which must

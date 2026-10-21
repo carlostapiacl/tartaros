@@ -20,7 +20,7 @@
 //!   --seccomp-strict       deny dangerous syscalls to shrink kernel attack surface (Linux)
 //!   --strict               a requested guarantee that cannot be installed aborts the run
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
-//!   --protect-home-handoff also deny shell rc / .gitconfig / .ripgreprc (opt-in)
+//!   --allow-home-handoff   allow writing shell rc / .gitconfig / .ripgreprc (denied by default)
 //!   --private-tmp          run-private TMPDIR, AF_UNIX scoped to it (headless browsers)
 //!   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes (no curated base)
 //!   --env KEY[=VALUE]      carry one launcher var through, or set it (default: env is scrubbed)
@@ -91,8 +91,9 @@ struct PolicyFile {
     strict: bool,
     #[serde(default)]
     materialize_absent_handoff: bool,
+    /// Unset keeps the default (protected); `false` is the dotfiles-repo opt-out.
     #[serde(default)]
-    protect_home_handoff: bool,
+    protect_home_handoff: Option<bool>,
     #[serde(default)]
     isolate_process_info: bool,
     #[serde(default)]
@@ -210,7 +211,8 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --deny-unix            deny AF_UNIX sockets
   --isolate-proc         deny reads of other processes' /proc
   --materialize          pre-create absent trust-handoff placeholders
-  --protect-home-handoff also deny shell rc / .gitconfig / .ripgreprc (NOT for dotfiles repos)
+  --allow-home-handoff   let the agent write shell rc / .gitconfig / .ripgreprc in its
+                         roots (denied by default; for dotfiles repos)
   --private-tmp          run-private TMPDIR; AF_UNIX scoped to it (headless browsers)
   --browser              macOS: minimal extra Seatbelt grants for headless Chromium/Chrome
   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes, without the
@@ -897,7 +899,10 @@ fn parse_num_or_exit<T: std::str::FromStr>(v: &str, flag: &str) -> T {
 /// Build the Policy from --config (if any) + --profile + flags. Returns the
 /// policy, the optional --log path, and the selected profile (for its caveat).
 fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Option<Profile>) {
-    let mut p = Policy { network: Some(Network::Denied), ..Default::default() };
+    // Shell rc files, .gitconfig and .ripgreprc in a writable root are protected
+    // by default, as sandbox-runtime does: a trusted shell or git later runs what
+    // the agent planted there. --allow-home-handoff is the dotfiles-repo opt-out.
+    let mut p = Policy { network: Some(Network::Denied), protect_home_handoff: true, ..Default::default() };
     let mut profile: Option<Profile> = None;
 
     // First pass: load --config (a policy file), so flags can override it.
@@ -918,7 +923,9 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
         p.harden_syscalls = pf.harden_syscalls;
         p.strict = pf.strict;
         p.materialize_absent_handoff = pf.materialize_absent_handoff;
-        p.protect_home_handoff = pf.protect_home_handoff;
+        if let Some(on) = pf.protect_home_handoff {
+            p.protect_home_handoff = on;
+        }
         p.isolate_process_info = pf.isolate_process_info;
         p.timeout = pf.timeout_secs.map(Duration::from_secs);
         p.max_memory_bytes = pf.max_memory_bytes;
@@ -976,7 +983,8 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             "--seccomp-strict" => p.harden_syscalls = true,
             "--strict" => p.strict = true,
             "--materialize" => p.materialize_absent_handoff = true,
-            "--protect-home-handoff" => p.protect_home_handoff = true,
+            "--protect-home-handoff" => p.protect_home_handoff = true, // the default since 0.1.0-alpha.7
+            "--allow-home-handoff" => p.protect_home_handoff = false,
             "--private-tmp" => p.private_tmp = true,
             "--browser" => p.browser = true,
             "--mach-lookup-only" => p.mach_lookup_only = true,

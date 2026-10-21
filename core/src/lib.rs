@@ -418,6 +418,15 @@ impl Policy {
     /// falls back to bwrap. `linux_write_allowlist` reports the allow set; the
     /// caller decides.
     pub fn linux_write_allowlist(&self) -> Vec<PathBuf> {
+        self.linux_write_allowlist_except(&|_| false)
+    }
+
+    /// [`linux_write_allowlist`] without carving the denies `already_protected`
+    /// says need no carve: the backend passes the ones on a read-only mount (an
+    /// outer sandbox's read-only bind), which the kernel refuses to write, unlink
+    /// or rename whatever Landlock grants. Carving them would withhold their
+    /// parent, the whole root for a top-level `.bashrc`, for nothing.
+    pub fn linux_write_allowlist_except(&self, already_protected: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
         // Explicit write denies are kept even when the path does not exist yet:
         // the carve then withholds the nearest existing ancestor (only its
         // existing children are granted), so the absent path cannot be created.
@@ -441,6 +450,7 @@ impl Policy {
         denied = denied.iter().map(|p| resolve_best_effort(p)).collect();
         denied.retain(|p| p.exists());
         denied.extend(explicit);
+        denied.retain(|p| !already_protected(p));
         denied.sort();
         denied.dedup();
 
@@ -494,7 +504,8 @@ impl Policy {
             let r = resolve_best_effort(r);
             denied.iter().any(|d| r.starts_with(d) && r != *d)
         });
-        for given in self.read_allows.iter().chain(roots_in_denies) {
+        let allows: Vec<&PathBuf> = self.read_allows.iter().chain(roots_in_denies).collect();
+        for given in &allows {
             if !given.exists() {
                 continue;
             }
@@ -506,6 +517,23 @@ impl Policy {
             let lands_inside = denied.iter().any(|d| a.starts_with(d));
             if lands_inside && !named_inside {
                 continue;
+            }
+            // Named inside a deny too (a deny on `/`, the granted model, holds
+            // every name): a re-allow redirected by a symlink inside a writable
+            // root (one the agent could have planted) still re-opens only what
+            // another re-allow already covers by its own real path. So
+            // `work/docs -> ~/.ssh` re-opens nothing, while system links such as
+            // `/lib -> usr/lib` or macOS `/var -> private/var` are untouched.
+            if lands_inside && self.link_in_writable_root(given) {
+                let covered = allows.iter().any(|o| {
+                    o.as_path() != given.as_path() && {
+                        let r = resolve_best_effort(o);
+                        r == **o && a.starts_with(&r)
+                    }
+                });
+                if !covered {
+                    continue;
+                }
             }
             // Exact contradiction (the SAME path is both read-denied and
             // re-allowed): the deny wins, fail-safe. Equal depth is a tie, and a
@@ -523,6 +551,24 @@ impl Policy {
             }
         }
         out
+    }
+
+    /// Does reaching `path` follow a symlink that sits inside a writable root,
+    /// i.e. a link the agent could have planted?
+    fn link_in_writable_root(&self, path: &Path) -> bool {
+        let roots: Vec<PathBuf> = self.writable_roots.iter().map(|r| resolve_best_effort(r)).collect();
+        let mut prefix = PathBuf::new();
+        for c in path.components() {
+            prefix.push(c);
+            let is_link = std::fs::symlink_metadata(&prefix).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+            if is_link {
+                let at = prefix.parent().map(resolve_best_effort).unwrap_or_default();
+                if roots.iter().any(|r| at.starts_with(r)) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Handoff surfaces reached through a SYMLINK whose name is a handoff segment
@@ -1689,6 +1735,32 @@ mod tests {
         let vault = resolve_best_effort(&vault);
         assert!(reads.iter().any(|r| r == &w), "the nested root is re-allowed");
         assert!(!reads.iter().any(|r| r == &vault || vault.join("other.txt").starts_with(r) && r.starts_with(&vault)), "the rest of the deny stays closed");
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn granted_model_read_allow_through_a_symlink_reopens_nothing_new() {
+        // Granted model: deny `/`, re-allow the system dirs, the root and `docs`.
+        // `docs` is a symlink to the vault, which no other allow covers.
+        let base = std::env::temp_dir().join(format!("sbx-granted-link-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let base = resolve_best_effort(&base);
+        let (work, vault, usr) = (base.join("work"), base.join("vault"), base.join("usr"));
+        fs::create_dir_all(&work).unwrap();
+        fs::create_dir_all(&vault).unwrap();
+        fs::create_dir_all(usr.join("lib")).unwrap();
+        std::os::unix::fs::symlink(&vault, work.join("docs")).unwrap();
+        std::os::unix::fs::symlink(usr.join("lib"), base.join("lib")).unwrap();
+        let p = Policy {
+            writable_roots: vec![work.clone()],
+            read_denies: vec![PathBuf::from("/")],
+            read_allows: vec![usr.clone(), base.join("lib"), work.clone(), work.join("docs")],
+            ..Default::default()
+        };
+        let reads = p.linux_read_allowlist();
+        assert!(!reads.iter().any(|r| vault.starts_with(r) || r.starts_with(&vault)), "the vault stays closed: {reads:?}");
+        assert!(reads.iter().any(|r| usr.join("lib").starts_with(r)), "a link into another allow still reads");
         fs::remove_dir_all(&base).ok();
     }
 }
