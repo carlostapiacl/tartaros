@@ -5,6 +5,10 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.11] — 2026-10-22
+
+The credential broker from the CLI, and a capability path fix.
+
 ### Added
 - **The credential broker from the CLI.** A `[broker]` table in the policy file
   (`--config`) starts a loopback broker for the run: `[[broker.capability]]`
