@@ -732,7 +732,11 @@ fn confined_command(
     // not in pre_exec — building a BPF program after fork could deadlock a child of
     // a multithreaded parent (broker/collector threads) on the malloc lock (review
     // #7). The child only applies them (prctl + apply_filter, no allocation).
-    let seccomp_progs = seccomp::compile_all(deny_unix, harden_syscalls, restrict_net)
+    let no_net_grant = restrict_net
+        && policy.local_ports.is_empty()
+        && policy.allow_domains.is_empty()
+        && policy.egress_netns.is_none();
+    let seccomp_progs = seccomp::compile_all(deny_unix, harden_syscalls, restrict_net, no_net_grant)
         .map_err(|e| err(format!("seccomp compile: {e}")))?;
     // Read-only bind-mount targets (built here in the parent; the pre_exec closure
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
