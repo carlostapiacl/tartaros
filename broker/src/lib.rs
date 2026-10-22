@@ -132,6 +132,13 @@ pub struct Broker {
     injections: Vec<Injection>,
     capabilities: Vec<Capability>,
     auth_token: Option<String>,
+    /// The request header that carries the token (lowercase). Stripped before
+    /// anything is forwarded.
+    auth_header: String,
+    /// Forward-proxy and CONNECT egress on. Off for a broker that only serves
+    /// capabilities: then no host is reachable through it except a declared
+    /// loopback port.
+    forward: bool,
     insecure: bool,
     role: String,
     /// Grant deadline: after this instant every request is refused (403). Models
@@ -170,6 +177,8 @@ impl Broker {
             injections,
             capabilities: Vec::new(),
             auth_token: None,
+            auth_header: "x-tartaros-auth".into(),
+            forward: true,
             insecure: false,
             role: role.into(),
             deadline: None,
@@ -227,9 +236,17 @@ impl Broker {
         self
     }
 
-    /// Is `host` permitted by the egress allow-list? Empty list = allow all.
+    /// Is `host` permitted by the egress allow-list? Empty list = allow all,
+    /// unless forwarding is off.
     fn host_allowed(&self, host: &str) -> bool {
-        egress::host_allowed(&self.allowed_hosts, host)
+        self.forward && egress::host_allowed(&self.allowed_hosts, host)
+    }
+
+    /// Turn the forward proxy and CONNECT off: the broker serves its capabilities
+    /// (and declared loopback ports) only, whatever the allow-list says.
+    pub fn without_forwarding(mut self) -> Self {
+        self.forward = false;
+        self
     }
 
     /// Expire the broker's grant after `ttl` from now: a short-lived capability.
@@ -268,6 +285,13 @@ impl Broker {
     /// only to the authorized agent; others reaching the port get 403.
     pub fn with_auth(mut self, token: impl Into<String>) -> Self {
         self.auth_token = Some(token.into());
+        self
+    }
+
+    /// Carry the token in this header instead of `X-Tartaros-Auth` (matched
+    /// case-insensitively, stripped before forwarding).
+    pub fn with_auth_header(mut self, name: impl Into<String>) -> Self {
+        self.auth_header = name.into().to_ascii_lowercase();
         self
     }
 
@@ -404,14 +428,14 @@ impl Broker {
         if let Some(tok) = &self.auth_token {
             let ok = headers
                 .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case("x-tartaros-auth") && ct_eq(v, tok));
+                .any(|(k, v)| k.eq_ignore_ascii_case(&self.auth_header) && ct_eq(v, tok));
             if !ok {
                 let _ = client
                     .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 return Ok(());
             }
         }
-        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-tartaros-auth"));
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case(&self.auth_header) && !k.eq_ignore_ascii_case("x-tartaros-auth"));
 
         // Session gate (expiry + quota): a valid token is necessary but not
         // sufficient — a capability can still be past its TTL or over its quota.
@@ -797,7 +821,7 @@ impl Broker {
         // P0-B: keep the path within the capability's upstream — no traversal out.
         let rest = &path[cap.prefix.len()..];
         let rest = if rest.is_empty() { "/" } else { rest };
-        if rest.contains("..") {
+        if rest.contains("..") || has_dot_segment(rest) {
             let _ = client.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             return Ok(());
         }
@@ -834,6 +858,22 @@ impl Broker {
         client.flush()?;
         Ok(())
     }
+}
+
+/// Does `path` hold a `.` or `..` segment once its percent-encoded dots and
+/// slashes are decoded? The HTTP client normalizes `%2e%2e` to `..` as it builds
+/// the upstream URL (WHATWG URL parsing), so `/up/%2e%2e/%2e%2e/admin` would leave
+/// the capability's base path with the credential injected.
+fn has_dot_segment(path: &str) -> bool {
+    let decoded = path
+        .replace("%2e", ".")
+        .replace("%2E", ".")
+        .replace("%2f", "/")
+        .replace("%2F", "/")
+        .replace("%5c", "/")
+        .replace("%5C", "/")
+        .replace('\\', "/");
+    decoded.split('/').any(|seg| seg == "." || seg == "..")
 }
 
 /// Read an upstream response body, bounded to `MAX_RESPONSE_BYTES` (P0-B).
@@ -1365,6 +1405,60 @@ mod tests {
 
     /// A loopback upstream that answers with the body it received, then closes —
     /// unless the request asked to keep the connection alive, which it honours.
+    /// An upstream that answers with the request line it received.
+    fn path_upstream() -> u16 {
+        let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                let mut r = BufReader::new(s.try_clone().unwrap());
+                let mut s = s;
+                let mut first = String::new();
+                let _ = r.read_line(&mut first);
+                loop {
+                    let mut line = String::new();
+                    if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" { break; }
+                }
+                let body = first.trim_end();
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn a_capability_path_never_leaves_its_upstream_base() {
+        let up = path_upstream();
+        let cap = Capability {
+            prefix: "/up".into(),
+            upstream_base: format!("http://127.0.0.1:{up}/api/v1"),
+            methods: vec!["GET".into()],
+            injections: vec![],
+        };
+        let b = Broker::new("qa", vec![]).insecure_no_auth().with_capabilities(vec![cap]);
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let ask = |path: &str| -> String {
+            let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes()).unwrap();
+            let mut resp = String::new();
+            let _ = c.read_to_string(&mut resp);
+            resp
+        };
+        assert!(ask("/up/ok").ends_with("GET /api/v1/ok HTTP/1.1"), "control: {}", ask("/up/ok"));
+        for p in ["/up/../../admin", "/up/%2e%2e/%2e%2e/admin", "/up/%2E%2E/admin", "/up/..%2f..%2fadmin",
+                  "/up/.%2e/admin", "/up/%2e./admin", "/up/x/%2e%2e%2f%2e%2e%2f%2e%2e%2fadmin"] {
+            let resp = ask(p);
+            assert!(!resp.starts_with("HTTP/1.1 200") || resp.contains("GET /api/v1/"),
+                "{p} reached the upstream outside its base: {resp:?}");
+        }
+    }
+
     fn echo_upstream() -> u16 {
         let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
