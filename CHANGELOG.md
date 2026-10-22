@@ -5,6 +5,21 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **The credential broker from the CLI.** A `[broker]` table in the policy file
+  (`--config`) starts a loopback broker for the run: `[[broker.capability]]`
+  endpoints (`/prefix/…` becomes `upstream/…` with secret headers added), an
+  optional forward allow-list with per-host injection, a per-run token in a
+  header of your choice. Secrets are read from the launcher's environment by
+  name; the agent gets only `TARTAROS_BROKER_URL` and `TARTAROS_BROKER_TOKEN`.
+  See [docs/broker.md](docs/broker.md).
+
+### Fixed
+- **A capability path with percent-encoded dot segments left its upstream.**
+  The HTTP client normalizes `%2e%2e` to `..`, so `/up/%2e%2e/%2e%2e/admin`
+  reached `/admin` on the upstream host with the credential injected. Such a
+  path is now refused with 400.
+
 ## [0.1.0-alpha.10] — 2026-10-22
 
 Linux: four conformance gaps closed. Measured against sandbox-conformance's
