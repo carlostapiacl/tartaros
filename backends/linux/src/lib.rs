@@ -650,6 +650,16 @@ fn confined_command(
             .map_err(|e| err(format!("add read rule {}: {e}", p.display())))?;
     }
 
+    // The nearest existing ancestor of a read deny that does not exist yet is
+    // withheld by the read carve; it may still be listed (ls ~ keeps working),
+    // and so may what appears in it later, but no file in it can be read.
+    for p in policy.absent_read_deny_holders() {
+        let Ok(fd) = PathFd::new(&p) else { continue };
+        ruleset = ruleset
+            .add_rule(PathBeneath::new(fd, AccessFs::ReadDir))
+            .map_err(|e| err(format!("add list rule {}: {e}", p.display())))?;
+    }
+
     // Trust-handoff enforcement strategy. Landlock cannot allow "write X but deny
     // X/y", so the carve grants each safe subtree and NEVER the parent of a deny —
     // which blocks creating NEW entries directly at a repo root (a deny lives below
