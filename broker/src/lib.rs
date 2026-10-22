@@ -79,6 +79,55 @@ use limits::{
     MAX_HEADERS, MAX_LINE_BYTES, MAX_RESPONSE_BYTES, UPSTREAM_TIMEOUT,
 };
 
+/// An `EffectSink` that tells the operator what the broker refused: one line
+/// per destination and reason, the first time. The broker is the one place
+/// that knows the host's name — the kernel sees a port — and without this a
+/// refusal surfaced only as the client's own error (a browser's
+/// `ERR_TUNNEL_CONNECTION_FAILED` in a page's console), with nothing saying a
+/// host was missing from the list. Only host and port are written, never a
+/// path, which can carry a query string.
+pub struct RefusalReport<W: Write> {
+    out: W,
+    seen: std::collections::HashSet<String>,
+}
+
+impl RefusalReport<std::io::Stderr> {
+    pub fn stderr() -> Self {
+        RefusalReport::new(std::io::stderr())
+    }
+}
+
+impl<W: Write> RefusalReport<W> {
+    pub fn new(out: W) -> Self {
+        RefusalReport { out, seen: Default::default() }
+    }
+
+    pub fn into_inner(self) -> W {
+        self.out
+    }
+}
+
+impl<W: Write> EffectSink for RefusalReport<W> {
+    fn emit(&mut self, ev: &EffectEvent) {
+        if ev.outcome != Outcome::Denied {
+            return;
+        }
+        let why = match ev.action.as_str() {
+            "broker-egress-denied" | "broker-connect-denied" => "not in the allowed list",
+            "broker-connect-port-denied" => "port not allowed",
+            "broker-internal-destination-denied" | "broker-connect-internal-denied" => {
+                "resolves to an internal address"
+            }
+            _ => "refused",
+        };
+        let dest = ev.target.split('/').next().unwrap_or("");
+        if self.seen.insert(format!("{dest} {why}")) {
+            let _ = writeln!(self.out, "tartaros: egress broker refused {dest} ({why})");
+            let _ = self.out.flush();
+        }
+    }
+}
+
 pub struct Broker {
     injections: Vec<Injection>,
     capabilities: Vec<Capability>,
@@ -1395,6 +1444,26 @@ mod tests {
         let (resp, _) = ask(format!(
             "POST http://127.0.0.1:{up}/mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 7\r\nTransfer-Encoding: chunked\r\n\r\n{body}"));
         assert!(resp.starts_with("HTTP/1.1 400"), "got: {resp:?}");
+    }
+
+    #[test]
+    fn refusals_are_reported_once_per_destination_without_the_path() {
+        let ev = |action: &str, target: &str, outcome: Outcome| {
+            EffectEvent::now("qa", Axis::Network, action, target, Direction::OutsideTerritory, outcome, "broker")
+        };
+        let mut r = RefusalReport::new(Vec::new());
+        r.emit(&ev("broker-connect-denied", "cdnjs.cloudflare.com:443", Outcome::Denied));
+        r.emit(&ev("broker-connect-denied", "cdnjs.cloudflare.com:443", Outcome::Denied));
+        r.emit(&ev("broker-egress-denied", "example.com:80/login?token=s3cr3t", Outcome::Denied));
+        r.emit(&ev("broker-connect-port-denied", "wiki.restoiq.cl:8443", Outcome::Denied));
+        r.emit(&ev("broker-forward", "wiki.restoiq.cl:80/", Outcome::Allowed));
+        let out = String::from_utf8(r.into_inner()).unwrap();
+        assert_eq!(
+            out,
+            "tartaros: egress broker refused cdnjs.cloudflare.com:443 (not in the allowed list)\n\
+             tartaros: egress broker refused example.com:80 (not in the allowed list)\n\
+             tartaros: egress broker refused wiki.restoiq.cl:8443 (port not allowed)\n"
+        );
     }
 
     #[test]
