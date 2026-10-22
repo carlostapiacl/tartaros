@@ -5,6 +5,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **What the egress broker refuses is said on stderr**, once per destination
+  and reason: `tartaros: egress broker refused cdnjs.cloudflare.com:443 (not in
+  the allowed list)`, or `(port not allowed)`, or `(resolves to an internal
+  address)`. Its refusals went to a sink nobody read, so a host missing from the
+  list showed up only as the client's own error (a browser's
+  `ERR_TUNNEL_CONNECTION_FAILED`, inside a page's console). Host and port only,
+  never a path, which can carry a query string.
+
 ## [0.1.0-alpha.8] — 2026-10-21
 
 The egress broker's forward proxy, which dropped request bodies.
