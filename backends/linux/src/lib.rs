@@ -345,13 +345,15 @@ fn create_placeholders(policy: &Policy) -> Result<Placeholders, String> {
 
 /// Mount-level hardening for a run with its own mount namespace, built in the
 /// parent (the child must not allocate): `pins` are bound onto themselves
-/// read-write, `seal` remounted read-only, `hide` covered with an empty tmpfs.
+/// read-write, `seal` remounted read-only, `hide` covered with an empty tmpfs,
+/// `hide_files` covered with /dev/null.
 #[cfg(target_os = "linux")]
 #[derive(Default)]
 struct MountPlan {
     pins: Vec<std::ffi::CString>,
     seal: Vec<std::ffi::CString>,
     hide: Vec<std::ffi::CString>,
+    hide_files: Vec<std::ffi::CString>,
 }
 
 #[cfg(target_os = "linux")]
@@ -430,10 +432,63 @@ fn mount_plan(policy: &Policy, binds: &[PathBuf]) -> MountPlan {
         .filter(|d| !under(d, &roots))
         .filter(|d| !roots.iter().chain(allows.iter()).any(|r| r.starts_with(d)))
         .collect();
+    // A read-denied directory that does hold a root or a read-allow (a deny on
+    // `/` with the system dirs and the workspace allowed back, the granted
+    // model) cannot be covered whole. Landlock keeps what is in it unreadable, but
+    // it does not mediate connect(): a unix socket there would stay reachable. So
+    // every entry in it that is neither kept nor on the way to a kept path is
+    // covered instead, one level at a time.
+    let kept: Vec<PathBuf> = roots
+        .iter()
+        .cloned()
+        .chain(allows.iter().filter(|a| a.exists()).cloned())
+        .chain(["/dev", "/proc", "/sys"].iter().map(PathBuf::from))
+        .collect();
+    let mut hide_files: Vec<PathBuf> = Vec::new();
+    let holding: Vec<PathBuf> = policy
+        .read_denies
+        .iter()
+        .map(|d| resolve_best_effort(d))
+        .filter(|d| d.is_dir() && !under(d, &roots))
+        .filter(|d| kept.iter().any(|k| k.starts_with(d)))
+        .collect();
+    for d in holding {
+        hide_beside(&d, &kept, &mut hide, &mut hide_files);
+    }
     hide.sort();
     hide.dedup();
+    hide_files.sort();
+    hide_files.dedup();
     let cs = |v: Vec<PathBuf>| v.iter().filter_map(|p| cstring(p)).collect();
-    MountPlan { pins: cs(pins), seal: cs(seal), hide: cs(hide) }
+    MountPlan { pins: cs(pins), seal: cs(seal), hide: cs(hide), hide_files: cs(hide_files) }
+}
+
+/// The entries of `dir` to cover so that only `kept` paths, and the directories on
+/// the way to them, stay reachable: directories go to `dirs`, any other entry
+/// (a socket, a fifo, a file) to `files`. Symlinks are left alone: what they lead
+/// to is covered, or kept, by its own path. A directory that cannot be listed
+/// is left as it is (Landlock still keeps its files unreadable).
+#[cfg(target_os = "linux")]
+fn hide_beside(dir: &std::path::Path, kept: &[PathBuf], dirs: &mut Vec<PathBuf>, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+        if meta.file_type().is_symlink() || kept.iter().any(|k| path.starts_with(k)) {
+            continue;
+        }
+        if kept.iter().any(|k| k.starts_with(&path)) {
+            if meta.is_dir() {
+                hide_beside(&path, kept, dirs, files);
+            }
+            continue;
+        }
+        if meta.is_dir() {
+            dirs.push(path);
+        } else {
+            files.push(path);
+        }
+    }
 }
 
 /// The mount points of this process's mount namespace (field 5 of
@@ -757,7 +812,7 @@ fn confined_command(
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
     let robind_cstrings: Vec<std::ffi::CString> =
         robind_paths.iter().chain(placeholders.paths()).filter_map(|p| cstring(p)).collect();
-    let MountPlan { pins, seal, hide } = plan;
+    let MountPlan { pins, seal, hide, hide_files } = plan;
     let mount_ns = ns_capable || isolate_pids || isolate_network;
     // Pre-build (in the parent) everything pre_exec would otherwise allocate after
     // the fork (review #7): the cgroup.procs path as a CString, and the user-ns
@@ -859,6 +914,7 @@ fn confined_command(
             }
             // Hide the read-denied directories (unix sockets there stop resolving).
             namespace::hide_dirs(&hide)?;
+            namespace::hide_files(&hide_files)?;
             // Everything that is not a writable root or /dev goes read-only, so
             // chmod/utimes/xattrs outside the roots fail too.
             namespace::seal_readonly(&seal);
