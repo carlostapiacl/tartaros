@@ -5,6 +5,11 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.10] — 2026-10-22
+
+Linux: four conformance gaps closed. Measured against sandbox-conformance's
+frozen corpus: 151 → 155 contained, 7 → 3 escaped, 0 control-broke.
+
 ### Fixed
 - **No network grant closes netlink too (Linux).** With no `--net`, port,
   domain or egress namespace, `socket(AF_NETLINK, …)` is refused like
