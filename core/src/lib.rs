@@ -482,6 +482,10 @@ impl Policy {
         // the file it resolves to, not just the name it was given.
         denied = denied.iter().map(|p| resolve_best_effort(p)).collect();
         denied.retain(|p| p.exists());
+        // A deny on a path that does not exist yet (`~/.aws/credentials` before a
+        // login writes it) withholds its nearest existing ancestor instead: only
+        // what is there now is granted, so whatever appears later stays unreadable.
+        denied.extend(self.absent_read_denies().into_iter().map(|(_, first)| first));
         let mut out = if denied.is_empty() {
             vec![PathBuf::from("/")]
         } else {
@@ -903,6 +907,46 @@ impl Policy {
     /// backend carves the policy instead.
     pub fn unresolvable_handoff_links(&self) -> Vec<PathBuf> {
         self.trust_handoff_rules().into_iter().map(|r| r.path).filter(|p| unresolvable_link(p)).collect()
+    }
+
+    /// For each read deny whose path does not exist yet, its nearest existing
+    /// ancestor: the Linux read carve withholds it (granting its existing children)
+    /// and the backend lets it be listed only, so a file created there later, by
+    /// the host or another process, cannot be read. Skipped when that ancestor is
+    /// `/` or lies inside a writable root: the agent writes there, and withholding
+    /// it would keep the agent from reading back what it just wrote.
+    pub fn absent_read_deny_holders(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = self.absent_read_denies().into_iter().map(|(holder, _)| holder).collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Each absent read deny as (nearest existing ancestor, its first missing
+    /// component): the carve is told the second is denied, so it grants the
+    /// ancestor's existing children and never the ancestor itself.
+    fn absent_read_denies(&self) -> Vec<(PathBuf, PathBuf)> {
+        let roots: Vec<PathBuf> = self.writable_roots.iter().map(|r| resolve_best_effort(r)).collect();
+        let mut out = Vec::new();
+        for d in &self.read_denies {
+            let mut first = resolve_best_effort(d);
+            if std::fs::symlink_metadata(&first).is_ok() {
+                continue;
+            }
+            let holder = loop {
+                let Some(p) = first.parent() else { break None };
+                if std::fs::symlink_metadata(p).is_ok() {
+                    break Some(p.to_path_buf());
+                }
+                first = p.to_path_buf();
+            };
+            let Some(holder) = holder else { continue };
+            if holder.parent().is_none() || !holder.is_dir() || roots.iter().any(|r| holder.starts_with(r)) {
+                continue;
+            }
+            out.push((holder, first));
+        }
+        out
     }
 
     /// A writable root that is a symlink grants its TARGET. Refuse one whose target
@@ -1403,6 +1447,28 @@ mod tests {
         assert!(!surfaces.iter().any(|p| p == &root.join("src")),
             "a plain sub-directory must never be pinned");
 
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_read_deny_on_an_absent_path_withholds_its_nearest_ancestor() {
+        let tmp = std::env::temp_dir().join(format!("sbx-late-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("home/proj")).unwrap();
+        fs::create_dir_all(tmp.join("work")).unwrap();
+        let base = tmp.canonicalize().unwrap();
+        let policy = Policy {
+            writable_roots: vec![base.join("work"), base.join("home/proj")],
+            // ~/.aws does not exist yet; work/later.txt is inside a root.
+            read_denies: vec![base.join("home/.aws/credentials"), base.join("work/later.txt")],
+            ..Default::default()
+        };
+        assert_eq!(policy.absent_read_deny_holders(), vec![base.join("home")]);
+        let allow = policy.linux_read_allowlist();
+        assert!(!allow.iter().any(|p| p == &base.join("home") || base.join("home").starts_with(p)),
+            "home (and so a later .aws in it) must not be readable: {allow:?}");
+        assert!(allow.contains(&base.join("home/proj")), "what is in home now stays readable: {allow:?}");
+        assert!(allow.iter().any(|p| base.join("work").starts_with(p)), "the root stays readable: {allow:?}");
         fs::remove_dir_all(&tmp).ok();
     }
 
