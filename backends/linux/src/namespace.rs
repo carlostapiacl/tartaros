@@ -446,6 +446,21 @@ pub(crate) unsafe fn hide_dirs(dirs: &[std::ffi::CString]) -> std::io::Result<()
     Ok(())
 }
 
+/// Cover each of `files` (a socket, a fifo, a file in a read-denied directory)
+/// with a bind of /dev/null, so a unix socket there no longer accepts a
+/// connection. Not remounted read-only: in a user namespace that remount would
+/// have to repeat /dev's locked flags (nosuid, noexec) or fail, and writing to
+/// /dev/null loses nothing. Fails closed, like [`hide_dirs`].
+pub(crate) unsafe fn hide_files(files: &[std::ffi::CString]) -> std::io::Result<()> {
+    let null = c"/dev/null";
+    for f in files {
+        if libc::mount(null.as_ptr(), f.as_ptr(), std::ptr::null(), libc::MS_BIND, std::ptr::null()) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Enter a new mount namespace whose tree is private, so nothing mounted in it
 /// propagates to the host. Needs CAP_SYS_ADMIN (root, or a user namespace).
 pub(crate) unsafe fn enter_private_mount_ns() -> std::io::Result<()> {
