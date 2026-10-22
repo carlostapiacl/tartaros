@@ -130,6 +130,14 @@ than you asked for.
   instead of the bind-mount strategy. macOS matches by path and has no such cost.
   Earlier versions silently dropped an absent explicit deny; it is now enforced.
 
+- **A read-deny on a path that does not exist yet (Linux).** The same inode limit:
+  the nearest existing ancestor is withheld from the read grant instead. Its
+  entries at launch stay readable and it can still be listed, but a file that
+  appears in it later cannot be read, nor can a new entry in it. When that
+  ancestor lies inside a writable root nothing is withheld (the agent could not
+  read back what it writes there), so a secret created later inside the
+  workspace is not covered.
+
 - **Absent *nested* handoff paths under the bind-mount strategy (Linux root).**
   When the whole workspace is granted writable and existing handoff paths are
   pinned read-only (the root/container strategy), a handoff path **nested below the
