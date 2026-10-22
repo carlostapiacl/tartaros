@@ -5,6 +5,29 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **No network grant closes netlink too (Linux).** With no `--net`, port,
+  domain or egress namespace, `socket(AF_NETLINK, …)` is refused like
+  `AF_PACKET` and `AF_VSOCK`. It stays open while some grant is in place: glibc
+  asks it which address families are configured before resolving a name.
+- **A handoff name that is a symlink resolving nowhere is protected (Linux).**
+  `.claude` as part of a cycle (`.claude -> .claude-x -> .claude`), or a link
+  whose target does not exist, had no inode to protect behind it: the agent could
+  drop the link and create `.claude/commands`. The link entry is now denied, and
+  where it points; such a policy uses the carve, which withholds the link's
+  directory (its other entries stay writable).
+- **A read deny on a path that does not exist yet (Linux).** `--read-deny
+  ~/.aws/credentials` before anything has written it now withholds the nearest
+  existing ancestor from the read grant: what is in it at launch stays readable,
+  it can still be listed, and nothing that appears in it later can be read.
+  Skipped when that ancestor is inside a writable root. macOS matches by path and
+  already covered it.
+- **A unix socket in a directory nobody granted is unreachable (Linux).** With a
+  read deny that holds allowed paths (`--read-deny /` and the system dirs allowed
+  back), every other entry of it is now covered in the run's mount namespace:
+  directories with an empty tmpfs, sockets and files with `/dev/null`. Landlock
+  kept them unreadable but does not mediate `connect()`.
+
 ## [0.1.0-alpha.9] — 2026-10-22
 
 The egress broker names what it refuses.
