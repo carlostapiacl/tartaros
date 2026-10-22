@@ -132,6 +132,13 @@ pub struct Broker {
     injections: Vec<Injection>,
     capabilities: Vec<Capability>,
     auth_token: Option<String>,
+    /// The request header that carries the token (lowercase). Stripped before
+    /// anything is forwarded.
+    auth_header: String,
+    /// Forward-proxy and CONNECT egress on. Off for a broker that only serves
+    /// capabilities: then no host is reachable through it except a declared
+    /// loopback port.
+    forward: bool,
     insecure: bool,
     role: String,
     /// Grant deadline: after this instant every request is refused (403). Models
@@ -170,6 +177,8 @@ impl Broker {
             injections,
             capabilities: Vec::new(),
             auth_token: None,
+            auth_header: "x-tartaros-auth".into(),
+            forward: true,
             insecure: false,
             role: role.into(),
             deadline: None,
@@ -227,9 +236,17 @@ impl Broker {
         self
     }
 
-    /// Is `host` permitted by the egress allow-list? Empty list = allow all.
+    /// Is `host` permitted by the egress allow-list? Empty list = allow all,
+    /// unless forwarding is off.
     fn host_allowed(&self, host: &str) -> bool {
-        egress::host_allowed(&self.allowed_hosts, host)
+        self.forward && egress::host_allowed(&self.allowed_hosts, host)
+    }
+
+    /// Turn the forward proxy and CONNECT off: the broker serves its capabilities
+    /// (and declared loopback ports) only, whatever the allow-list says.
+    pub fn without_forwarding(mut self) -> Self {
+        self.forward = false;
+        self
     }
 
     /// Expire the broker's grant after `ttl` from now: a short-lived capability.
@@ -268,6 +285,13 @@ impl Broker {
     /// only to the authorized agent; others reaching the port get 403.
     pub fn with_auth(mut self, token: impl Into<String>) -> Self {
         self.auth_token = Some(token.into());
+        self
+    }
+
+    /// Carry the token in this header instead of `X-Tartaros-Auth` (matched
+    /// case-insensitively, stripped before forwarding).
+    pub fn with_auth_header(mut self, name: impl Into<String>) -> Self {
+        self.auth_header = name.into().to_ascii_lowercase();
         self
     }
 
@@ -404,14 +428,14 @@ impl Broker {
         if let Some(tok) = &self.auth_token {
             let ok = headers
                 .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case("x-tartaros-auth") && ct_eq(v, tok));
+                .any(|(k, v)| k.eq_ignore_ascii_case(&self.auth_header) && ct_eq(v, tok));
             if !ok {
                 let _ = client
                     .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 return Ok(());
             }
         }
-        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-tartaros-auth"));
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case(&self.auth_header) && !k.eq_ignore_ascii_case("x-tartaros-auth"));
 
         // Session gate (expiry + quota): a valid token is necessary but not
         // sufficient — a capability can still be past its TTL or over its quota.

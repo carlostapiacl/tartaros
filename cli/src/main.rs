@@ -104,7 +104,76 @@ struct PolicyFile {
     max_processes: Option<u64>,
     #[serde(default)]
     max_cpu_secs: Option<u64>,
+    /// The credential broker: capabilities the agent uses without holding their
+    /// secret. Only in a policy file (it needs nested tables).
+    #[serde(default)]
+    broker: Option<BrokerFile>,
 }
+
+/// `[broker]`: a loopback HTTP broker for this run. The agent sends a per-run
+/// token; the broker serves `[[broker.capability]]` endpoints, injecting secrets
+/// it reads from the launcher's environment (never from the file, never into the
+/// agent's). With `allowed_hosts` it also forwards plain HTTP and CONNECT to those
+/// hosts; without, it forwards nothing.
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct BrokerFile {
+    /// Loopback port to listen on (0 or unset: any free port). Granted to the agent.
+    #[serde(default)]
+    port: u16,
+    /// Launcher env var holding the token the agent must send. Unset: a random
+    /// per-run token. Either way the agent gets it as TARTAROS_BROKER_TOKEN.
+    #[serde(default)]
+    token_env: Option<String>,
+    /// Header that carries the token (default X-Tartaros-Auth).
+    #[serde(default)]
+    auth_header: Option<String>,
+    #[serde(default)]
+    allowed_hosts: Vec<String>,
+    /// Let an allowed host that resolves to an internal address be reached
+    /// (off: the SSRF defense).
+    #[serde(default)]
+    allow_internal: bool,
+    #[serde(default)]
+    capability: Vec<CapabilityFile>,
+    /// Headers injected into plain-HTTP requests forwarded to an allowed host
+    /// (HTTPS through CONNECT is a blind tunnel: use a capability for it).
+    #[serde(default)]
+    inject: Vec<HostInjectFile>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct HostInjectFile {
+    host: String,
+    header: String,
+    value_env: String,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct CapabilityFile {
+    /// `/prefix`: the agent asks the broker for `/prefix/rest`.
+    prefix: String,
+    /// The real endpoint: `/prefix/rest` becomes `upstream/rest`.
+    upstream: String,
+    /// Methods allowed (default GET only).
+    #[serde(default)]
+    methods: Vec<String>,
+    #[serde(default)]
+    inject: Vec<InjectFile>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct InjectFile {
+    header: String,
+    /// Launcher env var holding the header's value (the secret).
+    value_env: String,
+}
+
+/// The `[broker]` of the policy file, if any (set while the policy is built).
+static BROKER: std::sync::OnceLock<BrokerFile> = std::sync::OnceLock::new();
 
 /// Expand a leading `~` to $HOME so policy files are portable.
 fn expand(s: &str) -> String {
@@ -190,7 +259,8 @@ PROFILE (preset threat model; flags still extend it):
   --profile local-agent|hostile-code|multi-tenant
 
 POLICY:
-  --config FILE          load a TOML policy (flags override it)
+  --config FILE          load a TOML policy (flags override it); its [broker]
+                         table starts the credential broker (docs/broker.md)
   --settings FILE        map a sandbox-runtime settings.json onto the generic
                          policy; refuses (exit 2) on anything it can't guarantee
   --role NAME            label for the effect log
@@ -265,6 +335,7 @@ fn cmd_run(rest: &[String]) -> ! {
     // through it. On Linux-as-root this builds a scoped network namespace (NET-01);
     // the returned guard tears it (netns + veth + firewall rule) down after the run.
     let egress_guard = start_egress_broker(&mut p);
+    start_credential_broker(&mut p);
     // Print the profile's honest caveat before running — a tier must never
     // silently overclaim (esp. multi-tenant on a shared kernel).
     if let Some(pr) = profile {
@@ -548,6 +619,89 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
     });
     Default::default()
     }
+}
+
+/// Start the policy file's `[broker]`, if any, on loopback, and give the agent
+/// its address and token (TARTAROS_BROKER_URL, TARTAROS_BROKER_TOKEN). A secret
+/// named by `value_env` that is not set aborts the run: a capability that would
+/// inject an empty credential is a misconfiguration, not a degraded mode.
+fn start_credential_broker(p: &mut Policy) {
+    let Some(cfg) = BROKER.get().cloned() else { return };
+    let env = |name: &str, what: &str| -> String {
+        std::env::var(name).unwrap_or_else(|_| {
+            eprintln!("tartaros: [broker] {what} names ${name}, which is not set in the launcher's environment");
+            exit(78);
+        })
+    };
+    let token = match &cfg.token_env {
+        Some(name) => env(name, "token_env"),
+        None => random_token().unwrap_or_else(|e| {
+            eprintln!("tartaros: [broker] cannot make a random token ({e}); set token_env");
+            exit(1);
+        }),
+    };
+    let mut caps = Vec::new();
+    for c in &cfg.capability {
+        if !c.prefix.starts_with('/') || c.prefix.len() < 2 || c.prefix.ends_with('/') {
+            eprintln!("tartaros: [broker] capability prefix {:?} must look like /name", c.prefix);
+            exit(2);
+        }
+        let methods = if c.methods.is_empty() { vec!["GET".into()] } else { c.methods.iter().map(|m| m.to_uppercase()).collect() };
+        let injections = c
+            .inject
+            .iter()
+            .map(|i| tartaros_broker::Injection { host: None, header: i.header.clone(), value: env(&i.value_env, "inject.value_env") })
+            .collect();
+        caps.push(tartaros_broker::Capability { prefix: c.prefix.clone(), upstream_base: c.upstream.clone(), methods, injections });
+    }
+    let host_injections = cfg
+        .inject
+        .iter()
+        .map(|i| tartaros_broker::Injection { host: Some(i.host.clone()), header: i.header.clone(), value: env(&i.value_env, "inject.value_env") })
+        .collect();
+    let mut broker = tartaros_broker::Broker::new(p.role.clone(), host_injections)
+        .with_auth(token.clone())
+        .with_capabilities(caps)
+        .with_allowed_hosts(cfg.allowed_hosts.clone())
+        .with_allow_internal(cfg.allow_internal);
+    if let Some(h) = &cfg.auth_header {
+        broker = broker.with_auth_header(h.clone());
+    }
+    if cfg.allowed_hosts.is_empty() {
+        broker = broker.without_forwarding();
+    }
+    let (listener, port) = broker.bind(cfg.port).unwrap_or_else(|e| {
+        eprintln!("tartaros: cannot start the credential broker on 127.0.0.1:{}: {e}", cfg.port);
+        exit(1);
+    });
+    if !p.local_ports.contains(&port) {
+        p.local_ports.push(port);
+    }
+    p.env_passthrough.push(format!("TARTAROS_BROKER_URL=http://127.0.0.1:{port}"));
+    p.env_passthrough.push(format!("TARTAROS_BROKER_TOKEN={token}"));
+    eprintln!(
+        "tartaros: credential broker on 127.0.0.1:{port} — {} capabilit{}{}",
+        cfg.capability.len(),
+        if cfg.capability.len() == 1 { "y" } else { "ies" },
+        if cfg.allowed_hosts.is_empty() { String::new() } else { format!(", forwards to {}", cfg.allowed_hosts.join(", ")) }
+    );
+    std::thread::spawn(move || {
+        let mut sink = tartaros_broker::RefusalReport::stderr();
+        let _ = broker.serve(listener, &mut sink);
+    });
+}
+
+/// 32 hex characters from the OS's random source.
+fn random_token() -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        let mut b = [0u8; 16];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+        Ok(b.iter().map(|x| format!("{x:02x}")).collect())
+    }
+    #[cfg(not(unix))]
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "no /dev/urandom here"))
 }
 
 #[cfg(target_os = "linux")]
@@ -927,6 +1081,9 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<String>, Opti
             p.protect_home_handoff = on;
         }
         p.isolate_process_info = pf.isolate_process_info;
+        if let Some(b) = pf.broker {
+            let _ = BROKER.set(b);
+        }
         p.timeout = pf.timeout_secs.map(Duration::from_secs);
         p.max_memory_bytes = pf.max_memory_bytes;
         p.max_processes = pf.max_processes;

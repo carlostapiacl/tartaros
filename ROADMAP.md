@@ -6,12 +6,6 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
 
 ## Now — next release
 
-- [ ] **Credential injection from the CLI.** *Keep secrets out of the agent's
-      reach.* The broker already injects a credential per host so the agent uses
-      it without ever holding it (Rust API, corpus `broker-credential`). Next:
-      expose it as `--inject HOST:HEADER=ENV_VAR` and HTTPS capability endpoints in
-      the CLI and the TOML policy. The value is read from the launcher's
-      environment and never appears on a command line or in the log.
 - [ ] **Measured toolchain compatibility.** *A sandbox that doesn't break my
       tools.* A `compat` corpus that runs real tools confined on both OS and
       publishes the result: Go binaries using macOS TLS (`gh`, `terraform`),

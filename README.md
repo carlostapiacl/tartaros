@@ -31,8 +31,9 @@ the domains you list ([evidence](evidence/2026-10-14/macos/claude-code-allow-dom
   wins.
 - The agent's environment is scrubbed by default, so `AWS_SECRET_ACCESS_KEY` and
   `GITHUB_TOKEN` in your shell never reach it.
-- The broker injects a credential per host, so the agent *uses* a token it never
-  *holds* (Rust API today; the CLI flag is next on the [roadmap](ROADMAP.md)).
+- The broker injects a credential, so the agent *uses* a token it never *holds*:
+  a `[broker]` in the policy file names capability endpoints and the launcher env
+  vars their secrets come from ([docs/broker.md](docs/broker.md)).
 
 **Network on an allowlist, deny by default.**
 - `--allow-domain` routes egress through a broker scoped to those domains, with
