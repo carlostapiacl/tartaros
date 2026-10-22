@@ -479,7 +479,7 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
         let bind_on = move |ip: &str| -> std::io::Result<u16> {
             let (listener, port) = broker.bind_addr(ip, 0)?;
             std::thread::spawn(move || {
-                let mut sink = tartaros_core::VecSink::default();
+                let mut sink = tartaros_broker::RefusalReport::stderr();
                 let _ = broker.serve(listener, &mut sink);
             });
             let _ = &hosts_for_log;
@@ -523,7 +523,7 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
         set_proxy("127.0.0.1", port, false); // route everything (incl. loopback) via the broker
         eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; TCP tunnel, no TLS inspection)", hosts.join(", "));
         std::thread::spawn(move || {
-            let mut sink = tartaros_core::VecSink::default();
+            let mut sink = tartaros_broker::RefusalReport::stderr();
             let _ = broker.serve(listener, &mut sink);
         });
         return Default::default();
@@ -543,7 +543,7 @@ fn start_egress_broker(p: &mut Policy) -> EgressGuard {
     #[cfg(target_os = "linux")]
     eprintln!("tartaros: warning: {NET01_FALLBACK}");
     std::thread::spawn(move || {
-        let mut sink = tartaros_core::VecSink::default();
+        let mut sink = tartaros_broker::RefusalReport::stderr();
         let _ = broker.serve(listener, &mut sink);
     });
     Default::default()
