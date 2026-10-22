@@ -447,8 +447,10 @@ impl Policy {
         // empty writable root would be made fully unwritable by absent denies.
         // Landlock matches inodes, so carve on the REAL paths: a deny written
         // through a symlinked directory must exclude the directory it resolves to.
-        denied = denied.iter().map(|p| resolve_best_effort(p)).collect();
-        denied.retain(|p| p.exists());
+        // A link that resolves nowhere is carved as the entry it is: its parent is
+        // withheld, so the link cannot be removed or replaced.
+        denied = denied.iter().map(|p| if unresolvable_link(p) { p.clone() } else { resolve_best_effort(p) }).collect();
+        denied.retain(|p| p.exists() || unresolvable_link(p));
         denied.extend(explicit);
         denied.retain(|p| !already_protected(p));
         denied.sort();
@@ -896,6 +898,13 @@ impl Policy {
             .collect()
     }
 
+    /// Trust-handoff links that resolve nowhere (see [`unresolvable_link`]). A
+    /// bind mount cannot cover one (there is nothing to bind), so the Linux
+    /// backend carves the policy instead.
+    pub fn unresolvable_handoff_links(&self) -> Vec<PathBuf> {
+        self.trust_handoff_rules().into_iter().map(|r| r.path).filter(|p| unresolvable_link(p)).collect()
+    }
+
     /// A writable root that is a symlink grants its TARGET. Refuse one whose target
     /// is not inside another (non-symlink) writable root: following it would grant
     /// a directory nobody named (e.g. a link planted by an earlier run).
@@ -1041,6 +1050,19 @@ fn walk(dir: &Path, depth: usize, is_root: bool, home: bool, out: &mut Vec<FsRul
             deny_git_modules_handoff(&dotgit.join("modules"), 0, out);
         }
     }
+    // A handoff name whose first component is a symlink that resolves nowhere (a
+    // cycle like `.claude -> .claude-x -> .claude`, or a dangling link) has no
+    // inode to protect behind it. Deny the link entry itself, so it cannot be
+    // dropped and replaced by a real directory, and where it points, so a
+    // dangling target cannot be created: fail closed.
+    for name in HANDOFF_CONFIG_NAMES.iter().chain(if home { HANDOFF_HOME_NAMES } else { &[] }) {
+        let Some(first) = Path::new(name).components().next() else { continue };
+        let link = dir.join(first);
+        if unresolvable_link(&link) {
+            out.push(deny(resolve_best_effort(&link), true));
+            out.push(deny(link, true));
+        }
+    }
     if !is_root {
         // Nested config-handoff names are denied even when absent, like the
         // top-level ones: the agent must not be able to CREATE one a trusted tool
@@ -1087,6 +1109,11 @@ fn read_gitdir_pointer(dotgit: &Path, repo_dir: &Path) -> Option<PathBuf> {
     let raw = PathBuf::from(rest.trim());
     let abs = if raw.is_absolute() { raw } else { repo_dir.join(raw) };
     Some(resolve_best_effort(&abs))
+}
+
+/// Is `p` a symlink that does not resolve (dangling, or part of a cycle)?
+pub fn unresolvable_link(p: &Path) -> bool {
+    std::fs::symlink_metadata(p).map(|m| m.file_type().is_symlink()).unwrap_or(false) && std::fs::metadata(p).is_err()
 }
 
 /// A git repo is a directory containing `.git` (a dir, or a file for submodules
@@ -1376,6 +1403,31 @@ mod tests {
         assert!(!surfaces.iter().any(|p| p == &root.join("src")),
             "a plain sub-directory must never be pinned");
 
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_handoff_link_that_resolves_nowhere_is_carved_as_the_link() {
+        let tmp = std::env::temp_dir().join(format!("sbx-cyc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let root = tmp.join("work");
+        fs::create_dir_all(root.join("proj/src")).unwrap();
+        fs::create_dir_all(root.join("other")).unwrap();
+        let root = root.canonicalize().unwrap();
+        // proj/.claude is a cycle; other/.vscode dangles at a target in the root.
+        std::os::unix::fs::symlink(root.join("proj/.claude-x"), root.join("proj/.claude")).unwrap();
+        std::os::unix::fs::symlink(root.join("proj/.claude"), root.join("proj/.claude-x")).unwrap();
+        std::os::unix::fs::symlink(root.join("other/real"), root.join("other/.vscode")).unwrap();
+        let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
+        let links = policy.unresolvable_handoff_links();
+        assert!(links.contains(&root.join("proj/.claude")), "the cyclic link is a handoff entry: {links:?}");
+        assert!(links.contains(&root.join("other/.vscode")), "the dangling link too: {links:?}");
+        let allow = policy.linux_write_allowlist();
+        // The links' directories are withheld, so neither link can be removed or
+        // replaced, nor the dangling target created; their real children stay writable.
+        assert!(!allow.contains(&root.join("proj")), "proj must not be granted: {allow:?}");
+        assert!(!allow.contains(&root.join("other")), "other must not be granted: {allow:?}");
+        assert!(allow.contains(&root.join("proj/src")), "proj/src stays writable: {allow:?}");
         fs::remove_dir_all(&tmp).ok();
     }
 

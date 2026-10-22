@@ -235,6 +235,11 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
     if !policy.absent_write_denies().is_empty() {
         return Vec::new();
     }
+    // Same for a handoff name that is a symlink resolving nowhere: only the carve,
+    // which withholds the link's parent, keeps the link from being replaced.
+    if !policy.unresolvable_handoff_links().is_empty() {
+        return Vec::new();
+    }
     // Nothing to protect, or no way to create a mount namespace on this host: fall
     // back to the Landlock carve (the probe forks, so gate it on paths first).
     if paths.is_empty() || !namespace::mount_ns_capable() {
