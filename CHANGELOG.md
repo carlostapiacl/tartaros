@@ -5,6 +5,10 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.9] — 2026-10-22
+
+The egress broker names what it refuses.
+
 ### Added
 - **What the egress broker refuses is said on stderr**, once per destination
   and reason: `tartaros: egress broker refused cdnjs.cloudflare.com:443 (not in
