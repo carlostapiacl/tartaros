@@ -25,6 +25,7 @@ pub(crate) fn compile_all(
     deny_unix: bool,
     harden: bool,
     restrict_net: bool,
+    no_net_grant: bool,
 ) -> std::io::Result<Vec<BpfProgram>> {
     let mut progs = Vec::new();
     if deny_unix {
@@ -36,10 +37,17 @@ pub(crate) fn compile_all(
     if restrict_net {
         progs.push(compile_deny_inet_dgram_raw()?);
         // Also close the non-IP egress/host-comms families: AF_PACKET (raw
-        // ethernet) and AF_VSOCK (guest<->host). AF_NETLINK and AF_UNIX stay —
-        // netlink is kernel-only (not egress) and glibc uses it for name
-        // resolution, AF_UNIX is local IPC.
-        progs.push(compile_deny_socket_families(&[libc::AF_PACKET, 40 /* AF_VSOCK */])?);
+        // ethernet) and AF_VSOCK (guest<->host). AF_UNIX stays: it is local IPC.
+        // AF_NETLINK stays while the run has some network grant: glibc asks it
+        // which address families are configured before resolving, and tools list
+        // interfaces through it. With no grant at all there is nothing to resolve
+        // and nothing to list, so it goes too, as Codex closes it (netlink is also
+        // the way to the kernel's audit, uevent and other non-route families).
+        let mut families = vec![libc::AF_PACKET, 40 /* AF_VSOCK */];
+        if no_net_grant {
+            families.push(libc::AF_NETLINK);
+        }
+        progs.push(compile_deny_socket_families(&families)?);
     }
     if harden {
         // clone3 hides its flags behind a struct pointer seccomp can't inspect, so
@@ -138,7 +146,8 @@ fn compile_harden_syscalls() -> std::io::Result<BpfProgram> {
 }
 
 /// Deny `socket(family, …)` for each listed family (any type), returning EPERM.
-/// Used to close AF_PACKET/AF_VSOCK when the network is restricted.
+/// Used to close AF_PACKET/AF_VSOCK (and AF_NETLINK with no network grant) when
+/// the network is restricted.
 fn compile_deny_socket_families(families: &[i32]) -> std::io::Result<BpfProgram> {
     let mut rules = Vec::new();
     for fam in families {
