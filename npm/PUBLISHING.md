@@ -9,8 +9,8 @@ binaries (attached to the release as `.tgz`):
 | `@carlostapiacl/tartaros` | the `tartaros` bin and `binaryPath()`; the five below as `optionalDependencies` |
 | `@carlostapiacl/tartaros-darwin-arm64` | `bin/tartaros`, `aarch64-apple-darwin` |
 | `@carlostapiacl/tartaros-darwin-x64` | `bin/tartaros`, `x86_64-apple-darwin` |
-| `@carlostapiacl/tartaros-linux-arm64` | `bin/tartaros`, `aarch64-unknown-linux-gnu`, glibc 2.35+ |
-| `@carlostapiacl/tartaros-linux-x64` | `bin/tartaros`, `x86_64-unknown-linux-gnu`, glibc 2.35+ |
+| `@carlostapiacl/tartaros-linux-arm64` | `bin/tartaros`, `aarch64-unknown-linux-musl`, static |
+| `@carlostapiacl/tartaros-linux-x64` | `bin/tartaros`, `x86_64-unknown-linux-musl`, static |
 | `@carlostapiacl/tartaros-win32-x64` | `bin/tartaros.exe`, `x86_64-pc-windows-msvc` |
 
 ## The first version, by hand (once)
