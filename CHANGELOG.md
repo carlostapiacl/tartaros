@@ -5,6 +5,10 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.14] — 2026-10-23
+
+Static Linux binaries (musl), a run no longer hangs on a FIFO, and the cgroup probe stops failing on loaded hosts.
+
 ### Changed
 - **The Linux binaries are static (musl).** One binary for any distribution,
   Alpine and minimal containers included, instead of needing glibc 2.34+.
