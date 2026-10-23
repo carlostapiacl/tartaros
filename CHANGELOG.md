@@ -5,6 +5,10 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.12] — 2026-10-23
+
+Prebuilt binaries and npm; --seccomp-strict allows threads again.
+
 ### Effect log: the broker's egress decisions, OTLP output, trace context
 - **Fix:** the egress broker (`--allow-domain`) logged each connect decision into an
   in-memory sink nobody read, so `--log` never had them (measured: a run with an
