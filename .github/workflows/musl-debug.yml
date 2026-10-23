@@ -18,25 +18,16 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           cargo build -q --locked -p tartaros-cli --target x86_64-unknown-linux-musl
           cargo build -q --locked -p tartaros-cli --target x86_64-unknown-linux-gnu
-      - name: reproduce
+      - name: who opens the fifo (musl)
         shell: bash {0}
         run: |
-          for t in x86_64-unknown-linux-musl x86_64-unknown-linux-gnu; do
-            for who in user root; do
-              s=""; [ $who = root ] && s="sudo"
-              r=$($s mktemp -d); $s mkdir -p $r/base/project $r/base/outside
-              $s sh -c "echo data > $r/base/project/deleteme.txt; echo P > $r/base/outside/protected.txt"
-              echo "=== $t as $who (plain)"
-              $s timeout -s KILL 20 target/$t/debug/tartaros run --write $r/base/project --read-deny $r/base \
-                --read-allow $r/base/project -- sh -c "rm $r/base/project/deleteme.txt && echo control-ok" 2>&1 | grep -v "host daemon socket"
-              rc=${PIPESTATUS[0]}; echo "rc=$rc"
-              if [ "$rc" = 137 ]; then
-                echo "--- hung: again under strace"
-                $s sh -c "echo data > $r/base/project/deleteme.txt"
-                $s timeout -s KILL 20 strace -f -tt -s 80 -o /tmp/st-$t-$who target/$t/debug/tartaros run --write $r/base/project \
-                  --read-deny $r/base --read-allow $r/base/project -- sh -c "rm $r/base/project/deleteme.txt" >/dev/null 2>&1
-                echo "--- last 3 syscalls of each pid"
-                sudo awk '{n[$1]++; l[$1, n[$1]]=$0} END {for (p in n) for (i=n[p]-2;i<=n[p];i++) if (i>0) print l[p,i]}' /tmp/st-$t-$who | cut -c1-200 | sort -k1,1n -s | tail -40
-              fi
-            done
-          done
+          t=x86_64-unknown-linux-musl
+          r=$(mktemp -d); mkdir -p $r/base/project $r/base/outside; echo data > $r/base/project/deleteme.txt
+          timeout -s KILL 20 strace -f -k -e trace=open,openat -o /tmp/st target/$t/debug/tartaros run --write $r/base/project \
+            --read-deny $r/base --read-allow $r/base/project -- true >/dev/null 2>&1
+          echo "--- the blocking open and its stack"
+          grep -n "clr-debug-pipe" /tmp/st | head -3
+          n=$(grep -n "clr-debug-pipe" /tmp/st | head -1 | cut -d: -f1)
+          sed -n "$((n)),$((n+40))p" /tmp/st | cut -c1-180
+          echo "--- distinct callers of open on /tmp entries"
+          grep -A12 'open("/tmp/' /tmp/st | grep -oE '\(([a-z_:0-9<>]+tartaros[a-z_:0-9<>]+|[a-z_]+::[a-z_:0-9<>]+)\+' | sort | uniq -c | sort -rn | head -20
