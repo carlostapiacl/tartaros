@@ -145,8 +145,13 @@ fn cgroup_membership_works(dir: &str) -> bool {
         return false;
     }
     if pid == 0 {
-        // Child: park briefly so the parent can observe membership, then exit.
-        let ts = libc::timespec { tv_sec: 0, tv_nsec: 10_000_000 };
+        // Child: park until the parent has observed membership and SIGKILLs it.
+        // The 5 s is only a bound in case the parent dies first. It used to be
+        // 10 ms: on a loaded host the child could exit before the parent moved
+        // it, the probe read 0, and a working cgroup was taken for none (a
+        // strict run aborted; a normal one fell back to RLIMIT_NPROC, which
+        // root ignores).
+        let ts = libc::timespec { tv_sec: 5, tv_nsec: 0 };
         unsafe {
             libc::nanosleep(&ts, std::ptr::null_mut());
             libc::_exit(0);

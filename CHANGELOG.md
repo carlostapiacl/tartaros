@@ -5,6 +5,22 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **The Linux binaries are static (musl).** One binary for any distribution,
+  Alpine and minimal containers included, instead of needing glibc 2.34+.
+
+### Fixed
+- **A FIFO under a carved read deny no longer hangs the run (Linux, musl
+  builds).** Rust's std on musl drops `O_PATH` from `OpenOptions::custom_flags`,
+  so the descriptors for Landlock rules were plain read opens: on a FIFO (a
+  stray `/tmp/*-pipe`) that blocks forever, and on an unreadable directory it
+  failed with EACCES and the rule was skipped. They are now opened with
+  `O_PATH` directly.
+- **A working cgroup is no longer taken for none on a loaded host (Linux).**
+  The membership probe's child lived 10 ms; when it exited before the
+  supervisor moved it, `--max-procs` fell back to `RLIMIT_NPROC`, which root
+  ignores (a strict run aborted instead). The child now waits to be killed.
+
 ## [0.1.0-alpha.13] — 2026-10-23
 
 Prebuilt binaries on every release, and npm (`@carlostapiacl/tartaros`); `--seccomp-strict` lets threads start again.
