@@ -10,6 +10,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # Ubuntu 23.10+ restricts unprivileged user namespaces through AppArmor;
+      # tartaros refuses the namespace-backed policies there, and the bench says
+      # INFRA_ERROR instead of measuring them.
+      - name: allow unprivileged user namespaces (Ubuntu 24.04+)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
       - name: build
         run: cargo build --workspace
       - name: unit tests

@@ -408,8 +408,12 @@ pub(crate) unsafe fn seal_readonly(mountpoints: &[std::ffi::CString]) {
         (libc::ST_NOEXEC, libc::MS_NOEXEC),
         (libc::ST_NOATIME, libc::MS_NOATIME),
         (libc::ST_NODIRATIME, libc::MS_NODIRATIME),
-        (libc::ST_RELATIME, libc::MS_RELATIME),
+        (ST_RELATIME, libc::MS_RELATIME),
     ];
+    // The kernel's value (glibc's too); libc's musl bindings do not have it.
+    const ST_RELATIME: libc::c_ulong = 0x1000;
+    #[cfg(target_env = "gnu")]
+    const _: () = assert!(ST_RELATIME == libc::ST_RELATIME);
     for m in mountpoints {
         let mut sv: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(m.as_ptr(), &mut sv) != 0 {
