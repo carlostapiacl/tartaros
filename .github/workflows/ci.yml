@@ -1,6 +1,8 @@
 name: ci
 on:
+  # Branches only: a tag is tested by release.yml, on the targets it ships.
   push:
+    branches: ["**"]
   pull_request:
 
 jobs:
