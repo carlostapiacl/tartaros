@@ -127,15 +127,18 @@ fn compile_harden_syscalls() -> std::io::Result<BpfProgram> {
     // enter a new user/mount/net/... namespace after lockdown. clone is also how
     // every fork/thread is created, so deny it ONLY when a CLONE_NEW* bit is set:
     // one rule per bit (arg 0 is the flags word on both x86_64 and aarch64).
+    // From libc, not by hand: 0x100 written here as CLONE_NEWTIME (which is 0x80)
+    // was CLONE_VM, so every thread creation (clone3 is ENOSYS, so glibc uses
+    // clone) got EPERM under harden_syscalls.
     const CLONE_NEW_BITS: &[u64] = &[
-        0x0000_0100, // CLONE_NEWTIME (newer; arg layout unchanged)
-        0x0200_0000, // CLONE_NEWCGROUP
-        0x0400_0000, // CLONE_NEWUTS
-        0x0800_0000, // CLONE_NEWIPC
-        0x1000_0000, // CLONE_NEWUSER
-        0x2000_0000, // CLONE_NEWPID
-        0x4000_0000, // CLONE_NEWNET
-        0x0002_0000, // CLONE_NEWNS
+        libc::CLONE_NEWTIME as u64,
+        libc::CLONE_NEWCGROUP as u64,
+        libc::CLONE_NEWUTS as u64,
+        libc::CLONE_NEWIPC as u64,
+        libc::CLONE_NEWUSER as u64,
+        libc::CLONE_NEWPID as u64,
+        libc::CLONE_NEWNET as u64,
+        libc::CLONE_NEWNS as u64,
     ];
     let mut clone_rules = Vec::new();
     for bit in CLONE_NEW_BITS {

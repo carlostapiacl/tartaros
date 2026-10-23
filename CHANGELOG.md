@@ -14,6 +14,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   `require("@carlostapiacl/tartaros").binaryPath()` gives the binary's path. See
   [npm/PUBLISHING.md](npm/PUBLISHING.md).
 
+### Fixed
+- **`--seccomp-strict` no longer refuses thread creation (Linux).** Its clone
+  filter had `0x100` for `CLONE_NEWTIME` (which is `0x80`); `0x100` is
+  `CLONE_VM`, so with `clone3` answered ENOSYS (and glibc falling back to
+  `clone`) every new thread got EPERM. The flags now come from libc. New
+  scenario: `seccomp-harden-allows-threads`.
+- **Builds against musl** (`ST_RELATIME` and aarch64's `SYS_kexec_file_load`,
+  which libc's musl bindings lack, are defined from the kernel's values).
+
 ## [0.1.0-alpha.11] — 2026-10-22
 
 The credential broker from the CLI, and a capability path fix.
