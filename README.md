@@ -224,6 +224,8 @@ bug report there is, and the same file runs against any sandbox, not just this o
 kernels and distros are welcome too. Report vulnerabilities privately, as described
 in [`SECURITY.md`](SECURITY.md).
 
+I write up what I measure with it at [carlostapia.cl](https://carlostapia.cl/notes/).
+
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE); reused code is
