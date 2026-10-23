@@ -29,5 +29,8 @@ jobs:
           grep -n "clr-debug-pipe" /tmp/st | head -3
           n=$(grep -n "clr-debug-pipe" /tmp/st | head -1 | cut -d: -f1)
           sed -n "$((n)),$((n+40))p" /tmp/st | cut -c1-180
+          echo "--- stack of an open on a /tmp entry that returned"
+          m=$(grep -n 'open("/tmp/systemd-private' /tmp/st | head -1 | cut -d: -f1)
+          sed -n "$m,$((m+45))p" /tmp/st | cut -c1-180
           echo "--- distinct callers of open on /tmp entries"
           grep -A12 'open("/tmp/' /tmp/st | grep -oE '\(([a-z_:0-9<>]+tartaros[a-z_:0-9<>]+|[a-z_]+::[a-z_:0-9<>]+)\+' | sort | uniq -c | sort -rn | head -20
