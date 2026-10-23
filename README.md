@@ -8,7 +8,7 @@ leaves behind runs later outside the box. Every one of those claims is a test in
 this repo that you can run on your own machine.
 
 Open source (Apache-2.0) · macOS and Linux · Windows backend (preview) · one binary · no Docker, no VM, no
-account, no login · written in Rust · `v0.1.0-alpha.11`
+account, no login · written in Rust · `v0.1.0-alpha.12`
 
 [Website](https://carlostapiacl.github.io/tartaros/) ·
 [Evidence](https://carlostapiacl.github.io/tartaros/evidence.html) ·
@@ -73,7 +73,11 @@ the domains you list ([evidence](evidence/2026-10-14/macos/claude-code-allow-dom
 
 **A log of what the agent attempted.** Every network connect, secret read,
 process spawn, MCP server and file write, allowed or denied, as JSON Lines that
-any tool can read (`--log effects.jsonl`).
+any tool can read (`--log effects.jsonl`). Every egress decision of the broker
+(`--allow-domain`) is in it, one line per connection. `--log-format otlp` writes
+the same records as OpenTelemetry log records in an open effect schema, stamped
+with the launcher's `TRACEPARENT`, so a run joins its launcher's trace in any
+OTel tool. `TRACEPARENT`/`TRACESTATE` reach the agent like `LANG` does.
 
 **Already using sandbox-runtime?** `--settings settings.json` applies an existing
 sandbox-runtime config. It enforces every field it can and refuses, with exit 78,
@@ -207,7 +211,7 @@ the roadmap item that closes it:
   not, and `explain` says so ([roadmap](ROADMAP.md)).
 - **The effect log is observed, not enforced.** Enforcement is the kernel policy,
   while the log samples the process tree, so a very short-lived event can be
-  missed.
+  missed. The broker's egress decisions are not sampled: each one is logged.
 
 The full detail per OS is in [`docs/limits.md`](docs/limits.md).
 

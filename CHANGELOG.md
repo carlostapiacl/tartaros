@@ -23,6 +23,28 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 - **Builds against musl** (`ST_RELATIME` and aarch64's `SYS_kexec_file_load`,
   which libc's musl bindings lack, are defined from the kernel's values).
 
+## [0.1.0-alpha.12] — 2026-10-23
+
+The egress broker's decisions in the effect log, OTLP output, and trace context.
+This tag has no prebuilt binaries: the release workflow arrives in alpha.13.
+
+### Effect log: the broker's egress decisions, OTLP output, trace context
+- **Fix:** the egress broker (`--allow-domain`) logged each connect decision into an
+  in-memory sink nobody read, so `--log` never had them (measured: a run with an
+  allowed and a refused HTTPS connect wrote 0 lines). They now go to the run's
+  `--log` through the same `Boundary` filter, from the broker's own append handle;
+  without `--log` they are discarded instead of accumulating in memory.
+- Each log line is written in a single `write` (the supervisor and the broker append
+  to the same file): 40 concurrent connects gave 40 valid lines, in both formats.
+- `--log-format otlp`: OpenTelemetry log records (one OTLP/JSON
+  `ExportLogsServiceRequest` per line, the Collector file exporter's shape) in an
+  open effect schema (`effect.axis/action/target/outcome/source`; the broker's
+  verbs map to `connect`, the original kept in `tartaros.action`), with the
+  launcher's `TRACEPARENT` as `traceId`/`spanId`. `jsonl` stays the default.
+- `TRACEPARENT` and `TRACESTATE` are in the default environment allowlist: W3C
+  trace ids, not secrets, so the agent's own telemetry joins the launcher's trace
+  without `--env`.
+
 ## [0.1.0-alpha.11] — 2026-10-22
 
 The credential broker from the CLI, and a capability path fix.
