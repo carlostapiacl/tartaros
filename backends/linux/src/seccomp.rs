@@ -90,6 +90,8 @@ const _: () = assert!(libc::SYS_kexec_file_load == 294);
 /// Ordinary agent tools (sh, cat, ls, git, python3, curl, compilers) do not use
 /// these. Includes device-node creation (`mknod`/`mknodat`, review #3).
 fn compile_harden_syscalls() -> std::io::Result<BpfProgram> {
+    // Only x86_64 pushes more (below).
+    #[cfg_attr(not(target_arch = "x86_64"), allow(unused_mut))]
     let mut deny: Vec<libc::c_long> = vec![
         // load/unload kernel code
         libc::SYS_init_module, libc::SYS_finit_module, libc::SYS_delete_module,
