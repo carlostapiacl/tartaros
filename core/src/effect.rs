@@ -171,9 +171,106 @@ impl<W: Write> JsonlSink<W> {
 
 impl<W: Write> EffectSink for JsonlSink<W> {
     fn emit(&mut self, event: &EffectEvent) {
-        // Best-effort: a logging failure must never break enforcement.
-        let _ = writeln!(self.writer, "{}", event.to_json());
+        // Best-effort: a logging failure must never break enforcement. One write per
+        // line: the supervisor and the egress broker append to the same log file from
+        // two handles, and `writeln!` may split a line across several writes, which
+        // could interleave with the other writer's line.
+        let _ = self.writer.write_all(format!("{}\n", event.to_json()).as_bytes());
     }
+}
+
+/// W3C Trace Context of the launcher (`TRACEPARENT`), so the records of a run join
+/// the launcher's own spans in any OpenTelemetry tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceContext {
+    pub trace_id: String,
+    pub span_id: String,
+}
+
+impl TraceContext {
+    /// `00-<32 hex trace id>-<16 hex span id>-<2 hex flags>`; `None` if malformed or
+    /// an all-zero id (invalid by the spec).
+    pub fn parse(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.trim().split('-').collect();
+        let hex = |x: &str, n: usize| x.len() == n && x.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        if parts.len() < 4 || !hex(parts[0], 2) || parts[0] == "ff" || !hex(parts[1], 32) || !hex(parts[2], 16) || !hex(parts[3], 2) {
+            return None;
+        }
+        if parts[0] == "00" && parts.len() != 4 {
+            return None;
+        }
+        if parts[1].bytes().all(|b| b == b'0') || parts[2].bytes().all(|b| b == b'0') {
+            return None;
+        }
+        Some(TraceContext { trace_id: parts[1].to_string(), span_id: parts[2].to_string() })
+    }
+
+    /// From this process's `TRACEPARENT`, if set and valid.
+    pub fn from_env() -> Option<Self> {
+        std::env::var("TRACEPARENT").ok().and_then(|v| Self::parse(&v))
+    }
+}
+
+impl EffectEvent {
+    /// One OpenTelemetry Event Record as an OTLP/JSON `ExportLogsServiceRequest`, no
+    /// trailing newline: the open effect schema (`effect.*` attributes, readable by any
+    /// OTLP tool), stamped with the launcher's trace context when there is one. The
+    /// broker's connect decisions use the generic action `connect` (the outcome says
+    /// allowed or denied); the original action is kept in `tartaros.action`.
+    pub fn to_otlp(&self, trace: Option<&TraceContext>) -> String {
+        let action = if self.action.starts_with("broker-connect") { "connect" } else { self.action.as_str() };
+        let attr = |k: &str, v: &str| format!("{{\"key\":\"{k}\",\"value\":{{\"stringValue\":{}}}}}", json_str(v));
+        let attrs = [
+            attr("effect.axis", self.axis.as_str()),
+            attr("effect.action", action),
+            attr("effect.target", &self.target),
+            attr("effect.outcome", self.outcome.as_str()),
+            attr("effect.source", &format!("tartaros/{}", self.source)),
+            attr("tartaros.action", &self.action),
+            attr("tartaros.direction", self.direction.as_str()),
+            attr("tartaros.role", &self.role),
+        ]
+        .join(",");
+        let ts = self.ts_unix_ms * 1_000_000;
+        let trace = trace
+            .map(|t| format!(",\"traceId\":\"{}\",\"spanId\":\"{}\"", t.trace_id, t.span_id))
+            .unwrap_or_default();
+        let body = format!("{action} {}", self.target);
+        format!(
+            "{{\"resourceLogs\":[{{\"resource\":{{\"attributes\":[{}]}},\"scopeLogs\":[{{\"scope\":{{\"name\":\"tartaros\",\"version\":\"{}\"}},\"logRecords\":[{{\"timeUnixNano\":\"{ts}\",\"observedTimeUnixNano\":\"{ts}\",\"eventName\":\"effect.{}\",\"severityText\":\"INFO\",\"body\":{{\"stringValue\":{}}},\"attributes\":[{attrs}]{trace}}}]}}]}}]}}",
+            attr("service.name", "tartaros"),
+            env!("CARGO_PKG_VERSION"),
+            self.axis.as_str(),
+            json_str(&body),
+        )
+    }
+}
+
+/// Append events as OTLP/JSON lines (one `ExportLogsServiceRequest` per line, the
+/// OpenTelemetry Collector file exporter's shape) with the launcher's trace context.
+pub struct OtlpSink<W: Write> {
+    writer: W,
+    trace: Option<TraceContext>,
+}
+
+impl<W: Write> OtlpSink<W> {
+    pub fn new(writer: W, trace: Option<TraceContext>) -> Self {
+        OtlpSink { writer, trace }
+    }
+}
+
+impl<W: Write> EffectSink for OtlpSink<W> {
+    fn emit(&mut self, event: &EffectEvent) {
+        // one write per line, as JsonlSink
+        let _ = self.writer.write_all(format!("{}\n", event.to_otlp(self.trace.as_ref())).as_bytes());
+    }
+}
+
+/// Drops every event: a sink for when nothing is recorded.
+pub struct DiscardSink;
+
+impl EffectSink for DiscardSink {
+    fn emit(&mut self, _event: &EffectEvent) {}
 }
 
 /// How much to record. Pick the mode per run (or per role).
@@ -266,6 +363,64 @@ pub trait Collector {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn traceparent_is_parsed_per_the_w3c_format() {
+        let t = TraceContext::parse("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").unwrap();
+        assert_eq!((t.trace_id.as_str(), t.span_id.as_str()), ("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331"));
+        for bad in [
+            "",
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331",       // no flags
+            "00-0AF7651916CD43DD8448EB211C80319C-b7ad6b7169203331-01",   // uppercase
+            "00-00000000000000000000000000000000-b7ad6b7169203331-01",   // zero trace id
+            "00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01",   // zero span id
+            "ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",   // invalid version
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01-x", // v00 has exactly 4 parts
+            "00-0af7651916cd43dd8448eb211c8031-b7ad6b7169203331-01",     // short trace id
+        ] {
+            assert!(TraceContext::parse(bad).is_none(), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn otlp_lines_carry_the_open_effect_schema_and_the_trace() {
+        let e = EffectEvent::now("agent", Axis::Network, "broker-connect-denied", "github.com:443",
+            Direction::OutsideTerritory, Outcome::Denied, "broker");
+        let t = TraceContext::parse("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+        let v: serde_json::Value = serde_json::from_str(&e.to_otlp(t.as_ref())).expect("valid JSON");
+        let r = &v["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0];
+        assert_eq!(r["eventName"], "effect.network");
+        assert_eq!(r["traceId"], "0af7651916cd43dd8448eb211c80319c");
+        assert_eq!(r["spanId"], "b7ad6b7169203331");
+        assert_eq!(r["timeUnixNano"], (e.ts_unix_ms * 1_000_000).to_string());
+        let a = |k: &str| r["attributes"].as_array().unwrap().iter().find(|x| x["key"] == k).map(|x| x["value"]["stringValue"].clone());
+        assert_eq!(a("effect.action").unwrap(), "connect", "the broker's verbs map to the generic connect");
+        assert_eq!(a("effect.outcome").unwrap(), "denied");
+        assert_eq!(a("effect.target").unwrap(), "github.com:443");
+        assert_eq!(a("effect.source").unwrap(), "tartaros/broker");
+        assert_eq!(a("tartaros.action").unwrap(), "broker-connect-denied");
+        // no trace: no ids; and hostile text stays inside its JSON string
+        let odd = EffectEvent::now("r\"o", Axis::File, "read", "/a\"b\\c\n", Direction::WithinTerritory, Outcome::Allowed, "x");
+        let v: serde_json::Value = serde_json::from_str(&odd.to_otlp(None)).expect("valid JSON with quotes in it");
+        assert!(v["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0].get("traceId").is_none());
+    }
+
+    #[test]
+    fn a_line_is_written_in_one_write() {
+        // two writers append to the same log: a line split over several writes could interleave
+        struct Count(Vec<usize>);
+        impl std::io::Write for Count {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { self.0.push(b.len()); Ok(b.len()) }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let e = EffectEvent::now("agent", Axis::File, "write", "/x", Direction::WithinTerritory, Outcome::Allowed, "fs");
+        let mut j = JsonlSink::new(Count(vec![]));
+        j.emit(&e);
+        assert_eq!(j.writer.0.len(), 1, "jsonl: one write per line");
+        let mut o = OtlpSink::new(Count(vec![]), None);
+        o.emit(&e);
+        assert_eq!(o.writer.0.len(), 1, "otlp: one write per line");
+    }
+
     use super::*;
 
     #[test]

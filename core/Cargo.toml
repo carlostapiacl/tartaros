@@ -8,3 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+
+[dev-dependencies]
+# tests only: check that the hand-rolled OTLP is valid JSON with the expected shape
+serde_json = "1.0.128"
