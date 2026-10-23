@@ -5,6 +5,10 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.13] — 2026-10-23
+
+Prebuilt binaries on every release, and npm (`@carlostapiacl/tartaros`); `--seccomp-strict` lets threads start again.
+
 ### Added
 - **Prebuilt binaries, and npm.** Each release tag now attaches `tartaros` for
   darwin-arm64, darwin-x64, linux-x64, linux-arm64 (glibc 2.35+) and win32-x64,
