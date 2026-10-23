@@ -11,7 +11,7 @@ tartaros --version
 
 The binary comes in one optional dependency per platform, and npm installs only
 the one that matches: `@carlostapiacl/tartaros-darwin-arm64`, `-darwin-x64`,
-`-linux-arm64`, `-linux-x64` (static, musl) and `-win32-x64`. Installing with
+`-linux-arm64`, `-linux-x64` (glibc 2.35+) and `-win32-x64`. Installing with
 `--omit=optional` leaves it out.
 
 From node, without going through the `bin` wrapper:

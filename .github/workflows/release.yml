@@ -39,18 +39,18 @@ jobs:
           - { platform: darwin-arm64, runner: macos-14, target: aarch64-apple-darwin, test: full }
           # No Intel macOS runners any more: cross-compiled, smoke-run under Rosetta.
           - { platform: darwin-x64, runner: macos-14, target: x86_64-apple-darwin, test: none }
-          # Static (musl), so one binary runs on any distribution's libc.
-          - { platform: linux-x64, runner: ubuntu-24.04, target: x86_64-unknown-linux-musl, test: linux }
-          - { platform: linux-arm64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, test: linux }
+          # glibc, built on 22.04 so it runs on glibc 2.35+ (Ubuntu 22.04, Debian 12
+          # and later). A static musl build compiles and passes the tests, but its
+          # security-bench hangs on the fourth scenario: not shipped until that is
+          # understood.
+          - { platform: linux-x64, runner: ubuntu-22.04, target: x86_64-unknown-linux-gnu, test: linux }
+          - { platform: linux-arm64, runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, test: linux }
           - { platform: win32-x64, runner: windows-2025, target: x86_64-pc-windows-msvc, test: none }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: toolchain
         shell: bash
         run: rustup target add ${{ matrix.target }}
-      - name: musl toolchain
-        if: startsWith(matrix.platform, 'linux-')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: build
         shell: bash
         run: cargo build --release --locked -p tartaros-cli --target ${{ matrix.target }}
@@ -61,25 +61,25 @@ jobs:
           cargo test --locked --workspace --target ${{ matrix.target }}
           cargo build --locked -p tartaros-bench --target ${{ matrix.target }}
           cd security-bench && ../target/${{ matrix.target }}/debug/tartaros-bench corpus
-      # Ubuntu 23.10+ restricts unprivileged user namespaces through AppArmor;
-      # tartaros refuses the namespace-backed policies there, and the bench says
-      # INFRA_ERROR instead of measuring them.
-      - name: allow unprivileged user namespaces (Ubuntu 24.04+)
+      # The runner's defaults make part of the corpus unmeasurable: AppArmor
+      # restricts unprivileged user namespaces (Ubuntu 23.10+), Yama forbids
+      # tracing a non-child, and the root scenarios (mknod, capabilities) only
+      # mean something when the launcher is root. Lifted here, so those attacks
+      # do succeed without the sandbox and the bench measures that it stops them.
+      - name: let the corpus measure everything (Linux)
         if: matrix.test == 'linux'
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
-      - name: tests (Linux, musl)
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+      # A release is not made from a run that could not enforce anything.
+      - name: tests (Linux)
         if: matrix.test == 'linux'
         run: |
-          cargo test --locked --workspace --lib --target ${{ matrix.target }}
-          if grep -q landlock /sys/kernel/security/lsm 2>/dev/null; then
-            cargo test --locked --workspace --target ${{ matrix.target }}
-            cargo build --locked -p tartaros-bench --target ${{ matrix.target }}
-            cd security-bench && ../target/${{ matrix.target }}/debug/tartaros-bench corpus
-          else
-            echo "::warning::Landlock not available on this runner; enforcement tests and the security-bench are skipped"
-          fi
+          grep -q landlock /sys/kernel/security/lsm || { echo "::error::no Landlock on this runner"; exit 1; }
+          cargo test --locked --workspace --target ${{ matrix.target }}
+          cargo build --locked -p tartaros-bench --target ${{ matrix.target }}
+          cd security-bench && sudo ../target/${{ matrix.target }}/debug/tartaros-bench corpus
       - name: stage the binary
         id: stage
         shell: bash
@@ -102,7 +102,7 @@ jobs:
               else echo "::warning::no Rosetta on this runner; darwin-x64 binary not run"; fi ;;
             linux-*)
               "$bin" --version
-              file "$bin" | tee /dev/stderr | grep -q 'statically linked' ;;
+              echo "needs glibc $(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)" ;;
             *) "$bin" --version ;;
           esac
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
