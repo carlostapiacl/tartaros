@@ -1,5 +1,4 @@
-# TEMPORARY: diagnose the musl hang in filesystem-rm-under-read-deny-ancestor.
-# Removed before merge.
+# TEMPORARY: the full security-bench on musl, after the O_PATH fix. Removed before merge.
 name: musl-debug
 on:
   pull_request:
@@ -7,30 +6,25 @@ on:
 permissions:
   contents: read
 jobs:
-  debug:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools strace >/dev/null
-          rustup target add x86_64-unknown-linux-musl x86_64-unknown-linux-gnu
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          cargo build -q --locked -p tartaros-cli --target x86_64-unknown-linux-musl
-          cargo build -q --locked -p tartaros-cli --target x86_64-unknown-linux-gnu
-      - name: who opens the fifo (musl)
-        shell: bash {0}
+      - name: toolchain
         run: |
-          t=x86_64-unknown-linux-musl
-          r=$(mktemp -d); mkdir -p $r/base/project $r/base/outside; echo data > $r/base/project/deleteme.txt
-          timeout -s KILL 20 strace -f -k -e trace=open,openat -o /tmp/st target/$t/debug/tartaros run --write $r/base/project \
-            --read-deny $r/base --read-allow $r/base/project -- true >/dev/null 2>&1
-          echo "--- the blocking open and its stack"
-          grep -n "clr-debug-pipe" /tmp/st | head -3
-          n=$(grep -n "clr-debug-pipe" /tmp/st | head -1 | cut -d: -f1)
-          sed -n "$((n)),$((n+40))p" /tmp/st | cut -c1-180
-          echo "--- stack of an open on a /tmp entry that returned"
-          m=$(grep -n 'open("/tmp/systemd-private' /tmp/st | head -1 | cut -d: -f1)
-          sed -n "$m,$((m+45))p" /tmp/st | cut -c1-180
-          echo "--- distinct callers of open on /tmp entries"
-          grep -A12 'open("/tmp/' /tmp/st | grep -oE '\(([a-z_:0-9<>]+tartaros[a-z_:0-9<>]+|[a-z_]+::[a-z_:0-9<>]+)\+' | sort | uniq -c | sort -rn | head -20
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools >/dev/null
+          rustup target add ${{ matrix.target }}
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+      - name: tests and bench (musl)
+        run: |
+          cargo test --locked --workspace --target ${{ matrix.target }}
+          cargo build --locked -p tartaros-bench --target ${{ matrix.target }}
+          cd security-bench && sudo timeout -s KILL 900 ../target/${{ matrix.target }}/debug/tartaros-bench corpus

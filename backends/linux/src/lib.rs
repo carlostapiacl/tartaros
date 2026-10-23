@@ -463,6 +463,24 @@ fn mount_plan(policy: &Policy, binds: &[PathBuf]) -> MountPlan {
     MountPlan { pins: cs(pins), seal: cs(seal), hide: cs(hide), hide_files: cs(hide_files) }
 }
 
+/// An `O_PATH` descriptor for a Landlock rule. Not `landlock::PathFd`: it opens
+/// through `std::fs::OpenOptions`, and Rust's std on musl drops `O_PATH` from
+/// `custom_flags`, so the open became a plain read open, which blocks forever
+/// on a FIFO (a stray `/tmp/*-pipe` under a carved read deny hung every run)
+/// and fails with EACCES where O_PATH would not.
+#[cfg(target_os = "linux")]
+fn path_fd(path: &std::path::Path) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
 /// The entries of `dir` to cover so that only `kept` paths, and the directories on
 /// the way to them, stay reachable: directories go to `dirs`, any other entry
 /// (a socket, a fifo, a file) to `files`. Symlinks are left alone: what they lead
@@ -541,7 +559,7 @@ fn confined_command(
     cgroup_procs: Option<String>,
 ) -> Result<(std::process::Command, Placeholders), RunError> {
     use landlock::{
-        ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, PathBeneath, PathFd,
+        ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, PathBeneath,
         Ruleset, RulesetAttr, RulesetCreatedAttr,
     };
     use tartaros_core::Network;
@@ -696,7 +714,7 @@ fn confined_command(
     // Read + execute everywhere EXCEPT the secret dirs (carved out of /), so the
     // command and its libraries load but it cannot read `~/.ssh` etc.
     for p in policy.linux_read_allowlist() {
-        let fd = match PathFd::new(&p) {
+        let fd = match path_fd(&p) {
             Ok(fd) => fd,
             Err(_) => continue,
         };
@@ -709,7 +727,7 @@ fn confined_command(
     // withheld by the read carve; it may still be listed (ls ~ keeps working),
     // and so may what appears in it later, but no file in it can be read.
     for p in policy.absent_read_deny_holders() {
-        let Ok(fd) = PathFd::new(&p) else { continue };
+        let Ok(fd) = path_fd(&p) else { continue };
         ruleset = ruleset
             .add_rule(PathBeneath::new(fd, AccessFs::ReadDir))
             .map_err(|e| err(format!("add list rule {}: {e}", p.display())))?;
@@ -749,7 +767,7 @@ fn confined_command(
         MountPlan::default()
     };
     for p in &write_grants {
-        let fd = match PathFd::new(p) {
+        let fd = match path_fd(p) {
             Ok(fd) => fd,
             Err(_) => continue, // a path that vanished between carve and open: skip
         };
@@ -763,7 +781,7 @@ fn confined_command(
     // harm raw devices. Mirrors the macOS backend's /dev allow. A rule on a
     // special file (e.g. /dev/stdout, a symlinked pipe) fails, so we grant the
     // directory, not each node.
-    let dev_fd = PathFd::new("/dev").map_err(|e| err(format!("open /dev: {e}")))?;
+    let dev_fd = path_fd(std::path::Path::new("/dev")).map_err(|e| err(format!("open /dev: {e}")))?;
     ruleset = ruleset
         .add_rule(PathBeneath::new(dev_fd, write_only))
         .map_err(|e| err(format!("add /dev rule: {e}")))?;
