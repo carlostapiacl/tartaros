@@ -1,0 +1,36 @@
+# TEMPORARY: diagnose the musl hang in filesystem-rm-under-read-deny-ancestor.
+# Removed before merge.
+name: musl-debug
+on:
+  pull_request:
+    paths: [".github/workflows/musl-debug.yml"]
+permissions:
+  contents: read
+jobs:
+  debug:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools strace >/dev/null
+          rustup target add x86_64-unknown-linux-musl x86_64-unknown-linux-gnu
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          cargo build -q --locked -p tartaros-cli --target x86_64-unknown-linux-musl
+          cargo build -q --locked -p tartaros-cli --target x86_64-unknown-linux-gnu
+      - name: reproduce
+        run: |
+          for t in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
+            for who in user root; do
+              r=$(mktemp -d); mkdir -p $r/base/project $r/base/outside
+              echo data > $r/base/project/deleteme.txt; echo P > $r/base/outside/protected.txt
+              s=""; [ $who = root ] && s="sudo"
+              echo "=== $t as $who"
+              $s timeout -s KILL 20 strace -f -tt -o /tmp/st-$t-$who target/$t/debug/tartaros run \
+                --write $r/base/project --read-deny $r/base --read-allow $r/base/project \
+                -- sh -c "rm $r/base/project/deleteme.txt && echo control-ok"
+              echo "rc=$?"
+              echo "--- last syscall of each pid"
+              sudo awk '{last[$1]=$0} END {for (p in last) print last[p]}' /tmp/st-$t-$who | cut -c1-220 | sort | tail -15
+            done
+          done
