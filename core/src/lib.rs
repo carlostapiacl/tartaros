@@ -10,8 +10,8 @@ use std::time::Duration;
 pub mod catalog;
 pub mod effect;
 pub use effect::{
-    Axis, Collector, Direction, EffectEvent, EffectSink, FilterSink, JsonlSink, Outcome,
-    RecordMode, VecSink,
+    Axis, Collector, DiscardSink, Direction, EffectEvent, EffectSink, FilterSink, JsonlSink, OtlpSink,
+    Outcome, RecordMode, TraceContext, VecSink,
 };
 
 /// What a confined process may do with a filesystem path.
@@ -317,12 +317,15 @@ impl Policy {
 /// `/proc/self/environ`. These are the vars ordinary tools need to run at all and
 /// that carry no credential: path, home, identity, locale, shell, terminal, temp,
 /// and the proxy vars the egress broker sets (proxy config is not a secret and the
-/// agent needs it to reach the broker). `LC_*` is matched by prefix, not listed.
+/// agent needs it to reach the broker), and the W3C trace context (`TRACEPARENT`,
+/// `TRACESTATE`: ids that join a run to its launcher's trace, by spec not secrets).
+/// `LC_*` is matched by prefix, not listed.
 pub const ENV_ALLOWLIST: &[&str] = &[
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ", "PWD",
     "TMPDIR", "TMP", "TEMP",
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "TRACEPARENT", "TRACESTATE",
 ];
 
 /// Loader and interpreter injection vars: inherited, each one makes every child
@@ -1880,5 +1883,19 @@ mod tests {
         assert!(!reads.iter().any(|r| vault.starts_with(r) || r.starts_with(&vault)), "the vault stays closed: {reads:?}");
         assert!(reads.iter().any(|r| usr.join("lib").starts_with(r)), "a link into another allow still reads");
         fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn the_trace_context_reaches_the_agent_and_secrets_still_do_not() {
+        let p = Policy::default();
+        let launcher: Vec<(String, String)> = vec![
+            ("TRACEPARENT".into(), "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".into()),
+            ("TRACESTATE".into(), "vendor=x".into()),
+            ("GITHUB_TOKEN".into(), "secret".into()),
+        ];
+        let env = p.child_env_from(&launcher).unwrap();
+        let has = |k: &str| env.iter().any(|(n, _)| n == k);
+        assert!(has("TRACEPARENT") && has("TRACESTATE"));
+        assert!(!has("GITHUB_TOKEN"));
     }
 }
