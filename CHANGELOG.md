@@ -5,9 +5,28 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Prebuilt binaries, and npm.** Each release tag now attaches `tartaros` for
+  darwin-arm64, darwin-x64, linux-x64, linux-arm64 (glibc 2.35+) and win32-x64,
+  with `SHA256SUMS`, and publishes them to npm as `@carlostapiacl/tartaros` (one
+  optional dependency per platform, as esbuild does): `npm i -g
+  @carlostapiacl/tartaros`, no Rust toolchain needed. From node,
+  `require("@carlostapiacl/tartaros").binaryPath()` gives the binary's path. See
+  [npm/PUBLISHING.md](npm/PUBLISHING.md).
+
+### Fixed
+- **`--seccomp-strict` no longer refuses thread creation (Linux).** Its clone
+  filter had `0x100` for `CLONE_NEWTIME` (which is `0x80`); `0x100` is
+  `CLONE_VM`, so with `clone3` answered ENOSYS (and glibc falling back to
+  `clone`) every new thread got EPERM. The flags now come from libc. New
+  scenario: `seccomp-harden-allows-threads`.
+- **Builds against musl** (`ST_RELATIME` and aarch64's `SYS_kexec_file_load`,
+  which libc's musl bindings lack, are defined from the kernel's values).
+
 ## [0.1.0-alpha.12] — 2026-10-23
 
-Prebuilt binaries and npm; --seccomp-strict allows threads again.
+The egress broker's decisions in the effect log, OTLP output, and trace context.
+This tag has no prebuilt binaries: the release workflow arrives in alpha.13.
 
 ### Effect log: the broker's egress decisions, OTLP output, trace context
 - **Fix:** the egress broker (`--allow-domain`) logged each connect decision into an

@@ -1,6 +1,8 @@
 name: ci
 on:
+  # Branches only: a tag is tested by release.yml, on the targets it ships.
   push:
+    branches: ["**"]
   pull_request:
 
 jobs:
@@ -8,6 +10,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # The runner's defaults make part of the corpus unmeasurable: AppArmor
+      # restricts unprivileged user namespaces (Ubuntu 23.10+), Yama forbids
+      # tracing a non-child, and the root scenarios (mknod, capabilities) only
+      # mean something when the launcher is root (the bench runs under sudo).
+      - name: let the corpus measure everything
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          sudo sysctl -w kernel.yama.ptrace_scope=0
       - name: build
         run: cargo build --workspace
       - name: unit tests
@@ -28,7 +39,7 @@ jobs:
         if: steps.ll.outputs.have == '1'
         run: |
           cargo build -p tartaros-bench
-          cd security-bench && ../target/debug/tartaros-bench corpus
+          cd security-bench && sudo ../target/debug/tartaros-bench corpus
 
   macos:
     runs-on: macos-14

@@ -76,6 +76,15 @@ pub(crate) fn apply_all(progs: &[BpfProgram]) -> std::io::Result<()> {
     Ok(())
 }
 
+// libc's musl bindings for aarch64 lack it; 294 is the kernel's number there
+// (asm-generic unistd).
+#[cfg(all(target_arch = "aarch64", target_env = "musl"))]
+const SYS_KEXEC_FILE_LOAD: libc::c_long = 294;
+#[cfg(not(all(target_arch = "aarch64", target_env = "musl")))]
+const SYS_KEXEC_FILE_LOAD: libc::c_long = libc::SYS_kexec_file_load;
+#[cfg(all(target_arch = "aarch64", target_env = "gnu"))]
+const _: () = assert!(libc::SYS_kexec_file_load == 294);
+
 /// Deny a curated set of dangerous, rarely-needed syscalls (default-allow; listed
 /// return EPERM). Shrinks the kernel attack surface a multi-tenant escape exploits.
 /// Ordinary agent tools (sh, cat, ls, git, python3, curl, compilers) do not use
@@ -84,7 +93,7 @@ fn compile_harden_syscalls() -> std::io::Result<BpfProgram> {
     let mut deny: Vec<libc::c_long> = vec![
         // load/unload kernel code
         libc::SYS_init_module, libc::SYS_finit_module, libc::SYS_delete_module,
-        libc::SYS_kexec_load, libc::SYS_kexec_file_load,
+        libc::SYS_kexec_load, SYS_KEXEC_FILE_LOAD,
         // kernel keyring
         libc::SYS_add_key, libc::SYS_keyctl, libc::SYS_request_key,
         // powerful kernel interfaces
@@ -118,15 +127,18 @@ fn compile_harden_syscalls() -> std::io::Result<BpfProgram> {
     // enter a new user/mount/net/... namespace after lockdown. clone is also how
     // every fork/thread is created, so deny it ONLY when a CLONE_NEW* bit is set:
     // one rule per bit (arg 0 is the flags word on both x86_64 and aarch64).
+    // From libc, not by hand: 0x100 written here as CLONE_NEWTIME (which is 0x80)
+    // was CLONE_VM, so every thread creation (clone3 is ENOSYS, so glibc uses
+    // clone) got EPERM under harden_syscalls.
     const CLONE_NEW_BITS: &[u64] = &[
-        0x0000_0100, // CLONE_NEWTIME (newer; arg layout unchanged)
-        0x0200_0000, // CLONE_NEWCGROUP
-        0x0400_0000, // CLONE_NEWUTS
-        0x0800_0000, // CLONE_NEWIPC
-        0x1000_0000, // CLONE_NEWUSER
-        0x2000_0000, // CLONE_NEWPID
-        0x4000_0000, // CLONE_NEWNET
-        0x0002_0000, // CLONE_NEWNS
+        libc::CLONE_NEWTIME as u64,
+        libc::CLONE_NEWCGROUP as u64,
+        libc::CLONE_NEWUTS as u64,
+        libc::CLONE_NEWIPC as u64,
+        libc::CLONE_NEWUSER as u64,
+        libc::CLONE_NEWPID as u64,
+        libc::CLONE_NEWNET as u64,
+        libc::CLONE_NEWNS as u64,
     ];
     let mut clone_rules = Vec::new();
     for bit in CLONE_NEW_BITS {
