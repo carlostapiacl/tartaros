@@ -76,6 +76,15 @@ pub(crate) fn apply_all(progs: &[BpfProgram]) -> std::io::Result<()> {
     Ok(())
 }
 
+// libc's musl bindings for aarch64 lack it; 294 is the kernel's number there
+// (asm-generic unistd).
+#[cfg(all(target_arch = "aarch64", target_env = "musl"))]
+const SYS_KEXEC_FILE_LOAD: libc::c_long = 294;
+#[cfg(not(all(target_arch = "aarch64", target_env = "musl")))]
+const SYS_KEXEC_FILE_LOAD: libc::c_long = libc::SYS_kexec_file_load;
+#[cfg(all(target_arch = "aarch64", target_env = "gnu"))]
+const _: () = assert!(libc::SYS_kexec_file_load == 294);
+
 /// Deny a curated set of dangerous, rarely-needed syscalls (default-allow; listed
 /// return EPERM). Shrinks the kernel attack surface a multi-tenant escape exploits.
 /// Ordinary agent tools (sh, cat, ls, git, python3, curl, compilers) do not use
@@ -84,7 +93,7 @@ fn compile_harden_syscalls() -> std::io::Result<BpfProgram> {
     let mut deny: Vec<libc::c_long> = vec![
         // load/unload kernel code
         libc::SYS_init_module, libc::SYS_finit_module, libc::SYS_delete_module,
-        libc::SYS_kexec_load, libc::SYS_kexec_file_load,
+        libc::SYS_kexec_load, SYS_KEXEC_FILE_LOAD,
         // kernel keyring
         libc::SYS_add_key, libc::SYS_keyctl, libc::SYS_request_key,
         // powerful kernel interfaces
