@@ -5,6 +5,16 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Prebuilt binaries, and npm.** Each release tag now attaches `tartaros` for
+  darwin-arm64, darwin-x64, linux-x64, linux-arm64 (static, musl) and win32-x64,
+  with `SHA256SUMS`, and publishes them to npm as `@carlostapiacl/tartaros` (one
+  optional dependency per platform, as esbuild does): `npm i -g
+  @carlostapiacl/tartaros`, no Rust toolchain needed. From node,
+  `require("@carlostapiacl/tartaros").binaryPath()` gives the binary's path. The
+  Linux binaries are tested as they ship, against musl. See
+  [npm/PUBLISHING.md](npm/PUBLISHING.md).
+
 ## [0.1.0-alpha.11] — 2026-10-22
 
 The credential broker from the CLI, and a capability path fix.
