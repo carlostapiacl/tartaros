@@ -80,6 +80,16 @@ jobs:
           cargo test --locked --workspace --target ${{ matrix.target }}
           cargo build --locked -p tartaros-bench --target ${{ matrix.target }}
           cd security-bench && sudo ../target/${{ matrix.target }}/debug/tartaros-bench corpus
+      # The bench reports exit codes only; on a failure, show what tartaros says.
+      - name: what tartaros says (on failure)
+        if: failure() && matrix.test == 'linux'
+        run: |
+          w=$(mktemp -d)
+          for flags in "" "--seccomp-strict"; do
+            echo "== tartaros run --write $w $flags"
+            sudo target/${{ matrix.target }}/debug/tartaros run --write "$w" $flags -- sh -c 'echo ok' || echo "rc=$?"
+            sudo target/${{ matrix.target }}/debug/tartaros run --write "$w" $flags -- python3 -c 'import os; p=os.fork(); os._exit(0) if p == 0 else os.waitpid(p, 0)' || echo "rc=$?"
+          done
       - name: stage the binary
         id: stage
         shell: bash

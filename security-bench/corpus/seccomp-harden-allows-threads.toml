@@ -1,0 +1,24 @@
+id = "seccomp-harden-allows-threads"
+category = "isolation"
+severity = "high"
+os = ["linux"]
+requires = ["userns"]
+
+# harden_syscalls denies clone() only when a CLONE_NEW* bit is set. Its list once
+# had 0x100 for CLONE_NEWTIME (which is 0x80): 0x100 is CLONE_VM, so every
+# thread creation got EPERM (clone3 is ENOSYS under the filter, so glibc creates
+# threads with clone). The control starts a thread; the attack is the namespace
+# clone that must still be refused.
+[policy]
+writable_roots = ["{root}/work"]
+harden_syscalls = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import ctypes,os,platform,sys\nnr={\"x86_64\":56,\"aarch64\":220}[platform.machine()]\nlibc=ctypes.CDLL(None,use_errno=True)\nr=libc.syscall(nr,ctypes.c_ulong(0x10000000|17),None,None,None,None)\nif r==0: os._exit(0)\nif r>0: os.waitpid(r,0); sys.exit(0)\nsys.exit(1)'"
+
+[control]
+cmd = "python3 -c 'import threading\nt=threading.Thread(target=lambda: None)\nt.start()\nt.join()' && echo ok > {root}/work/src/f.txt"
