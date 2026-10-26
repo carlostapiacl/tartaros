@@ -135,3 +135,23 @@ fn single_glob_deny_write_is_enforced_or_refused_never_ignored() {
         assert_eq!(code, 78, "Linux has no glob engine, so a single-* deny must refuse");
     }
 }
+
+// ---- masked credentials: refused by name (exit 78), not a parse error (2) ----
+
+#[test]
+fn refused_masked_credentials() {
+    let w = ws();
+    let w = w.display();
+    let env = format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"network":{{"allowedDomains":["api.github.com"]}},"credentials":{{"envVars":[{{"name":"GH_TOKEN","mode":"mask","injectHosts":["api.github.com"]}}]}},"tlsTerminate":{{"excludeDomains":[]}}}}"#);
+    assert_eq!(explain_settings("cred-env", &env), 78, "masked env credentials must be refused by name");
+    let tls = format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"tlsTerminate":{{"excludeDomains":["x.example"]}}}}"#);
+    assert_eq!(explain_settings("cred-tls", &tls), 78, "TLS termination alone must be refused");
+}
+
+#[test]
+fn applied_empty_credentials_ask_for_nothing() {
+    let w = ws();
+    let w = w.display();
+    let json = format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"credentials":{{"envVars":[],"files":[]}},"tlsTerminate":null}}"#);
+    assert_eq!(explain_settings("cred-empty", &json), 0, "an empty credentials block asks for nothing");
+}
