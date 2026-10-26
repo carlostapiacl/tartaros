@@ -136,16 +136,39 @@ fn single_glob_deny_write_is_enforced_or_refused_never_ignored() {
     }
 }
 
-// ---- masked credentials: refused by name (exit 78), not a parse error (2) ----
+// ---- masked credentials: env-var masking applies; the rest is refused by name ----
+
+fn masked(w: &std::path::Display<'_>, creds: &str, tls: &str) -> String {
+    format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"network":{{"allowedDomains":["api.github.com",".example.com"]}},"credentials":{creds},"tlsTerminate":{tls}}}"#)
+}
 
 #[test]
-fn refused_masked_credentials() {
+fn applied_masked_env_credentials() {
     let w = ws();
     let w = w.display();
-    let env = format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"network":{{"allowedDomains":["api.github.com"]}},"credentials":{{"envVars":[{{"name":"GH_TOKEN","mode":"mask","injectHosts":["api.github.com"]}}]}},"tlsTerminate":{{"excludeDomains":[]}}}}"#);
-    assert_eq!(explain_settings("cred-env", &env), 78, "masked env credentials must be refused by name");
-    let tls = format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"tlsTerminate":{{"excludeDomains":["x.example"]}}}}"#);
-    assert_eq!(explain_settings("cred-tls", &tls), 78, "TLS termination alone must be refused");
+    let env = r#"{"envVars":[{"name":"GH_TOKEN","mode":"mask","injectHosts":["api.github.com"]}]}"#;
+    assert_eq!(explain_settings("cred-env", &masked(&w, env, r#"{"excludeDomains":[]}"#)), 0, "env-var masking is enforced");
+    let wild = r#"{"envVars":[{"name":"T","mode":"mask","injectHosts":["*.example.com"]}]}"#;
+    assert_eq!(explain_settings("cred-wild", &masked(&w, wild, "null")), 0, "a domain pattern the allow-list covers");
+}
+
+#[test]
+fn refused_what_masking_does_not_cover() {
+    let w = ws();
+    let w = w.display();
+    let cases = [
+        ("cred-files", r#"{"envVars":[],"files":[{"path":"/x","mode":"mask","injectHosts":["api.github.com"]}]}"#, "null"),
+        ("cred-aws", r#"{"awsPairs":[{"accessKeyIdVar":"A","secretKeyVar":"B"}]}"#, "null"),
+        ("cred-mode", r#"{"envVars":[{"name":"T","mode":"pass","injectHosts":["api.github.com"]}]}"#, "null"),
+        ("cred-nohost", r#"{"envVars":[{"name":"T","mode":"mask","injectHosts":[]}]}"#, "null"),
+        ("cred-unreach", r#"{"envVars":[{"name":"T","mode":"mask","injectHosts":["evil.com"]}]}"#, "null"),
+        ("cred-ca", r#"{"envVars":[{"name":"T","mode":"mask","injectHosts":["api.github.com"]}]}"#, r#"{"caCertPath":"/ca.pem"}"#),
+        ("cred-tls-only", "null", r#"{"excludeDomains":["x.example"]}"#),
+        ("cred-badname", r#"{"envVars":[{"name":"1X","mode":"mask","injectHosts":["api.github.com"]}]}"#, "null"),
+    ];
+    for (tag, creds, tls) in cases {
+        assert_eq!(explain_settings(tag, &masked(&w, creds, tls)), 78, "{tag} must be refused by name");
+    }
 }
 
 #[test]
