@@ -222,7 +222,13 @@ jobs:
           publish() {
             name=$(tar -xOzf "$1" package/package.json | node -p 'const p=JSON.parse(require("fs").readFileSync(0));p.name+"@"+p.version')
             if npm view "$name" version >/dev/null 2>&1; then echo "$name already on npm"; return; fi
-            npm publish "$1" --provenance --access public --tag latest
+            # A version another run of this tag just published can be staged and not yet
+            # visible to `npm view`; the registry then answers 409. That is published.
+            if out=$(npm publish "$1" --provenance --access public --tag latest 2>&1); then echo "$out"; return; fi
+            echo "$out"
+            case "$out" in *"previously staged version"*|*"cannot publish over the previously published"*)
+              echo "$name already published (staged by another run)"; return ;; esac
+            return 1
           }
           for t in dist/npm/carlostapiacl-tartaros-*-*.tgz; do
             case "$t" in *carlostapiacl-tartaros-[0-9]*) continue ;; esac

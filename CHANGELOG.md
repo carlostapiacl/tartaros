@@ -3,6 +3,23 @@
 All notable changes to TartarOS. This project is pre-1.0; the format is
 loosely [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.17] — 2026-10-26
+
+### Changed
+- **seccompiler 0.5.0** (was 0.4.0), Linux. Its syscall tables move to kernel 6.12
+  and it adds riscv64; tartaros builds its filters from `libc` syscall numbers,
+  not those tables, so no filter changes. Measured on kernel 6.8: the workspace
+  tests and the security bench (137 scenarios, 0 violations, 0 broken controls).
+- **windows-sys 0.61.2** (was 0.59.0), for the Windows backend, which is not
+  wired to `tartaros run` yet.
+
+### Fixed
+- **A release run no longer fails on a version another run of the same tag just
+  published.** The registry can hold it staged, not yet visible to `npm view`,
+  and answer 409; that now counts as published. Seen on 0.1.0-alpha.16, whose
+  tag started two runs: the second failed although the first had published
+  everything.
+
 ## [0.1.0-alpha.16] — 2026-10-26
 
 ### Fixed
