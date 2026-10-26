@@ -6,6 +6,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Changed
+- **A run's secrets are out of tartaros's exec environment.** Masked
+  credentials and `[broker]` `value_env`/`token_env` secrets used to stay in the
+  exec-time environment of the tartaros process, which the agent (same user)
+  could read: `sysctl KERN_PROCARGS2` on macOS, which Seatbelt's name-based
+  `kern.procargs` deny does not stop for a numeric MIB, and
+  `/proc/<pid>/environ` on Linux. tartaros now hands them to a clean re-exec of
+  itself through a pipe before the broker or the agent start. A live test scans
+  every readable record from inside a run. The launcher's own environment is
+  outside its reach (docs/broker.md).
 - **Masked credentials under `--settings`** (sandbox-runtime's
   `credentials.envVars` with `mode: "mask"`). The agent's variable holds a
   sentinel, also with `--inherit-env`; the egress broker terminates TLS toward

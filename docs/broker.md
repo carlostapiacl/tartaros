@@ -117,6 +117,32 @@ What it costs and what it does not do:
   other than `mask`, a credential with no `injectHosts` or one `allowedDomains` does
   not cover, `tlsTerminate` without credentials, and a CA of the caller's
   (`tlsTerminate.caCertPath`).
-- The launcher's own process still holds the real value in its environment, as it
-  holds `value_env` secrets: keep the agent from reading other processes'
-  environments (`--isolate-proc`; on Linux also `--isolate-pids`).
+- See *Secrets and exec environments* below for what the launcher must not do.
+
+## Secrets and exec environments
+
+A process's exec-time environment stays readable for its whole life by any
+process of the same user: `sysctl({CTL_KERN, KERN_PROCARGS2, pid})` on macOS, and
+`/proc/<pid>/environ` on Linux. The agent is such a process. Seatbelt does not stop
+the macOS call: tartaros's `(deny sysctl-read (sysctl-name-prefix "kern.procargs"))`
+matches the name, and a caller that passes the numeric MIB is not stopped by it,
+with or without `--isolate-proc` (measured 2026-10-26: 522 readable records from
+inside a run, either way).
+
+So when a run will read secrets from its environment (masked credentials, a
+`[broker]`'s `value_env` and `token_env`), tartaros first re-execs itself: it reads
+them, writes them to a pipe, and `execve`s its own binary (same pid) with an
+environment without them; the new image reads them into memory and closes the pipe.
+This happens before the broker starts or the agent exists, so no tartaros process
+the agent can read holds them in its exec record. Measured with a probe inside the
+run that reads every record it can: no tartaros process holds the value, and the
+probe does not inherit the pipe's fd (`cli/tests/secrets_not_in_exec_env.rs`).
+
+What tartaros cannot clean is **the launcher**: the process that started tartaros
+keeps its own exec environment. If a shell exports the secret
+(`export GH_TOKEN=…; tartaros run …`), or names it on its own command line, that
+shell's record holds it and the agent can read it. Give tartaros the value only in
+its own environment, from something that does not itself hold it in its exec
+record: seisin resolves the value through a provider and hands it to tartaros's
+environment only; from a shell, `GH_TOKEN="$(…)" tartaros run …` scopes it to
+tartaros, while `export` does not.

@@ -328,7 +328,137 @@ fn expand_path(s: &str) -> String {
     }
 }
 
+/// Secrets this process was handed through a pipe by its own clean re-exec
+/// (`reexec_without_secrets`), by variable name. Read with [`secret_var`].
+static SECRETS: std::sync::OnceLock<std::collections::HashMap<String, String>> = std::sync::OnceLock::new();
+
+/// The internal variable naming the pipe's fd across the re-exec. Holds a
+/// number, never a secret; removed as soon as it is read.
+const SECRETS_FD_VAR: &str = "TARTAROS_INTERNAL_SECRETS_FD";
+
+/// A secret by variable name: from the pipe after a clean re-exec, otherwise
+/// from this process's environment.
+fn secret_var(name: &str) -> Option<String> {
+    SECRETS.get().and_then(|m| m.get(name).cloned()).or_else(|| std::env::var(name).ok())
+}
+
+/// After a re-exec: read the secrets the pre-exec image wrote to the pipe
+/// (`name\0value\0`…), close it, forget the fd's number.
+#[cfg(unix)]
+fn take_secrets_from_pipe() {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    let Some(fd) = std::env::var(SECRETS_FD_VAR).ok().and_then(|v| v.parse::<i32>().ok()) else { return };
+    std::env::remove_var(SECRETS_FD_VAR);
+    let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        eprintln!("tartaros: cannot read the secrets handed over the re-exec");
+        exit(1);
+    }
+    drop(f); // closes the fd: the agent never inherits it
+    let parts: Vec<&[u8]> = buf.split(|b| *b == 0).collect();
+    let mut map = std::collections::HashMap::new();
+    for kv in parts.chunks(2) {
+        if let [k, v] = kv {
+            if !k.is_empty() {
+                map.insert(String::from_utf8_lossy(k).into_owned(), String::from_utf8_lossy(v).into_owned());
+            }
+        }
+    }
+    let _ = SECRETS.set(map);
+}
+
+/// The secrets a run will read from the environment: masked credentials' values
+/// and the `[broker]`'s `value_env` / `token_env`.
+fn secret_names() -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(m) = MASKED.get() {
+        names.extend(m.creds.iter().map(|(n, _)| n.clone()));
+    }
+    if let Some(b) = BROKER.get() {
+        names.extend(b.token_env.iter().cloned());
+        names.extend(b.inject.iter().map(|i| i.value_env.clone()));
+        names.extend(b.capability.iter().flat_map(|c| c.inject.iter().map(|i| i.value_env.clone())));
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Clean re-exec (macOS and Linux): a process's exec-time environment stays
+/// readable for its whole life (`sysctl KERN_PROCARGS2` on macOS, which Seatbelt
+/// does not stop; `/proc/<pid>/environ` on Linux for the same uid), whatever it
+/// later does with `remove_var`. The agent is a descendant running as the same
+/// user, so a secret in tartaros's exec environment is a secret the agent can
+/// read. When a run will hold one, tartaros takes the values out of its
+/// environment, writes them to a pipe, and `execve`s itself (same pid) with an
+/// environment without them, naming the pipe's fd in [`SECRETS_FD_VAR`]; the new
+/// image reads them into memory and closes the fd. All of it before the broker
+/// starts or the agent exists. The launcher's own exec environment is outside
+/// tartaros's reach (docs/broker.md).
+#[cfg(unix)]
+fn reexec_without_secrets() {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::process::CommandExt;
+    if SECRETS.get().is_some() {
+        return; // this IS the clean image
+    }
+    let present: Vec<(String, String)> =
+        secret_names().into_iter().filter_map(|n| std::env::var(&n).ok().map(|v| (n, v))).collect();
+    if present.is_empty() {
+        return;
+    }
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        eprintln!("tartaros: cannot hand the secrets to a clean re-exec: {}", std::io::Error::last_os_error());
+        exit(1);
+    }
+    let (r, w) = (unsafe { std::fs::File::from_raw_fd(fds[0]) }, unsafe { std::fs::File::from_raw_fd(fds[1]) });
+    let mut payload = Vec::new();
+    for (k, v) in &present {
+        payload.extend_from_slice(k.as_bytes());
+        payload.push(0);
+        payload.extend_from_slice(v.as_bytes());
+        payload.push(0);
+    }
+    // A pipe holds at least 16 KiB (64 KiB on Linux and macOS): enough for
+    // credentials; larger refuses rather than blocking before the exec.
+    if payload.len() > 16 * 1024 {
+        eprintln!("tartaros: the run's secrets are larger than 16 KiB; refusing to hand them over");
+        exit(EXIT_POLICY_REFUSED);
+    }
+    let mut w = w;
+    if w.write_all(&payload).is_err() {
+        eprintln!("tartaros: cannot hand the secrets to a clean re-exec");
+        exit(1);
+    }
+    drop(w);
+    // The read end must survive the exec; everything else keeps CLOEXEC.
+    unsafe {
+        let flags = libc::fcntl(r.as_raw_fd(), libc::F_GETFD);
+        libc::fcntl(r.as_raw_fd(), libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|e| {
+        eprintln!("tartaros: cannot find its own binary for a clean re-exec: {e}");
+        exit(1);
+    });
+    let names: Vec<&String> = present.iter().map(|(k, _)| k).collect();
+    let env: Vec<(String, String)> = std::env::vars().filter(|(k, _)| !names.contains(&k)).collect();
+    let err = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env_clear()
+        .envs(env)
+        .env(SECRETS_FD_VAR, r.as_raw_fd().to_string())
+        .exec();
+    eprintln!("tartaros: clean re-exec failed: {err}");
+    exit(1);
+}
+
 fn main() {
+    #[cfg(unix)]
+    take_secrets_from_pipe();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(|s| s.as_str()) {
         Some("run") => cmd_run(&args[1..]),
@@ -451,6 +581,9 @@ fn cmd_run(rest: &[String]) -> ! {
         exit(2);
     }
     let (mut p, log, profile) = build_policy(opts, false); // run: quiet
+    // Secrets out of tartaros's exec environment before anything can read it.
+    #[cfg(unix)]
+    reexec_without_secrets();
     if p.writable_roots.is_empty() {
         eprintln!("warning: no --write roots; the command cannot write anywhere");
     }
@@ -642,7 +775,7 @@ fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
     let spec = MASKED.get()?.clone();
     let mut creds = Vec::new();
     for (name, hosts) in &spec.creds {
-        let Ok(real) = std::env::var(name) else {
+        let Some(real) = secret_var(name) else {
             eprintln!("tartaros: --settings: masked credential {name} is not set in the launcher's environment; refusing to run.");
             exit(EXIT_POLICY_REFUSED);
         };
@@ -865,7 +998,7 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
 fn start_credential_broker(p: &mut Policy) {
     let Some(cfg) = BROKER.get().cloned() else { return };
     let env = |name: &str, what: &str| -> String {
-        std::env::var(name).unwrap_or_else(|_| {
+        secret_var(name).unwrap_or_else(|| {
             eprintln!("tartaros: [broker] {what} names ${name}, which is not set in the launcher's environment");
             exit(78);
         })
