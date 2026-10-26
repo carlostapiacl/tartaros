@@ -5,6 +5,12 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`tlsTerminate` is read under `network`**, where sandbox-runtime's schema
+  puts it and seisin writes it. It was read from the top level of the settings
+  file, so a real seisin `key_mode = "inject"` policy was rejected as an
+  unknown field (exit 2) instead of being masked.
+
 ### Changed
 - **A run's secrets are out of tartaros's exec environment.** Masked
   credentials and `[broker]` `value_env`/`token_env` secrets used to stay in the

@@ -1119,13 +1119,11 @@ struct SandboxSettings {
     network: SandboxNet,
     /// sandbox-runtime's masked credentials (`envVars`/`files` with `mode: "mask"`,
     /// AWS pairs): a sentinel in the sandbox, swapped for the real value on egress
-    /// to the credential's hosts. Read only so it can be refused by name, not as an
-    /// unknown field: this backend does not do it (docs/limits.md).
+    /// to the credential's hosts. Env-var masking is done by the broker; the rest
+    /// is refused by name (docs/broker.md). The TLS termination it needs is
+    /// `network.tlsTerminate`, where sandbox-runtime's schema puts it.
     #[serde(default)]
     credentials: Option<serde_json::Value>,
-    /// The TLS termination masking needs. Refused with `credentials`.
-    #[serde(default, rename = "tlsTerminate")]
-    tls_terminate: Option<serde_json::Value>,
 }
 
 /// Does a settings value ask for anything? `null`, `{}`, `[]` and objects made
@@ -1169,6 +1167,10 @@ struct SandboxNet {
     allow_mach_lookup: Vec<String>,
     #[serde(default, rename = "allowMachRegister")]
     allow_mach_register: Vec<String>,
+    /// `tlsTerminate`: the TLS termination masked credentials need. Under
+    /// `network`, as in sandbox-runtime's schema (and as seisin writes it).
+    #[serde(default, rename = "tlsTerminate")]
+    tls_terminate: Option<serde_json::Value>,
 }
 
 /// Apply a sandbox-runtime settings file strictly: map the fields we can enforce
@@ -1337,7 +1339,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     // Masked credentials: what this backend does (env-var masking through the
     // egress broker) is checked here; what it does not (files, AWS pairs, a CA of
     // the caller's) is refused by name, so a caller hands the role elsewhere.
-    match mask_spec(s.credentials.as_ref(), s.tls_terminate.as_ref(), &p.allow_domains) {
+    match mask_spec(s.credentials.as_ref(), s.network.tls_terminate.as_ref(), &p.allow_domains) {
         Ok(Some(spec)) => {
             let _ = MASKED.set(spec);
         }

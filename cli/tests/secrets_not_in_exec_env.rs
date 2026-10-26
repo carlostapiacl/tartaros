@@ -97,7 +97,7 @@ fn masked_credentials_are_not_in_any_readable_exec_environment() {
     std::fs::write(
         &settings,
         format!(
-            r#"{{"filesystem":{{"allowWrite":["{}"]}},"network":{{"allowedDomains":["api.github.com"]}},"credentials":{{"envVars":[{{"name":"GH_TOKEN","mode":"mask","injectHosts":["api.github.com"]}}]}},"tlsTerminate":{{"excludeDomains":[]}}}}"#,
+            r#"{{"filesystem":{{"allowWrite":["{}"]}},"network":{{"allowedDomains":["api.github.com"],"tlsTerminate":{{"excludeDomains":[]}}}},"credentials":{{"envVars":[{{"name":"GH_TOKEN","mode":"mask","injectHosts":["api.github.com"]}}]}}}}"#,
             dir.display()
         ),
     )
