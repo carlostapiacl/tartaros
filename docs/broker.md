@@ -68,11 +68,13 @@ holding the value. seisin's `key_mode = "inject"` writes them.
 
 ```json
 {
-  "network": { "allowedDomains": ["api.github.com"] },
+  "network": {
+    "allowedDomains": ["api.github.com"],
+    "tlsTerminate": { "excludeDomains": [] }
+  },
   "credentials": {
     "envVars": [{ "name": "GH_TOKEN", "mode": "mask", "injectHosts": ["api.github.com"] }]
-  },
-  "tlsTerminate": { "excludeDomains": [] }
+  }
 }
 ```
 
