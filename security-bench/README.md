@@ -48,7 +48,7 @@ suites and credited in [`SOURCES.md`](SOURCES.md). Confirmed-open scenarios live
 
 | | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) |
 |---|---|---|
-| scenarios | 136/136 pass | 110/110 pass |
+| scenarios | 136/136 pass | 109/109 pass (2026-10-26) |
 | security violations (critical) | 0 | 0 |
 | legitimate ops broken | 0 | 0 |
 | mutation blind spots | 0 | 0 |

@@ -68,11 +68,13 @@ holding the value. seisin's `key_mode = "inject"` writes them.
 
 ```json
 {
-  "network": { "allowedDomains": ["api.github.com"] },
+  "network": {
+    "allowedDomains": ["api.github.com"],
+    "tlsTerminate": { "excludeDomains": [] }
+  },
   "credentials": {
     "envVars": [{ "name": "GH_TOKEN", "mode": "mask", "injectHosts": ["api.github.com"] }]
-  },
-  "tlsTerminate": { "excludeDomains": [] }
+  }
 }
 ```
 
@@ -87,7 +89,8 @@ holding the value. seisin's `key_mode = "inject"` writes them.
   another credential's host, or to any other host, travels as the useless fake.
   When the swap cannot change the body's length, `Content-Length` is kept; otherwise
   the body goes upstream chunked.
-- **Upstream** is real TLS verified against the webpki roots, with no proxy from the
+- **Upstream** is real TLS verified against the webpki roots and the roots in the
+  launcher's `NODE_EXTRA_CA_CERTS` (as sandbox-runtime's proxy trusts them), with no proxy from the
   environment and no redirects followed; the response comes back untouched. One
   request per terminated connection (`Connection: close`); clients reconnect.
 - **Checks on the terminated side**, as sandbox-runtime makes them: the TLS server
@@ -122,9 +125,20 @@ What it costs and what it does not do:
 ## Secrets and exec environments
 
 A process's exec-time environment can stay readable, for the process's whole
-life, by other processes of the same user (`/proc/<pid>/environ` on Linux), and the
-agent is such a process. Do not count on the sandbox to hide another process's
-environment from it.
+life, by other processes of the same user, and the agent is such a process:
+
+- **Linux:** `/proc/<pid>/environ` and `cmdline`, unless the run hides them
+  (`--isolate-pids`, `--isolate-proc`).
+- **macOS:** `sysctl({CTL_KERN, KERN_PROCARGS2, pid})` returns another process's
+  arguments, and its environment unless the binary is Apple's own (`/bin/zsh`,
+  `/bin/sh` are hidden; `node`, Homebrew's tools and anything you built are not,
+  hardened runtime or not). No Seatbelt rule we found denies it (measured on
+  macOS 15: `sysctl-read`, with or without a name filter, and `process-info*`),
+  so `isolate_process_info` cannot close it there, and no Seatbelt-based sandbox
+  does. The security bench keeps it as a known gap
+  (`isolation-process-info-procargs-macos`).
+
+Do not count on the sandbox to hide another process's environment from it.
 
 So when a run will read secrets from its environment (masked credentials, a
 `[broker]`'s `value_env` and `token_env`), tartaros first re-execs itself: it reads
@@ -135,11 +149,17 @@ the agent can read holds them in its exec record. Measured with a probe inside t
 run that reads every record it can: no tartaros process holds the value, and the
 probe does not inherit the pipe's fd (`cli/tests/secrets_not_in_exec_env.rs`).
 
-What tartaros cannot clean is **the launcher**: the process that started tartaros
-keeps its own exec environment. If a shell exports the secret
-(`export GH_TOKEN=…; tartaros run …`), or names it on its own command line, that
-shell's record holds it and the agent can read it. Give tartaros the value only in
-its own environment, from something that does not itself hold it in its exec
-record: seisin resolves the value through a provider and hands it to tartaros's
-environment only; from a shell, `GH_TOKEN="$(…)" tartaros run …` scopes it to
-tartaros, while `export` does not.
+What tartaros cannot clean is **the other processes**: the launcher, or anything
+started from a shell that exported the secret (`export GH_TOKEN=…` hands it to
+every child: an editor, a `node` server, another agent), keeps it in its own exec
+record. So after the re-exec and before the agent exists, tartaros reads every
+record it can, as the agent could, and **refuses the run (exit 78)** when one holds
+a run's secret, naming the variable and the process, never the value. On Linux a run
+that hides other processes (`--isolate-pids`, `--isolate-proc`) is not checked; values
+shorter than 8 bytes are not looked for. `--allow-exposed-secrets` runs anyway. The
+check sees the processes alive at launch, not ones started during the run.
+
+Give tartaros the value only in its own environment, from something that does not
+itself hold it in its exec record: seisin resolves the value through a provider and
+hands it to tartaros's environment only; from a shell, `GH_TOKEN="$(…)" tartaros run …`
+scopes it to tartaros, while `export` does not.

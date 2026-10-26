@@ -8,7 +8,7 @@ leaves behind runs later outside the box. Every one of those claims is a test in
 this repo that you can run on your own machine.
 
 Open source (Apache-2.0) · macOS and Linux · Windows backend (preview) · one binary · no Docker, no VM, no
-account, no login · written in Rust · `v0.1.0-alpha.15`
+account, no login · written in Rust · `v0.1.0-alpha.16`
 
 [Website](https://carlostapiacl.github.io/tartaros/) ·
 [Evidence](https://carlostapiacl.github.io/tartaros/evidence.html) ·

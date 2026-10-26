@@ -139,7 +139,7 @@ fn single_glob_deny_write_is_enforced_or_refused_never_ignored() {
 // ---- masked credentials: env-var masking applies; the rest is refused by name ----
 
 fn masked(w: &std::path::Display<'_>, creds: &str, tls: &str) -> String {
-    format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"network":{{"allowedDomains":["api.github.com",".example.com"]}},"credentials":{creds},"tlsTerminate":{tls}}}"#)
+    format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"network":{{"allowedDomains":["api.github.com",".example.com"],"tlsTerminate":{tls}}},"credentials":{creds}}}"#)
 }
 
 #[test]
@@ -175,6 +175,6 @@ fn refused_what_masking_does_not_cover() {
 fn applied_empty_credentials_ask_for_nothing() {
     let w = ws();
     let w = w.display();
-    let json = format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"credentials":{{"envVars":[],"files":[]}},"tlsTerminate":null}}"#);
+    let json = format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"network":{{"tlsTerminate":null}},"credentials":{{"envVars":[],"files":[]}}}}"#);
     assert_eq!(explain_settings("cred-empty", &json), 0, "an empty credentials block asks for nothing");
 }
