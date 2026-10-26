@@ -74,6 +74,15 @@ pub struct Capability {
 // modules, kept apart from the credential and capability code below.
 mod egress;
 mod limits;
+pub mod mask;
+pub mod mitm;
+
+/// Does one of `patterns` (exact hosts, or `.domain` for a domain and its
+/// subdomains, as the egress allow-list spells them) cover `host`? An empty
+/// list covers nothing.
+pub fn host_covered(patterns: &[String], host: &str) -> bool {
+    egress::host_allowed_nonempty(patterns, host)
+}
 use limits::{
     read_line_capped, CLIENT_IO_TIMEOUT, CONNECT_IDLE_TIMEOUT, MAX_CONCURRENT_SESSIONS,
     MAX_HEADERS, MAX_LINE_BYTES, MAX_RESPONSE_BYTES, UPSTREAM_TIMEOUT,
@@ -169,9 +178,41 @@ pub struct Broker {
     /// everything through `HTTP_PROXY` (ignoring `NO_PROXY`) still reach a declared
     /// loopback service, matching srt. Any other internal address stays blocked.
     loopback_ports: Vec<u16>,
+    /// Masked credentials (`mask.rs`): their sentinels are swapped for the real
+    /// values on egress to their hosts, whose TLS the broker terminates with
+    /// `mitm` (`mitm.rs`). None = every CONNECT is a blind tunnel, as before.
+    masks: Option<std::sync::Arc<mask::Masks>>,
+    mitm: Option<std::sync::Arc<mitm::MitmCa>>,
+    /// `tlsTerminate.excludeDomains`: never terminated, masked or not.
+    tls_exclude: Vec<String>,
+    /// The upstream TLS trust for terminated connections (webpki roots; a test
+    /// adds its own CA).
+    upstream_tls: Option<std::sync::Arc<rustls::ClientConfig>>,
 }
 
 impl Broker {
+    /// Masked credentials, the run's CA, and the hosts never terminated.
+    pub fn with_masks(
+        mut self,
+        masks: std::sync::Arc<mask::Masks>,
+        ca: std::sync::Arc<mitm::MitmCa>,
+        exclude: Vec<String>,
+    ) -> std::io::Result<Self> {
+        self.masks = Some(masks);
+        self.mitm = Some(ca);
+        self.tls_exclude = exclude;
+        if self.upstream_tls.is_none() {
+            self.upstream_tls = Some(mitm::upstream_tls(&[])?);
+        }
+        Ok(self)
+    }
+
+    /// Trust `extra` roots upstream, besides the webpki ones (tests).
+    pub fn with_upstream_roots(mut self, extra: &[rustls::pki_types::CertificateDer<'static>]) -> std::io::Result<Self> {
+        self.upstream_tls = Some(mitm::upstream_tls(extra)?);
+        Ok(self)
+    }
+
     pub fn new(role: impl Into<String>, injections: Vec<Injection>) -> Self {
         Broker {
             injections,
@@ -188,6 +229,10 @@ impl Broker {
             allow_internal: false,
             allowed_connect_ports: None,
             loopback_ports: Vec::new(),
+            masks: None,
+            mitm: None,
+            tls_exclude: Vec::new(),
+            upstream_tls: None,
         }
     }
 
@@ -744,6 +789,13 @@ impl Broker {
                 }
             }
         };
+
+        // A masked credential's host: terminate TLS and swap its sentinel
+        // (mitm.rs) instead of tunneling blind. Its loopback service exception
+        // does not apply: a credential is only ever sent where it was declared.
+        if !loopback_ok && self.terminates(&host) {
+            return self.terminate(&host, port, target, client_reader, client, tx);
+        }
 
         // Connect upstream (bounded connect; no per-read timeout on the tunnel).
         let upstream = match TcpStream::connect_timeout(&target, UPSTREAM_TIMEOUT) {

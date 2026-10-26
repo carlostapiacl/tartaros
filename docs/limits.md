@@ -10,12 +10,11 @@ than you asked for.
 - **macOS teardown is best-effort.** A daemon that calls `setsid()` leaves the
   process group and `kill(-pgid)` misses it; macOS has no `cgroup.kill` or job
   object to match Linux's guarantee. Use Linux for strict teardown.
-- **macOS cross-process environment read:** re-measured on macOS 15.7 (Darwin
-  24.6) with a validated direct `KERN_PROCARGS2` probe — another same-user
-  process's environment is **not** exposed (the OS returns only the executable
-  path; a process reads the full environment only for itself). It does not
-  reproduce on current macOS. A targeted `(deny sysctl-read (sysctl-name
-  "kern.procargs2"))` remains available as defense-in-depth for older macOS.
+- **Other processes' environments:** do not count on the sandbox to hide
+  another same-user process's environment from the agent. tartaros keeps a
+  run's secrets out of its own exec environment (a clean re-exec, see
+  docs/broker.md); keep secrets out of exported environments of the processes
+  around the agent, the launcher's included.
 - **Resource caps on a cgroup-less host degrade to RLIMIT** (bypassable by root)
   and TartarOS warns on stderr rather than pretending to confine.
 - **Not-yet-existing handoff paths: covered where Linux has namespaces.** The
