@@ -1,0 +1,30 @@
+# STATUS 2026-10-26 (known gap): macos=violation
+# derived from anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)
+# isolation-process-info-environ, measured on macOS with the call itself rather
+# than `ps -E`: sysctl({CTL_KERN, KERN_PROCARGS2, pid}) returns another process's
+# arguments, and its exec environment unless the binary is Apple's own. No
+# Seatbelt rule we found denies it (measured on macOS 15: `sysctl-read`, with or
+# without a name filter, and `process-info*`). The parent here is tartaros, not
+# an Apple binary, so its PATH= is readable. What tartaros does instead: no
+# secrets in its own exec environment (the clean re-exec), and a run whose
+# secret another process exposes is refused (docs/broker.md).
+id = "isolation-process-info-procargs-macos"
+source = "anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)"
+category = "isolation"
+severity = "high"
+os = ["macos"]
+
+[policy]
+writable_roots = ["{root}/work"]
+isolate_process_info = true
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+# ATTACK: exit 0 if the parent's exec record holds PATH=.
+[attack]
+cmd = "/usr/bin/python3 -I -c 'import ctypes,os,sys\nl=ctypes.CDLL(None)\nm=(ctypes.c_int*3)(1,49,os.getppid())\nn=ctypes.c_size_t(1<<20)\nb=ctypes.create_string_buffer(n.value)\nsys.exit(0 if l.sysctl(m,3,b,ctypes.byref(n),None,0)==0 and b\"\\0PATH=\" in b.raw[:n.value] else 1)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"

@@ -130,3 +130,51 @@ fn broker_value_env_secrets_are_not_in_any_readable_exec_environment() {
     assert!(!out.contains(SECRET.split('_').last().unwrap()) || !out.contains("HIT"), "{out}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Another process that holds a run's secret in its exec record (a shell's
+/// `export` hands it to every child) refuses the run: the agent could read it
+/// there. `--allow-exposed-secrets` runs anyway.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_secret_another_process_exposes_refuses_the_run() {
+    // Its own value: the other tests' tartaros hold theirs for an instant before the re-exec.
+    const EXPOSED: &str = "ghp_EXPOSED_tartaros_test_4c1d";
+    let dir = scratch("exposed");
+    // The holder. macOS hides the environment of Apple's own binaries (`/bin/sleep`), not of others: tartaros
+    // without secrets to clean keeps it.
+    let mut holder = if cfg!(target_os = "macos") {
+        Command::new(BIN).args(["run", "--write", dir.to_str().unwrap(), "--", "/bin/sleep", "30"]).env("GH_TOKEN", EXPOSED).spawn()
+    } else {
+        Command::new("/bin/sleep").arg("30").env("GH_TOKEN", EXPOSED).spawn()
+    }
+    .expect("spawn the holder");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let settings = dir.join("settings.json");
+    std::fs::write(
+        &settings,
+        format!(
+            r#"{{"filesystem":{{"allowWrite":["{}"]}},"network":{{"allowedDomains":["api.github.com"],"tlsTerminate":{{"excludeDomains":[]}}}},"credentials":{{"envVars":[{{"name":"GH_TOKEN","mode":"mask","injectHosts":["api.github.com"]}}]}}}}"#,
+            dir.display()
+        ),
+    )
+    .unwrap();
+    let run = |extra: &[&str]| {
+        Command::new(BIN)
+            .args(["run", "--settings", settings.to_str().unwrap()])
+            .args(extra)
+            .args(["--", "/usr/bin/true"])
+            .env("GH_TOKEN", EXPOSED)
+            .output()
+            .expect("run tartaros")
+    };
+    let refused = run(&[]);
+    let err = String::from_utf8_lossy(&refused.stderr);
+    let allowed = run(&["--allow-exposed-secrets"]);
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert_eq!(refused.status.code(), Some(78), "{err}");
+    assert!(err.contains(&format!("GH_TOKEN in pid {}", holder.id())), "{err}");
+    assert!(!err.contains(EXPOSED), "the refusal must not print the value: {err}");
+    assert!(allowed.status.success(), "{}", String::from_utf8_lossy(&allowed.stderr));
+    let _ = std::fs::remove_dir_all(dir);
+}

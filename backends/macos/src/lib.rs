@@ -439,8 +439,10 @@ fn build_profile(policy: &Policy) -> String {
         ));
     }
 
-    // Process-info / environment isolation. We never allow `kern.proc.*`.
-    // Other processes' args/env must not be reachable from inside the box.
+    // Process-info isolation. We never allow `kern.proc.*`. This does NOT hide
+    // other processes' args/env: `KERN_PROCARGS2` by MIB passes every rule here
+    // (measured: `sysctl-read` with or without a name filter, `process-info*`).
+    // tartaros keeps its own secrets out of exec records instead (cli, docs/broker.md).
     if policy.isolate_process_info {
         p.push_str("(allow process-info* (target self))\n");
     } else {
