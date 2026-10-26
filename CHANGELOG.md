@@ -6,11 +6,25 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Changed
-- **`--settings` refuses masked credentials by name.** A settings file with
-  `credentials` or `tlsTerminate` asking for something was a parse error (exit 2,
-  `unknown field`); it is now refused as a guarantee this backend cannot give
-  (exit 78, with the reason), like every other field it cannot enforce. An empty
-  block asks for nothing and applies. docs/broker.md says what is missing.
+- **A run's secrets are out of tartaros's exec environment.** Masked
+  credentials and `[broker]` `value_env`/`token_env` secrets used to stay in the
+  exec-time environment of the tartaros process, which the agent (same user)
+  could read. tartaros now hands them to a clean re-exec of
+  itself through a pipe before the broker or the agent start. A live test scans
+  every readable record from inside a run. The launcher's own environment is
+  outside its reach (docs/broker.md).
+- **Masked credentials under `--settings`** (sandbox-runtime's
+  `credentials.envVars` with `mode: "mask"`). The agent's variable holds a
+  sentinel, also with `--inherit-env`; the egress broker terminates TLS toward
+  the credential's own hosts with a CA made per run and swaps the sentinel for
+  the real value in the request's headers and streamed body, gated per
+  credential. Other hosts keep the blind tunnel. The CA's key stays in memory;
+  its certificate and a trust bundle go to a run directory the trust variables
+  point at, removed after the run. Files, AWS pairs, other modes and a caller's
+  own CA are refused by name (exit 78), as is `tlsTerminate` alone. New
+  dependencies: `rcgen` 0.14.10 and rustls as a server (the rustls/ring the
+  HTTPS client already used). docs/broker.md says what it costs (a MITM over
+  those hosts) and what it does not close (reflection).
 - **The broker's HTTPS client is ureq 3** (was 2.12). ureq 2.12 could panic
   inside its response reader when an upstream cut a body short (`failed to read
   exact buffer length from stream`, seen once in CI): the connection's thread
