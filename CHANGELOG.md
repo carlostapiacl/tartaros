@@ -6,6 +6,11 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Changed
+- **`--settings` refuses masked credentials by name.** A settings file with
+  `credentials` or `tlsTerminate` asking for something was a parse error (exit 2,
+  `unknown field`); it is now refused as a guarantee this backend cannot give
+  (exit 78, with the reason), like every other field it cannot enforce. An empty
+  block asks for nothing and applies. docs/broker.md says what is missing.
 - **The broker's HTTPS client is ureq 3** (was 2.12). ureq 2.12 could panic
   inside its response reader when an upstream cut a body short (`failed to read
   exact buffer length from stream`, seen once in CI): the connection's thread
