@@ -3,7 +3,7 @@
 All notable changes to TartarOS. This project is pre-1.0; the format is
 loosely [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.1.0-alpha.16] — 2026-10-26
 
 ### Fixed
 - **`tlsTerminate` is read under `network`**, where sandbox-runtime's schema

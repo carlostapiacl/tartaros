@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-bench"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "serde",
  "tartaros-broker",
@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-broker"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "rcgen",
  "ring",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-cli"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "libc",
  "serde",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-collect"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "tartaros-core",
  "tartaros-linux",
@@ -614,14 +614,14 @@ dependencies = [
 
 [[package]]
 name = "tartaros-core"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "tartaros-linux"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "landlock",
  "libc",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-macos"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "libc",
  "tartaros-core",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-microvm"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "serde",
  "serde_json",
@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-windows"
-version = "0.1.0-alpha.15"
+version = "0.1.0-alpha.16"
 dependencies = [
  "tartaros-core",
  "windows-sys 0.59.0",
