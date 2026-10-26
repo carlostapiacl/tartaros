@@ -46,14 +46,18 @@ The corpus has 140 scenarios; 103 are derived from other sandboxes' public test
 suites and credited in [`SOURCES.md`](SOURCES.md). Confirmed-open scenarios live in
 [`corpus-known-gaps/`](corpus-known-gaps/) with their per-OS status.
 
-| | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) |
-|---|---|---|
-| scenarios | 136/136 pass | 109/109 pass (2026-10-26) |
-| security violations (critical) | 0 | 0 |
-| legitimate ops broken | 0 | 0 |
-| mutation blind spots | 0 | 0 |
+| | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) | Windows 10 19045, both tiers (2026-10-26) |
+|---|---|---|---|
+| scenarios | 136/136 pass | 109/109 pass (2026-10-26) | 87/87 pass |
+| security violations (critical) | 0 | 0 | 0 |
+| legitimate ops broken | 0 | 0 | 0 |
+| mutation blind spots | 0 | 0 | not run |
 
-macOS runs the cross-platform subset (scenarios whose `os` includes macOS).
+macOS runs the cross-platform subset (scenarios whose `os` includes macOS). Windows
+runs the scenarios whose `os` includes Windows, on the `appcontainer` and the
+`sandbox-user` tier (`TARTAROS_WINDOWS_TIER`), with `TARTAROS_SH` naming a POSIX sh
+(BusyBox); a scenario got `windows` only after passing on both tiers, its baseline
+included.
 Targets: violations 0, blind spots 0, legitimate ops ≥ 99%. The Linux figure is
 measured on kernel 6.8 with all host capabilities present
 (`landlock cgroup_v2 userns`); two scenarios are capability-sensitive and need a

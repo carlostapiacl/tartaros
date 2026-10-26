@@ -3,7 +3,7 @@ id = "read-allow-inside-deny-writable-ancestor"
 source = "anthropics/sandbox-runtime test/sandbox/allow-read.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Shape: writable root ~ , read-deny ~/.ssh, read-allow ~/.ssh/known_hosts.
 # The writable root is an ANCESTOR of the deny: the carve-out stays readable

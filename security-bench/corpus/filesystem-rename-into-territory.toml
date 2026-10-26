@@ -6,7 +6,7 @@ id = "filesystem-rename-into-territory"
 source = "nolabs-ai/nono crates/nono-cli/tests/execution_strategy_run.rs (Landlock Refer rename) (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 [policy]
 writable_roots = ["{root}/work"]

@@ -3,7 +3,7 @@ id = "write-deny-existing-file-chmod"
 source = "anthropics/sandbox-runtime test/sandbox/stale-mount-point.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A pre-existing file at a write-denied path (a git lock file the host's git
 # will act on). The agent owns it, so it first widens the mode and then

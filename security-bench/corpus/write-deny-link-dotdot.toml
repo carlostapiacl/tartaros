@@ -3,7 +3,7 @@ id = "write-deny-link-dotdot"
 source = "anthropics/sandbox-runtime test/sandbox/rules-through-links-on-every-runtime.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The write-deny is spelled through here/down -> link/../down/in, where here/link ->
 # ../elsewhere/in. So it really names elsewhere/down/in/file, and that file must stay

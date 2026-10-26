@@ -3,7 +3,7 @@ id = "filesystem-write-deny-via-symlink-spelling"
 source = "anthropics/sandbox-runtime test/sandbox/deny-order-independence.test.ts, test/sandbox/read-deny-glob.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The write-deny is written through a symlink chain that leaves the writable
 # area and comes back (work/away -> outside, outside/to-hooks -> work/repo/hooks).

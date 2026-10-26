@@ -3,7 +3,7 @@ id = "read-deny-alt-spelling"
 source = "anthropics/sandbox-runtime test/sandbox/linux-one-mount-per-destination.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The read deny is written ONLY in a non-canonical spelling: through a
 # symlinked directory. The secret must still be hidden at its real path.

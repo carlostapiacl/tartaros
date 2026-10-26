@@ -3,7 +3,7 @@ id = "lifecycle-background-reaped-on-exit"
 source = "anthropics/sandbox-runtime test/sandbox/integration.test.ts and pid-namespace-isolation.test.ts (Apache-2.0)"
 category = "lifecycle"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # lifecycle-daemon-escape covers a setsid'd daemon at TIMEOUT. This is the normal
 # path: the command exits 0 immediately but leaves a plain background child (same

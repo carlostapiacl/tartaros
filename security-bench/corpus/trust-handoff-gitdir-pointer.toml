@@ -3,7 +3,7 @@ id = "trust-handoff-gitdir-pointer"
 source = "openai/codex codex-rs/linux-sandbox/tests/suite/nested_metadata_tests.rs::workspace_write_protects_resolved_gitdir_in_another_writable_root and codex-rs/sandboxing/src/seatbelt_tests.rs::workspace_write_protects_linked_worktree_gitdir_under_tmp (Apache-2.0)"
 category = "trust-handoff"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A linked worktree / submodule has a `.git` FILE ("gitdir: <path>") whose real
 # git dir lives in ANOTHER writable root. The hooks there are a trust handoff too.

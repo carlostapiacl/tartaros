@@ -3,7 +3,7 @@ id = "fs-symlink-rename-out"
 source = "anthropics/sandbox-runtime test/sandbox/write-through-links.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # rename(2) is a different path from open+write. The agent writes a file in its
 # root, then moves it ONTO an outside file through a symlinked directory.

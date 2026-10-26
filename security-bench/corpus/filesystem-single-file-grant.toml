@@ -7,7 +7,7 @@ id = "filesystem-single-file-grant"
 source = "nolabs-ai/nono tests/integration/test_child_tool_boundaries.sh (\"session sandbox writes granted single file\") (Apache-2.0)"
 category = "filesystem"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 [policy]
 writable_roots = ["{root}/work/out.txt"]

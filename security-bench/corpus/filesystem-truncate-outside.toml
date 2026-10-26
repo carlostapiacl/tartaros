@@ -6,7 +6,7 @@ id = "filesystem-truncate-outside"
 source = "nolabs-ai/nono tests/integration/test_system_paths.sh (\"cannot write to ...\") (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 requires = ["landlock"]
 
 [policy]

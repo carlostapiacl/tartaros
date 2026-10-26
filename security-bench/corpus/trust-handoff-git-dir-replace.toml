@@ -10,7 +10,7 @@ id = "trust-handoff-git-dir-replace"
 source = "anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)"
 category = "trust-handoff"
 severity = "critical"
-os = ["macos"]
+os = ["macos", "windows"]
 
 # Move the WHOLE .git aside (its protected children travel with it) and create a
 # new .git at the original path with a planted config. The protected inodes are

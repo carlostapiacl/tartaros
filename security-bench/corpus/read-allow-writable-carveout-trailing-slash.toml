@@ -3,7 +3,7 @@ id = "read-allow-writable-carveout-trailing-slash"
 source = "anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "medium"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A carve-out named with a trailing slash in BOTH read_allows and writable_roots,
 # inside a read-denied dir. It must stay writable (srt's bug left it read-only,

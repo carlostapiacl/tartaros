@@ -3,7 +3,7 @@ id = "read-deny-not-reopened-by-nested-writable"
 source = "anthropics/sandbox-runtime test/sandbox/default-write-paths.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A writable root nested INSIDE a read-denied dir (e.g. a log dir under a denied
 # home) must not re-open reads of the rest of that dir. The write grant itself

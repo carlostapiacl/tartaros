@@ -4,7 +4,7 @@ id = "fs-writable-root-symlink-parent"
 source = "anthropics/sandbox-runtime test/sandbox/symlink-boundary.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A write root that is a symlink to a BROADER scope (an ancestor; srt's case is
 # /tmp/claude -> /) must not widen the grant to that ancestor. Writing a sibling of

@@ -3,7 +3,7 @@ id = "filesystem-write-reallow-inside-deny"
 source = "openai/codex codex-rs/linux-sandbox/tests/suite/sandbox.rs::sandbox_reenables_writable_subpaths_under_unreadable_parents (Apache-2.0)"
 category = "filesystem"
 severity = "medium"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Deny reads on a directory, re-allow one branch, and that branch is also a
 # writable root: the agent can write+read the branch but not read siblings.

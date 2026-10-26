@@ -5,7 +5,23 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.17] — 2026-10-26
 
+### Added
+- **Masked credentials on Windows, `sandbox-user` tier.** `--settings`
+  `credentials.envVars` with `mode: "mask"` now run there: the swap is the same
+  broker's, on the setup's broker port, and the agent is another user, who cannot
+  read tartaros's environment. Measured on Windows 10: the agent holds the
+  sentinel, no variable of its holds the value, httpbin.org receives the real
+  one. The `appcontainer` tier refuses them by name (exit 78): it has no broker
+  channel.
+- **Windows in the security bench's certified set.** 69 scenarios that passed on
+  both Windows tiers, their baselines included, now list `windows` in `os`: the
+  certified run is 87 scenarios on each tier, all passing (it was 18).
+
 ### Changed
+- **`--settings` runs on Windows.** A settings-driven run is strict, and the
+  Windows backend refused `strict` together with `--seccomp-strict`. Its
+  validation already refuses every field it cannot enforce, none best-effort, so
+  `strict` is now accepted; the syscall hardening itself is still refused.
 - **seccompiler 0.5.0** (was 0.4.0), Linux. Its syscall tables move to kernel 6.12
   and it adds riscv64; tartaros builds its filters from `libc` syscall numbers,
   not those tables, so no filter changes. Measured on kernel 6.8: the workspace
@@ -14,6 +30,13 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   wired to `tartaros run` yet.
 
 ### Fixed
+- **docs/limits.md, Windows:** it said `tartaros run` did not dispatch to the
+  backend and that there was no egress broker; both have been there since the
+  backend landed. It now also says what the `sandbox-user` tier breaks: Windows
+  refuses SSPI credentials to the restricted token the agent runs under, so a
+  client on the system TLS stack (`curl.exe`, PowerShell, .NET) fails every HTTPS
+  connection there; clients with their own TLS stack (Node, Python, Git, rustls)
+  work.
 - **A release run no longer fails on a version another run of the same tag just
   published.** The registry can hold it staged, not yet visible to `npm view`,
   and answer 409; that now counts as published. Seen on 0.1.0-alpha.16, whose
