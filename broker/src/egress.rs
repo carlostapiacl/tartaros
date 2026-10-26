@@ -21,6 +21,13 @@ pub(crate) fn host_allowed(allowed: &[String], host: &str) -> bool {
     })
 }
 
+/// [`host_allowed`] without its "empty list = every host" rule: an empty list
+/// covers nothing. For lists that grant something to a host (a credential's
+/// hosts), where empty must mean none.
+pub(crate) fn host_allowed_nonempty(patterns: &[String], host: &str) -> bool {
+    !patterns.is_empty() && host_allowed(patterns, host)
+}
+
 /// Is `ip` an internal/private destination an egress broker should refuse by
 /// default? Covers loopback, RFC1918, link-local (169.254.x — cloud metadata at
 /// 169.254.169.254), CGNAT, "this host" 0.0.0.0, IPv6 loopback/link-local and

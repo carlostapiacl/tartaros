@@ -248,6 +248,12 @@ pub struct Policy {
     /// CLI applies this to the process environment before spawning.
     pub inherit_env: bool,
     pub env_passthrough: Vec<String>,
+    /// Variables set LAST, over the allowlist, `inherit_env` and
+    /// `env_passthrough` alike: what the supervisor decides the agent sees, not
+    /// what the launcher had. A masked credential's sentinel goes here, so the
+    /// real value in the launcher's environment never reaches the agent, even
+    /// under `inherit_env`; so do the trust-store variables of its CA.
+    pub env_set: Vec<(String, String)>,
     /// Opt-in (Linux): run the agent in a private PID + mount namespace so it
     /// sees ONLY its own process subtree — it cannot enumerate, inspect
     /// (`/proc/<pid>/cmdline`) or signal host processes, and a fresh `/proc` is
@@ -399,6 +405,9 @@ impl Policy {
                     }
                 }
             }
+        }
+        for (k, v) in &self.env_set {
+            set(&mut out, k, v.clone());
         }
         Some(out)
     }
@@ -1244,6 +1253,28 @@ mod tests {
 
     fn get<'a>(env: &'a [(String, String)], k: &str) -> Option<&'a str> {
         env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn env_set_wins_over_inherit_env_and_passthrough() {
+        // A masked credential: the launcher holds the real value, the agent must
+        // see the sentinel whatever else the policy passes through.
+        let launcher = vec![
+            ("GH_TOKEN".to_string(), "ghp_real".to_string()),
+            ("PATH".to_string(), "/bin".to_string()),
+        ];
+        let set = vec![("GH_TOKEN".to_string(), "fake_value_x".to_string())];
+        for p in [
+            Policy { inherit_env: true, env_set: set.clone(), ..Default::default() },
+            Policy { env_passthrough: vec!["GH_TOKEN".into()], env_set: set.clone(), ..Default::default() },
+            Policy { env_passthrough: vec!["GH_TOKEN=ghp_real".into()], env_set: set.clone(), ..Default::default() },
+            Policy { env_set: set.clone(), ..Default::default() },
+        ] {
+            let env = p.child_env_from(&launcher).unwrap();
+            let got: Vec<&String> = env.iter().filter(|(k, _)| k == "GH_TOKEN").map(|(_, v)| v).collect();
+            assert_eq!(got, vec!["fake_value_x"], "{:?}", p.inherit_env);
+            assert!(!env.iter().any(|(_, v)| v == "ghp_real"));
+        }
     }
 
     #[test]
