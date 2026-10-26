@@ -9,7 +9,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The runner's defaults make part of the corpus unmeasurable: AppArmor
       # restricts unprivileged user namespaces (Ubuntu 23.10+), Yama forbids
       # tracing a non-child, and the root scenarios (mknod, capabilities) only
@@ -44,7 +44,7 @@ jobs:
   macos:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: build
         run: cargo build --workspace
       - name: tests
