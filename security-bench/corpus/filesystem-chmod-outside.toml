@@ -1,11 +1,10 @@
-# STATUS 2026-10-15 (known gap): macos=pass, linux=violation
 # derived from nolabs-ai/nono tests/integration/test_commands.sh ("chmod blocked by default"; nono blocks the argv, we test the syscall) (Apache-2.0)
 # Landlock has NO access right for chmod/chown/utimes/setxattr (documented
-# Landlock limitation), so a Landlock-only backend cannot stop the agent from
-# changing the mode of a file outside its territory (make a script world-
-# writable, strip +x from a tool, chmod 000 a user file). Seatbelt mediates it
-# (file-write-mode). EXPECTED: VIOLATION on Linux unless the backend adds a
-# seccomp rule for fchmodat & co. — a candidate for corpus-known-gaps.
+# Landlock limitation), so Landlock alone cannot stop the agent from changing
+# the mode of a file outside its territory (make a script world-writable, strip
+# +x from a tool, chmod 000 a user file). The Linux backend closes it by
+# remounting everything outside the writable roots read-only in a private mount
+# namespace; Seatbelt mediates it directly (file-write-mode).
 id = "filesystem-chmod-outside"
 source = "nolabs-ai/nono tests/integration/test_commands.sh (\"chmod blocked by default\"; nono blocks the argv, we test the syscall) (Apache-2.0)"
 category = "filesystem"

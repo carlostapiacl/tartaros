@@ -1,4 +1,3 @@
-# STATUS 2026-10-15 (known gap): linux=violation
 # derived from anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)
 id = "trust-handoff-git-exchange-rename"
 source = "anthropics/sandbox-runtime test/sandbox/linux-ancestor-pin.test.ts (Apache-2.0)"

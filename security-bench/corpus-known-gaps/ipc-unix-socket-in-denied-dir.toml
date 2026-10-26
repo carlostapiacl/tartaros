@@ -1,4 +1,4 @@
-# STATUS 2026-10-15 (known gap): macos=vacuous, linux=violation
+# STATUS 2026-10-26 (known gap): macos=vacuous, linux=pass
 # derived from nolabs-ai/nono crates/nono-cli/tests/socket_access_run.rs (filesystem_directory_deny_blocks_nested_unix_socket_connect_on_macos) (Apache-2.0)
 # A unix socket living INSIDE a read-denied directory (think ~/.ssh/agent.sock,
 # ~/.docker/run/docker.sock, ~/.gnupg/S.gpg-agent) must not be connectable just

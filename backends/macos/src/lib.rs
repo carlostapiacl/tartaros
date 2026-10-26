@@ -776,6 +776,25 @@ fn emit_handoff_regex(p: &mut String, root: &Path, home: bool) {
             emit(name);
         }
     }
+    // A symlink in place of an ANCESTOR of a multi-component name (`.claude` ->
+    // a decoy dir holding settings.json) redirects the whole surface: Seatbelt
+    // checks the resolved path, so the rules above see the decoy, not `.claude/…`,
+    // and a trusted tool later loads it. Deny creating a symlink with an ancestor's
+    // name at any depth (a rename onto that name is a create too, measured). A
+    // directory of that name is still created normally (`mkdir .claude`, `git init`).
+    let mut ancestors: Vec<&str> = HANDOFF_CONFIG_NAMES
+        .iter()
+        .chain(HANDOFF_GIT_NAMES)
+        .flat_map(|n| n.match_indices('/').map(move |(i, _)| &n[..i]))
+        .collect();
+    ancestors.sort_unstable();
+    ancestors.dedup();
+    for a in ancestors {
+        let a_re = regex_escape(a);
+        p.push_str(&format!(
+            "(deny file-write-create (require-all (regex #\"^{root_re}(/.*)?/{a_re}$\") (vnode-type SYMLINK)))\n"
+        ));
+    }
     // Submodule gitdirs: `.git/modules/<name>/{hooks,config}` at any depth — the
     // `.git/hooks`/`.git/config` patterns above do not match these (different
     // path). `.*` spans nested submodules too. Contents (objects/refs) stay
@@ -966,6 +985,24 @@ impl Drop for TempProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_symlink_cannot_take_a_handoff_ancestors_name() {
+        let policy = Policy { writable_roots: vec![PathBuf::from("/work")], ..Default::default() };
+        let prof = compile_profile(&policy);
+        for a in [".claude", ".github", ".git"] {
+            let re = regex_escape(a);
+            assert!(
+                prof.contains(&format!(
+                    "(deny file-write-create (require-all (regex #\"^/work(/.*)?/{re}$\") (vnode-type SYMLINK)))"
+                )),
+                "{a}: a symlink in its place would redirect the surface under it"
+            );
+        }
+        // Only ancestors of multi-component names: a single-component name is
+        // already denied whole, and `.codex` has no surface under another name.
+        assert!(!prof.contains("/\\.codex$\") (vnode-type SYMLINK)"));
+    }
 
     #[test]
     fn profile_has_no_kern_proc_and_denies_last() {

@@ -1,4 +1,4 @@
-# KNOWN GAP 2026-10-15: Landlock does not mediate metadata ops (chmod/utime/xattr)
+# STATUS 2026-10-26 (known gap): macos=pass, linux=vacuous
 # outside the writable roots; a mount-namespace ro-remount would close it. Also
 # needs setfattr(attr) installed to run the baseline.
 # derived from nolabs-ai/nono tests/integration/test_commands.sh (destructive metadata ops) (Apache-2.0)
