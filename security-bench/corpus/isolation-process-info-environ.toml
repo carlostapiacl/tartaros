@@ -3,14 +3,16 @@ id = "isolation-process-info-environ"
 source = "anthropics/sandbox-runtime test/sandbox/pid-namespace-isolation.test.ts (Apache-2.0)"
 category = "isolation"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux"]
 
 # isolate_process_info exists in the policy but no corpus scenario exercises it.
 # The launcher's environment is where secrets live before the scrub (F-13), so
 # the agent must not read ANOTHER process's environment: Linux /proc/<ppid>/environ,
 # macOS KERN_PROCARGS2 (what `ps -E` uses). The launcher surely has PATH=, so a
 # successful read greps it. Yama does not restrict environ reads, so this is a
-# real test of the sandbox.
+# real test of the sandbox. macOS is a known gap, measured with the direct
+# sysctl: corpus-known-gaps/isolation-process-info-procargs-macos.toml (`ps -E`
+# fails inside Seatbelt for reasons of its own, so it passed without testing it).
 [policy]
 writable_roots = ["{root}/work"]
 isolate_process_info = true

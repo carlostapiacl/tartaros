@@ -165,8 +165,10 @@ pub struct Policy {
     /// the whole runs directory, allow this run's own files). Deny-inside-allow
     /// for reads, the mirror of the write carve.
     pub read_allows: Vec<PathBuf>,
-    /// Deny any process-info / environment read of processes outside this
-    /// sandbox (macOS `KERN_PROCARGS2`, Linux `/proc/<pid>`).
+    /// Deny reads of processes outside this sandbox: Linux `/proc/<pid>`. On
+    /// macOS it narrows `process-info*` to the agent itself, but no Seatbelt rule
+    /// denies `KERN_PROCARGS2`: other processes' arguments, and the environment of
+    /// any binary not Apple's own, stay readable (docs/broker.md).
     pub isolate_process_info: bool,
     /// Opt-in (P1-2 mitigation): before launch, create empty read-only
     /// placeholders for ABSENT top-level trust-handoff config files under the

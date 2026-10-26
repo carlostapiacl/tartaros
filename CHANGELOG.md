@@ -14,6 +14,19 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   `NODE_EXTRA_CA_CERTS`**, besides the webpki roots, as sandbox-runtime's proxy
   does. A host behind a site-local root, or a TLS-inspecting proxy, failed there
   although the agent's own trust bundle already held that root.
+- **A run whose secret another process exposes is refused (exit 78).** Before
+  the agent starts, tartaros reads every exec record it can, as the agent could,
+  and refuses when one holds a masked credential's or the broker's secret (a
+  shell that `export`ed it hands it to every child), naming the variable and the
+  process, not the value. `--allow-exposed-secrets` runs anyway. On Linux, runs
+  with `--isolate-pids` or `--isolate-proc` are not checked.
+- **macOS: `isolate_process_info` does not hide other processes' environment,
+  and the docs no longer say it does.** `KERN_PROCARGS2` returns another
+  process's arguments, and its environment unless the binary is Apple's own; no
+  Seatbelt rule we found denies it. The bench's `isolation-process-info-environ`
+  passed on macOS because `ps -E` fails inside Seatbelt for reasons of its own;
+  it is now Linux-only, and `isolation-process-info-procargs-macos` keeps the gap,
+  measured with the call itself.
 
 ### Changed
 - **A run's secrets are out of tartaros's exec environment.** Masked
