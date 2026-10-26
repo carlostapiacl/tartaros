@@ -231,8 +231,10 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
     // An explicit deny on a path that does not exist yet can't be bound
     // read-only (there is nothing to bind) and the whole-root grant would let it
     // be created, so such a policy uses the carve, which withholds the nearest
-    // existing ancestor instead.
-    if !policy.absent_write_denies().is_empty() {
+    // existing ancestor instead. Only one inside a writable root (or /dev) needs
+    // that: no write grant reaches one outside them, under either strategy, so
+    // it is as unwritable with the bind mounts as with the carve.
+    if !absent_write_denies_in_roots(policy).is_empty() {
         return Vec::new();
     }
     // Same for a handoff name that is a symlink resolving nowhere: only the carve,
@@ -246,6 +248,84 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
         return Vec::new();
     }
     paths
+}
+
+/// The explicit write denies that do not exist yet and that a write grant would
+/// reach: inside a writable root, or /dev (granted to every run). Compared on
+/// the resolved paths, so a deny spelt through a symlink into a root counts.
+#[cfg(target_os = "linux")]
+fn absent_write_denies_in_roots(policy: &Policy) -> Vec<PathBuf> {
+    let granted: Vec<PathBuf> = policy
+        .writable_roots
+        .iter()
+        .map(|r| tartaros_core::resolve_best_effort(r))
+        .chain(std::iter::once(PathBuf::from("/dev")))
+        .collect();
+    policy
+        .absent_write_denies()
+        .into_iter()
+        .filter(|d| granted.iter().any(|r| d.starts_with(r)))
+        .collect()
+}
+
+/// A writable root in which the run cannot create new entries, and why.
+#[cfg(target_os = "linux")]
+pub struct RootWithoutNewEntries {
+    pub root: PathBuf,
+    /// The denies below it that the carve withholds it for.
+    pub denies: Vec<PathBuf>,
+    /// Why the bind-mount strategy, which would lift it, is not used.
+    pub because: String,
+}
+
+/// The writable roots this policy, on this host, leaves without the right to
+/// create new entries directly in them: the carve grants a root's existing
+/// children but never the root itself when a deny lies below it. Empty under
+/// the bind-mount strategy. Read off the same carve the run uses, so it says
+/// exactly what the run will do.
+#[cfg(target_os = "linux")]
+pub fn roots_without_new_entries(policy: &Policy) -> Vec<RootWithoutNewEntries> {
+    use tartaros_core::resolve_best_effort;
+    if uses_bind_mounts(policy) {
+        return Vec::new();
+    }
+    let grants = policy.linux_write_allowlist_except(&on_readonly_mount);
+    let absent_inside = absent_write_denies_in_roots(policy);
+    let because = if !namespace::mount_ns_capable() {
+        format!("no mount namespace on this host: {}", namespace::userns_blocker_hint())
+    } else if !absent_inside.is_empty() {
+        format!(
+            "a write deny inside a writable root does not exist yet ({}), and a read-only bind mount needs something to bind",
+            absent_inside[0].display()
+        )
+    } else {
+        "a trust-handoff link there resolves nowhere, and a read-only bind mount needs something to bind".into()
+    };
+    let denied: Vec<PathBuf> = policy
+        .fs_rules
+        .iter()
+        .filter(|r| r.access == tartaros_core::Access::Deny)
+        .map(|r| resolve_best_effort(&r.path))
+        .chain(policy.trust_handoff_rules().into_iter().map(|r| resolve_best_effort(&r.path)).filter(|p| p.exists()))
+        .filter(|p| !on_readonly_mount(p))
+        .collect();
+    let mut out = Vec::new();
+    for root in &policy.writable_roots {
+        let r = resolve_best_effort(root);
+        if !r.is_dir() || grants.iter().any(|g| *g == r) {
+            continue;
+        }
+        let mut denies: Vec<PathBuf> = denied.iter().filter(|d| d.starts_with(&r) && **d != r).cloned().collect();
+        if denies.is_empty() {
+            // The root itself is denied (or lies inside a deny): nothing in it is
+            // writable, which is not this limit.
+            continue;
+        }
+        denies.sort();
+        denies.dedup();
+        out.push(RootWithoutNewEntries { root: root.clone(), denies, because: because.clone() });
+    }
+    out
 }
 
 /// Is `p` an existing path on a read-only mount? Such a path cannot be written,
@@ -1238,5 +1318,102 @@ mod tests {
             ..Default::default()
         };
         assert!(LandlockBackend.validate(&policy).is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("tartaros-rootent-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        tartaros_core::resolve_best_effort(&d)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_deny(p: PathBuf) -> tartaros_core::FsRule {
+        tartaros_core::FsRule { path: p, access: tartaros_core::Access::Deny, even_if_absent: true }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_an_absent_deny_a_write_grant_reaches_keeps_the_bind_mounts_off() {
+        let root = scratch("absent");
+        let outside = scratch("absent-outside");
+        let link = scratch("absent-link").join("into-root");
+        let _ = std::os::unix::fs::symlink(&root, &link);
+        let policy = Policy {
+            writable_roots: vec![root.clone()],
+            fs_rules: vec![
+                write_deny(root.join("not-yet/x")),
+                write_deny(outside.join("not-yet/x")),
+                write_deny(link.join("via-link")),
+                write_deny(PathBuf::from("/dev/tartaros-not-yet")),
+            ],
+            ..Default::default()
+        };
+        let got = absent_write_denies_in_roots(&policy);
+        assert!(got.contains(&root.join("not-yet/x")), "{got:?}");
+        assert!(got.contains(&root.join("via-link")), "a deny spelt through a link into the root: {got:?}");
+        assert!(got.contains(&PathBuf::from("/dev/tartaros-not-yet")), "{got:?}");
+        assert!(!got.iter().any(|p| p.starts_with(&outside)), "no grant reaches it: {got:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_absent_deny_inside_a_root_is_said_whatever_the_host() {
+        // The carve withholds the root for it on every host: no bind mount can
+        // cover a path that is not there. The warning used to skip it.
+        let root = scratch("said-absent");
+        let policy = Policy {
+            writable_roots: vec![root.clone()],
+            fs_rules: vec![write_deny(root.join("not-yet"))],
+            ..Default::default()
+        };
+        let got = roots_without_new_entries(&policy);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].root, root);
+        assert_eq!(got[0].denies, vec![root.join("not-yet")]);
+        assert!(!policy.linux_write_allowlist_except(&on_readonly_mount).contains(&root));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_existing_deny_is_said_exactly_when_the_carve_is_used() {
+        let root = scratch("said-existing");
+        std::fs::create_dir_all(root.join("claude")).unwrap();
+        let policy = Policy {
+            writable_roots: vec![root.clone()],
+            fs_rules: vec![write_deny(root.join("claude"))],
+            ..Default::default()
+        };
+        let got = roots_without_new_entries(&policy);
+        if uses_bind_mounts(&policy) {
+            assert!(got.is_empty(), "the bind mounts let the root take new entries");
+        } else {
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].denies, vec![root.join("claude")]);
+            assert!(got[0].because.starts_with("no mount namespace"), "{}", got[0].because);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_absent_deny_outside_the_roots_does_not_change_the_strategy() {
+        let root = scratch("strategy");
+        std::fs::create_dir_all(root.join("claude")).unwrap();
+        let alone = Policy {
+            writable_roots: vec![root.clone()],
+            fs_rules: vec![write_deny(root.join("claude"))],
+            ..Default::default()
+        };
+        let mut with_outside = alone.clone();
+        with_outside.fs_rules.push(write_deny(scratch("strategy-outside").join("not-yet/x")));
+        assert_eq!(uses_bind_mounts(&alone), uses_bind_mounts(&with_outside));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_root_with_nothing_denied_below_is_not_said() {
+        let root = scratch("clean");
+        let policy = Policy { writable_roots: vec![root], ..Default::default() };
+        assert!(roots_without_new_entries(&policy).is_empty());
     }
 }
