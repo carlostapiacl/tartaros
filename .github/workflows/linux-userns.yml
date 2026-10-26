@@ -26,7 +26,7 @@ jobs:
       matrix:
         userns: [restricted, open]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: open unprivileged user namespaces
         if: matrix.userns == 'open'
         run: |
