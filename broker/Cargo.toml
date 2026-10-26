@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 tartaros-core = { path = "../core" }
-ureq = "2.12.1"
+ureq = "3.5.0"
 
 [dev-dependencies]
 tartaros-linux = { path = "../backends/linux" }
