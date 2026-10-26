@@ -166,7 +166,31 @@ impl MitmCa {
     }
 }
 
-/// The upstream side's TLS: the webpki roots, plus `extra` (a test's own CA).
+/// The roots in the launcher's `NODE_EXTRA_CA_CERTS`, trusted upstream besides the
+/// webpki ones, as sandbox-runtime's proxy does (Node reads that variable for it): a
+/// site-local root, a TLS-inspecting corporate proxy, a test's own CA. An unreadable
+/// file, or one without a certificate, adds nothing and says so.
+pub fn launcher_extra_roots() -> Vec<CertificateDer<'static>> {
+    match std::env::var_os("NODE_EXTRA_CA_CERTS") {
+        Some(p) if !p.is_empty() => roots_from_pem_file(Path::new(&p)),
+        _ => Vec::new(),
+    }
+}
+
+fn roots_from_pem_file(path: &Path) -> Vec<CertificateDer<'static>> {
+    use rustls::pki_types::pem::PemObject;
+    let roots: Vec<_> = match CertificateDer::pem_file_iter(path) {
+        Ok(it) => it.filter_map(Result::ok).collect(),
+        Err(_) => Vec::new(),
+    };
+    if roots.is_empty() {
+        eprintln!("tartaros: NODE_EXTRA_CA_CERTS={}: no certificate read; not trusted upstream", path.display());
+    }
+    roots
+}
+
+/// The upstream side's TLS: the webpki roots, plus `extra` (the launcher's
+/// `NODE_EXTRA_CA_CERTS`, or a test's own CA).
 pub fn upstream_tls(extra: &[CertificateDer<'static>]) -> io::Result<Arc<ClientConfig>> {
     let mut roots = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
     for c in extra {
@@ -498,6 +522,24 @@ impl Broker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_roots_read_every_certificate_of_a_pem_file() {
+        let dir = std::env::temp_dir().join(format!("tartaros-extra-roots-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = MitmCa::new().unwrap();
+        let b = MitmCa::new().unwrap();
+        let two = dir.join("two.pem");
+        std::fs::write(&two, format!("{}\n{}", a.cert_pem, b.cert_pem)).unwrap();
+        assert_eq!(roots_from_pem_file(&two).len(), 2);
+        let junk = dir.join("junk.pem");
+        std::fs::write(&junk, "not a certificate").unwrap();
+        assert!(roots_from_pem_file(&junk).is_empty());
+        assert!(roots_from_pem_file(&dir.join("absent.pem")).is_empty());
+        // what they add is trusted: the upstream config builds with them
+        upstream_tls(&roots_from_pem_file(&two)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn names_target_matches_host_and_default_port() {

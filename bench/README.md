@@ -6,7 +6,7 @@ sandbox either passes or fails, run against the real binaries.
 - control (writes land in the workspace, not in HOME)
 - `.git/hooks` protected at the first level AND in nested repos
 - a deny survives renaming an ancestor directory
-- no cross-process environment read (macOS KERN_PROCARGS2, Linux /proc)
+- no cross-process environment read (Linux /proc; on macOS a known gap, KERN_PROCARGS2)
 - exit status on signal death; a single SIGINT; descendants reaped
 
 > These checks now live as contracts in [`security-bench/corpus/`](../security-bench/corpus/),

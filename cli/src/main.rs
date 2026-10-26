@@ -25,6 +25,7 @@
 //!   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes (no curated base)
 //!   --env KEY[=VALUE]      carry one launcher var through, or set it (default: env is scrubbed)
 //!   --inherit-env          inherit the full launcher env (opt into leaking secrets)
+//!   --allow-exposed-secrets  run even if another process's exec record holds a run's secret
 //!   --timeout SECS         kill the process group after SECS (exit 124)
 //!   --max-mem BYTES        address-space limit
 //!   --max-procs N          process limit
@@ -455,6 +456,110 @@ fn reexec_without_secrets() {
     exit(1);
 }
 
+/// Set by `--allow-exposed-secrets`: run even when another process's exec
+/// record holds one of the run's secrets.
+static ALLOW_EXPOSED_SECRETS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Secrets shorter than this are not looked for: too many chance matches.
+const EXPOSED_MIN_LEN: usize = 8;
+
+/// The exec records (arguments and environment) of this user's processes, as the
+/// agent could read them, with each process's name. On macOS that is
+/// `KERN_PROCARGS2`, which no Seatbelt rule we found denies (measured on macOS 15:
+/// neither `sysctl-read` nor `process-info*`); on Linux, `/proc/<pid>/cmdline` and
+/// `environ`.
+#[cfg(target_os = "macos")]
+fn exec_records() -> Vec<(u32, String, Vec<u8>)> {
+    let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if n <= 0 {
+        return Vec::new();
+    }
+    let mut pids = vec![0i32; n as usize + 64];
+    let bytes = (pids.len() * std::mem::size_of::<i32>()) as i32;
+    let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) }.max(0) as usize;
+    let mut buf = vec![0u8; 1 << 20]; // ARG_MAX
+    let mut out = Vec::new();
+    for &pid in &pids[..n.min(pids.len())] {
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+        let mut size = buf.len();
+        let rc = unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
+        if rc != 0 || size <= 4 {
+            continue;
+        }
+        let rec = buf[..size].to_vec();
+        // argc (4 bytes), then the exec path.
+        let name = rec[4..].split(|b| *b == 0).next().map(|p| String::from_utf8_lossy(p).into_owned()).unwrap_or_default();
+        out.push((pid as u32, name, rec));
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn exec_records() -> Vec<(u32, String, Vec<u8>)> {
+    let Ok(dir) = std::fs::read_dir("/proc") else { return Vec::new() };
+    let mut out = Vec::new();
+    for e in dir.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+        let mut rec = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
+        rec.extend(std::fs::read(e.path().join("environ")).unwrap_or_default());
+        if rec.is_empty() {
+            continue;
+        }
+        let name = std::fs::read_to_string(e.path().join("comm")).unwrap_or_default().trim().to_string();
+        out.push((pid, name, rec));
+    }
+    out
+}
+
+/// Refuse the run (exit 78) when another process's exec record holds one of its
+/// secrets: the agent could read it there, and the masked credential or the
+/// broker would hide nothing. Most often the launcher: a shell that `export`ed
+/// the value, or named it on its command line. On Linux a run that hides other
+/// processes (`--isolate-pids`, `--isolate-proc`) is not checked.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn refuse_exposed_secrets(p: &Policy) {
+    if ALLOW_EXPOSED_SECRETS.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if p.isolate_pids || p.isolate_process_info {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let _ = p;
+    let secrets: Vec<(String, String)> = secret_names()
+        .into_iter()
+        .filter_map(|n| secret_var(&n).map(|v| (n, v)))
+        .filter(|(_, v)| v.len() >= EXPOSED_MIN_LEN)
+        .collect();
+    if secrets.is_empty() {
+        return;
+    }
+    let me = std::process::id();
+    let mut exposed = Vec::new();
+    for (pid, name, rec) in exec_records() {
+        if pid == me {
+            continue;
+        }
+        for (var, v) in &secrets {
+            if rec.windows(v.len()).any(|w| w == v.as_bytes()) {
+                exposed.push(format!("{var} in pid {pid} ({name})"));
+            }
+        }
+    }
+    if exposed.is_empty() {
+        return;
+    }
+    for e in &exposed {
+        eprintln!("tartaros: secret exposed: the value of {e}, whose arguments or environment the agent can read");
+    }
+    eprintln!(
+        "tartaros: refusing to run. Give the value to tartaros's environment only (`VAR=\"$(…)\" tartaros run …`, \
+         not `export`), or pass --allow-exposed-secrets"
+    );
+    exit(EXIT_POLICY_REFUSED);
+}
+
 fn main() {
     #[cfg(unix)]
     take_secrets_from_pipe();
@@ -547,6 +652,8 @@ ENVIRONMENT (secrets in the launcher's env are NOT governed by Landlock/Seatbelt
   --env KEY              carry one var through from the launcher's environment
   --env KEY=VALUE        set one var explicitly for the agent
   --inherit-env          FULL passthrough: inherit the launcher env, secrets and all
+  --allow-exposed-secrets  run even if another process's exec record (a shell that
+                         exported it) holds a masked credential's or the broker's secret
 
 LIMITS:
   --timeout SECS         kill the run after SECS (exit 124)
@@ -583,6 +690,8 @@ fn cmd_run(rest: &[String]) -> ! {
     // Secrets out of tartaros's exec environment before anything can read it.
     #[cfg(unix)]
     reexec_without_secrets();
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    refuse_exposed_secrets(&p);
     if p.writable_roots.is_empty() {
         eprintln!("warning: no --write roots; the command cannot write anywhere");
     }
@@ -1119,13 +1228,11 @@ struct SandboxSettings {
     network: SandboxNet,
     /// sandbox-runtime's masked credentials (`envVars`/`files` with `mode: "mask"`,
     /// AWS pairs): a sentinel in the sandbox, swapped for the real value on egress
-    /// to the credential's hosts. Read only so it can be refused by name, not as an
-    /// unknown field: this backend does not do it (docs/limits.md).
+    /// to the credential's hosts. Env-var masking is done by the broker; the rest
+    /// is refused by name (docs/broker.md). The TLS termination it needs is
+    /// `network.tlsTerminate`, where sandbox-runtime's schema puts it.
     #[serde(default)]
     credentials: Option<serde_json::Value>,
-    /// The TLS termination masking needs. Refused with `credentials`.
-    #[serde(default, rename = "tlsTerminate")]
-    tls_terminate: Option<serde_json::Value>,
 }
 
 /// Does a settings value ask for anything? `null`, `{}`, `[]` and objects made
@@ -1169,6 +1276,10 @@ struct SandboxNet {
     allow_mach_lookup: Vec<String>,
     #[serde(default, rename = "allowMachRegister")]
     allow_mach_register: Vec<String>,
+    /// `tlsTerminate`: the TLS termination masked credentials need. Under
+    /// `network`, as in sandbox-runtime's schema (and as seisin writes it).
+    #[serde(default, rename = "tlsTerminate")]
+    tls_terminate: Option<serde_json::Value>,
 }
 
 /// Apply a sandbox-runtime settings file strictly: map the fields we can enforce
@@ -1337,7 +1448,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     // Masked credentials: what this backend does (env-var masking through the
     // egress broker) is checked here; what it does not (files, AWS pairs, a CA of
     // the caller's) is refused by name, so a caller hands the role elsewhere.
-    match mask_spec(s.credentials.as_ref(), s.tls_terminate.as_ref(), &p.allow_domains) {
+    match mask_spec(s.credentials.as_ref(), s.network.tls_terminate.as_ref(), &p.allow_domains) {
         Ok(Some(spec)) => {
             let _ = MASKED.set(spec);
         }
@@ -1598,6 +1709,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             "--browser" => p.browser = true,
             "--mach-lookup-only" => p.mach_lookup_only = true,
             "--inherit-env" => p.inherit_env = true,
+            "--allow-exposed-secrets" => ALLOW_EXPOSED_SECRETS.store(true, std::sync::atomic::Ordering::Relaxed),
             "--env" => p.env_passthrough.push(val()),
             "--timeout" => p.timeout = Some(Duration::from_secs(parse_num_or_exit(&val(), "--timeout (seconds)"))),
             "--max-mem" => p.max_memory_bytes = Some(parse_num_or_exit(&val(), "--max-mem (bytes)")),
