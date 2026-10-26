@@ -3,7 +3,7 @@ id = "trust-handoff-editor-dirs"
 source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
 category = "trust-handoff"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # srt write-denies the WHOLE .vscode/ and .idea/ directories (IDE run
 # configurations, extension recommendations, workspace tasks). tartaros covers

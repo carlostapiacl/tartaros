@@ -3,7 +3,7 @@ id = "write-deny-under-dotdot-root"
 source = "anthropics/sandbox-runtime test/sandbox/literal-path-entries.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The write root is spelled with a parent reference (p/keep/../real). A write-deny
 # beneath its real location must still apply. Comparing by spelling would judge the

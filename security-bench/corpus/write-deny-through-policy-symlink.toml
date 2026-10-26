@@ -3,7 +3,7 @@ id = "write-deny-through-policy-symlink"
 source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The POLICY spells the deny through a directory symlink (link -> decoy, e.g.
 # a repo that ships .claude as a symlink). The deny must land on the resolved

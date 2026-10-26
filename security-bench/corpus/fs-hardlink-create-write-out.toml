@@ -3,7 +3,7 @@ id = "fs-hardlink-create-write-out"
 source = "anthropics/sandbox-runtime test/sandbox/write-through-links.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # fs-hardlink-escape covers READING a read-denied file through a hard link. This is
 # the WRITE side: the agent tries to give a merely outside (not denied) file a

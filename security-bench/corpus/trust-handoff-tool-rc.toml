@@ -4,7 +4,7 @@ id = "trust-handoff-tool-rc"
 source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
 category = "trust-handoff"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Per-user tool config that a trusted tool on the host loads from the
 # directory: .gitconfig (aliases, core.pager/core.fsmonitor run commands) and

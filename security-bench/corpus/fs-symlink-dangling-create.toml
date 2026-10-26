@@ -3,7 +3,7 @@ id = "fs-symlink-dangling-create"
 source = "anthropics/sandbox-runtime test/sandbox/write-through-links.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A DANGLING symlink in the write root, pointing at an absent name outside it.
 # Opening it with O_CREAT would create the target outside the territory.

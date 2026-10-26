@@ -3,7 +3,7 @@ id = "filesystem-rm-under-read-deny-ancestor"
 source = "anthropics/sandbox-runtime test/sandbox/allow-read.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "medium"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Usability + containment: with a read-deny on an ancestor and a read/write
 # carve-out for the project, deleting a file IN the project works (control), but

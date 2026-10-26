@@ -3,7 +3,7 @@ id = "fs-writable-root-symlink-out"
 source = "anthropics/sandbox-runtime test/sandbox/symlink-write-path.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A write root that is ITSELF a symlink pointing out of bounds (here an earlier run
 # planted work/evil -> ../protected) must not turn the link's target into a write

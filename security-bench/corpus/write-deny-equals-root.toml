@@ -3,7 +3,7 @@ id = "write-deny-equals-root"
 source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The exact tie on the write side (read side: read-deny-wins-exact-tie): the
 # same directory is both a writable root and write-denied. Fail-safe = the deny

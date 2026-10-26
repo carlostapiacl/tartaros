@@ -3,7 +3,7 @@ id = "trust-handoff-bracketed-root"
 source = "anthropics/sandbox-runtime test/sandbox/macos-literal-deny-brackets.test.ts (Apache-2.0)"
 category = "trust-handoff"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The writable root's own path contains glob/regex metacharacters ("w[o]rk").
 # If the backend compiles that path as a pattern, "[o]" becomes a character class

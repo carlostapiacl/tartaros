@@ -3,7 +3,7 @@ id = "filesystem-write-deny-truncate-unlink"
 source = "openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_deny_globs_block_writes_to_existing_and_new_files (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A write-deny must block every mutation, not just create: append, truncate,
 # and unlink-then-recreate of an existing protected file.

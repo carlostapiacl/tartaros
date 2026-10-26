@@ -3,7 +3,7 @@ id = "read-allow-symlink-no-reopen"
 source = "anthropics/sandbox-runtime test/sandbox/read-deny-glob.test.ts, test/sandbox/read-list-precedence.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A read-allow entry lives in agent-writable space and is a symlink into a
 # read-denied dir (proj/docs -> home/.ssh). What an allow entry RESOLVES to must

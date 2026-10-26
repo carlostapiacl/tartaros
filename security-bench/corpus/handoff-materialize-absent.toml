@@ -5,7 +5,7 @@ severity = "high"
 # AppContainer (mkdir "C:/" returns access denied, not "exists"), so the attack
 # dies before it tests anything and the pass would be vacuous. The guarantee is
 # covered on Windows by the backend's materialize + protect, verified separately.
-os = ["linux"]
+os = ["linux", "windows"]
 
 # with materialization, the agent cannot create an absent trust-handoff config
 [policy]

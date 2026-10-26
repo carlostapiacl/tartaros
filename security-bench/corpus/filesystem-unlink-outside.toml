@@ -7,7 +7,7 @@ id = "filesystem-unlink-outside"
 source = "nolabs-ai/nono tests/integration/test_profiles.sh (\"default profile blocks rm outside granted area\") (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 [policy]
 writable_roots = ["{root}/work"]
