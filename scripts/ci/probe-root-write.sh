@@ -25,6 +25,7 @@ dir=$(mktemp -d)
 # name | denyWrite entries (JSON, without brackets)
 cases="control|
 existing-deny|\"$ROOT/claude\"
+absent-below-only|\"$ROOT/absent-$n\"
 existing+absent-below|\"$ROOT/claude\",\"$ROOT/absent-$n\"
 existing+absent-elsewhere|\"$ROOT/claude\",\"$HOME/.absent-$n/x\"
 absent-elsewhere-only|\"$HOME/.absent-$n/x\""

@@ -1354,18 +1354,19 @@ fn explain(p: &Policy) {
             for a in p.linux_read_allowlist() { println!("  r {}", a.display()); }
             println!("note: writes grant write-only; reads are governed by the read carve.");
             // Warn where the carve cannot allow creating NEW entries directly at a
-            // writable root (a trust-handoff/explicit deny sits below). This is LESS
-            // permission, not a contract break — a consumer surfaces it as a notice.
-            // Running with mount privileges (root/container) lifts it via bind mounts.
-            for root in &p.writable_roots {
-                let deny_below = p.trust_handoff_rules().iter().any(|r| r.path.starts_with(root) && r.path.exists())
-                    || p.fs_rules.iter().any(|r| r.access == Access::Deny && r.path.starts_with(root) && r.path.exists());
-                if deny_below {
-                    println!(
-                        "warning: on Linux, new entries cannot be created directly in {} (Landlock cannot subtract .git/hooks); existing files and subdirectories are writable. Run with mount privileges (root/container) to lift this via read-only bind mounts.",
-                        root.display()
-                    );
-                }
+            // writable root (a trust-handoff or explicit deny sits below, existing
+            // or not). This is LESS permission, not a contract break — a consumer
+            // surfaces it as a notice. The backend answers from the carve the run
+            // uses, so the warning is said exactly when the run will refuse.
+            for w in tartaros_linux::roots_without_new_entries(p) {
+                let mut named: Vec<String> = w.denies.iter().take(3).map(|d| d.display().to_string()).collect();
+                if w.denies.len() > 3 { named.push(format!("{} more", w.denies.len() - 3)); }
+                println!(
+                    "warning: on Linux, new entries cannot be created directly in {} (Landlock cannot grant a directory minus what is below it: {}); existing files and subdirectories are writable. Write into a subdirectory instead. The read-only bind mounts that lift this are not used: {}.",
+                    w.root.display(),
+                    named.join(", "),
+                    w.because
+                );
             }
         }
     }
