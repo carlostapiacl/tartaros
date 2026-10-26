@@ -34,5 +34,18 @@ jobs:
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
       - name: build
         run: cargo build -p tartaros-cli
+      - name: Linux backend unit tests
+        run: cargo test -p tartaros-linux --lib
+      - name: explain warns exactly when the run cannot create at a root
+        run: cargo test -p tartaros-cli --test root_new_entries -- --nocapture
       - name: probe root writes under --settings
+        if: always()
         run: sh scripts/ci/probe-root-write.sh target/debug/tartaros
+      # The same probe on the base branch's binary, so one log shows before and after.
+      - name: probe root writes, base branch
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          git fetch --depth=1 origin "${{ github.base_ref }}"
+          git worktree add ../base FETCH_HEAD
+          (cd ../base && cargo build -p tartaros-cli --target-dir "$GITHUB_WORKSPACE/target-base")
+          sh scripts/ci/probe-root-write.sh target-base/debug/tartaros

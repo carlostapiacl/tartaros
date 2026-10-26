@@ -5,6 +5,21 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`explain` warns whenever a writable root cannot take new entries (Linux).**
+  Without a mount namespace the carve grants a root's existing children but
+  never the root itself when a write deny lies below it. The warning only
+  looked at denies that existed, so an absent deny inside a root (which the
+  carve withholds the root for on every host) was not said, while the run
+  refused the write. It is now read off the same carve the run uses, names the
+  denies, and says why the bind mounts are not used (the host's userns knob,
+  or the absent deny).
+- **An absent write deny outside every writable root no longer turns the bind
+  mounts off (Linux).** No write grant reaches it under either strategy, yet
+  it made a host with namespaces fall back to the carve, so new entries at the
+  root were refused for nothing. Only an absent deny inside a root (or `/dev`)
+  still needs the carve.
+
 ## [0.1.0-alpha.14] — 2026-10-23
 
 Static Linux binaries (musl), a run no longer hangs on a FIFO, and the cgroup probe stops failing on loaded hosts.
