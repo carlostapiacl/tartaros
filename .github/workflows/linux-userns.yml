@@ -1,0 +1,38 @@
+name: linux-userns
+# ci.yml lifts the runner's AppArmor userns restriction so the corpus can
+# measure everything. That hides the host most users have: Ubuntu 23.10+ as a
+# non-root user, where no mount namespace can be made and the Linux backend
+# falls back to the Landlock carve. This job runs on both, side by side.
+on:
+  pull_request:
+    paths:
+      - "backends/linux/**"
+      - "core/**"
+      - "cli/**"
+      - "scripts/ci/**"
+      - ".github/workflows/linux-userns.yml"
+
+concurrency:
+  group: linux-userns-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: userns ${{ matrix.userns }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        userns: [restricted, open]
+    steps:
+      - uses: actions/checkout@v4
+      - name: open unprivileged user namespaces
+        if: matrix.userns == 'open'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: build
+        run: cargo build -p tartaros-cli
+      - name: probe root writes under --settings
+        run: sh scripts/ci/probe-root-write.sh target/debug/tartaros
