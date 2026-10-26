@@ -103,8 +103,19 @@ than you asked for.
     caller asked for isolation we cannot provide.
   - the create-at-root bind mounts **fall back to the Landlock carve**: existing
     files and subdirectories stay writable, only *new* entries directly at a root
-    that has a handoff below it are blocked, and `explain` prints a one-line
-    warning. (Landlock cannot express "allow write to X but deny X/y".)
+    that has a handoff or an explicit write deny below it are blocked (an
+    allowWrite of `/tmp` with a deny on `/tmp/claude` cannot create
+    `/tmp/new-file`, but can write `/tmp/some-dir/new-file`), and `explain`
+    prints a one-line `warning:` naming the root, the denies and the cause.
+    There is no way around it in Landlock itself (checked up to ABI v9, Linux
+    7.1, the newest the `landlock` crate in use knows; v8 adds all-thread
+    restriction and v9 a right for resolving unix sockets): a rule
+    grants rights on a whole hierarchy, a deny is the absence of a rule, and the
+    rights that create an entry are the parent's. Granting the root only the
+    `MAKE_*` rights would let the agent create entries inside the denied
+    directory too, and would not let it write the file it just created. A
+    consumer that needs a fresh path should make a subdirectory of the root, or
+    allow the run a user namespace.
 
   The base sandbox — FS carve + trust-handoff, read-deny, per-port network,
   resource caps, the broker — needs **no** namespace and runs unprivileged on
@@ -127,7 +138,9 @@ than you asked for.
   inodes, so an explicit `--write-deny` on an absent path is enforced by
   withholding the nearest existing ancestor: its existing children stay writable,
   but no new entry can be created directly in it. Such a policy uses the carve
-  instead of the bind-mount strategy. macOS matches by path and has no such cost.
+  instead of the bind-mount strategy, on every host, when the absent deny lies
+  inside a writable root (or `/dev`); one outside them is unwritable anyway and
+  leaves the strategy alone. macOS matches by path and has no such cost.
   Earlier versions silently dropped an absent explicit deny; it is now enforced.
 
 - **A read-deny on a path that does not exist yet (Linux).** The same inode limit:

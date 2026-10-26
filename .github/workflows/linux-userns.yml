@@ -1,0 +1,51 @@
+name: linux-userns
+# ci.yml lifts the runner's AppArmor userns restriction so the corpus can
+# measure everything. That hides the host most users have: Ubuntu 23.10+ as a
+# non-root user, where no mount namespace can be made and the Linux backend
+# falls back to the Landlock carve. This job runs on both, side by side.
+on:
+  pull_request:
+    paths:
+      - "backends/linux/**"
+      - "core/**"
+      - "cli/**"
+      - "scripts/ci/**"
+      - ".github/workflows/linux-userns.yml"
+
+concurrency:
+  group: linux-userns-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: userns ${{ matrix.userns }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        userns: [restricted, open]
+    steps:
+      - uses: actions/checkout@v4
+      - name: open unprivileged user namespaces
+        if: matrix.userns == 'open'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: build
+        run: cargo build -p tartaros-cli
+      - name: Linux backend unit tests
+        run: cargo test -p tartaros-linux --lib
+      - name: explain warns exactly when the run cannot create at a root
+        run: cargo test -p tartaros-cli --test root_new_entries -- --nocapture
+      - name: probe root writes under --settings
+        if: always()
+        run: sh scripts/ci/probe-root-write.sh target/debug/tartaros
+      # The same probe on the base branch's binary, so one log shows before and after.
+      - name: probe root writes, base branch
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          git fetch --depth=1 origin "${{ github.base_ref }}"
+          git worktree add ../base FETCH_HEAD
+          (cd ../base && cargo build -p tartaros-cli --target-dir "$GITHUB_WORKSPACE/target-base")
+          sh scripts/ci/probe-root-write.sh target-base/debug/tartaros
