@@ -10,6 +10,14 @@ repository.workspace = true
 [dependencies]
 tartaros-core = { path = "../core" }
 ureq = "3.5.0"
+# Masked credentials: the broker terminates TLS for the credential's hosts with a
+# per-run CA (rcgen), as a rustls server, and re-originates over rustls. Same
+# rustls and ring the HTTPS client above already pulls in; webpki-roots is the
+# upstream trust store (as ureq's).
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
+ring = "0.17.14"
+webpki-roots = "1.0.11"
 
 [dev-dependencies]
 tartaros-linux = { path = "../backends/linux" }

@@ -176,6 +176,130 @@ struct InjectFile {
 /// The `[broker]` of the policy file, if any (set while the policy is built).
 static BROKER: std::sync::OnceLock<BrokerFile> = std::sync::OnceLock::new();
 
+/// `--settings` masked credentials (sandbox-runtime's `credentials.envVars` with
+/// `mode: "mask"`), checked while the policy is built and set up by the egress
+/// broker at `run` (docs/broker.md).
+#[derive(Clone, Debug, Default)]
+struct MaskSpec {
+    /// (variable name, host patterns in the allow-list's spelling).
+    creds: Vec<(String, Vec<String>)>,
+    /// `tlsTerminate.excludeDomains`, same spelling.
+    exclude: Vec<String>,
+    /// `tlsTerminate.extraCaCertPaths`: appended to the agent's trust bundle.
+    extra_ca: Vec<String>,
+}
+static MASKED: std::sync::OnceLock<MaskSpec> = std::sync::OnceLock::new();
+/// The run's CA directory, removed when the run ends.
+static MASK_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// A settings host pattern in the egress allow-list's spelling: `*.x` -> `.x`.
+fn as_allow_pattern(h: &str) -> String {
+    match h.strip_prefix("*.") {
+        Some(rest) => format!(".{}", rest.to_ascii_lowercase()),
+        None => h.to_ascii_lowercase(),
+    }
+}
+
+/// Read `credentials` / `tlsTerminate` into a [`MaskSpec`], or say which part
+/// this backend cannot guarantee. `allow` is the role's egress allow-list: a
+/// credential host it does not cover could never be reached, so it is refused.
+fn mask_spec(
+    creds: Option<&serde_json::Value>,
+    tls: Option<&serde_json::Value>,
+    allow: &[String],
+) -> Result<Option<MaskSpec>, String> {
+    use serde_json::Value;
+    let creds_asked = creds.is_some_and(asks_for_something);
+    let tls_asked = tls.is_some_and(asks_for_something);
+    if !creds_asked && !tls_asked {
+        return Ok(None);
+    }
+    if !creds_asked {
+        return Err("TLS termination without masked credentials (tlsTerminate alone)".into());
+    }
+    if cfg!(not(unix)) {
+        return Err("masked credentials on this OS".into());
+    }
+    let strings = |v: &Value, what: &str| -> Result<Vec<String>, String> {
+        v.as_array()
+            .ok_or_else(|| format!("{what} that is not a list"))?
+            .iter()
+            .map(|x| x.as_str().map(str::to_string).ok_or_else(|| format!("{what} with a non-string entry")))
+            .collect()
+    };
+    let mut spec = MaskSpec::default();
+    let Some(obj) = creds.and_then(Value::as_object) else {
+        return Err("credentials that is not an object".into());
+    };
+    for (k, v) in obj {
+        if !asks_for_something(v) {
+            continue;
+        }
+        match k.as_str() {
+            "envVars" => {}
+            "files" => return Err("masked credential files (credentials.files)".into()),
+            "awsPairs" => return Err("AWS SigV4 re-signing (credentials.awsPairs)".into()),
+            other => return Err(format!("credentials.{other}")),
+        }
+    }
+    let covered = |h: &str| -> bool {
+        let allow: Vec<String> = allow.iter().map(|a| as_allow_pattern(a)).collect();
+        match h.strip_prefix('.') {
+            // A domain pattern: covered by the same pattern or a broader one.
+            Some(d) => allow.iter().any(|a| a.strip_prefix('.').is_some_and(|ad| d == ad || d.ends_with(&format!(".{ad}")))),
+            None => tartaros_broker::host_covered(&allow, h),
+        }
+    };
+    for e in obj.get("envVars").and_then(Value::as_array).into_iter().flatten() {
+        let Some(e) = e.as_object() else { return Err("credentials.envVars entry that is not an object".into()) };
+        let name = e.get("name").and_then(Value::as_str).unwrap_or("");
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') || name.as_bytes()[0].is_ascii_digit() {
+            return Err(format!("credentials.envVars entry with an invalid name {name:?}"));
+        }
+        match e.get("mode").and_then(Value::as_str) {
+            Some("mask") => {}
+            m => return Err(format!("credential {name} with mode {m:?} (only \"mask\")")),
+        }
+        for k in e.keys() {
+            if !["name", "mode", "injectHosts"].contains(&k.as_str()) && asks_for_something(&e[k]) {
+                return Err(format!("credential {name}: {k}"));
+            }
+        }
+        let hosts = strings(e.get("injectHosts").unwrap_or(&Value::Null), &format!("credential {name}: injectHosts"))
+            .unwrap_or_default();
+        if hosts.is_empty() {
+            return Err(format!("credential {name} with no injectHosts (a masked credential must name where it goes)"));
+        }
+        let hosts: Vec<String> = hosts.iter().map(|h| as_allow_pattern(h)).collect();
+        for h in &hosts {
+            if !covered(h) {
+                return Err(format!("credential {name}: inject host {h} is not in allowedDomains, so it could never be reached"));
+            }
+        }
+        if spec.creds.iter().any(|(n, _)| n == name) {
+            return Err(format!("credential {name} declared twice"));
+        }
+        spec.creds.push((name.to_string(), hosts));
+    }
+    if spec.creds.is_empty() {
+        return Err("credentials with nothing in envVars".into());
+    }
+    if let Some(t) = tls.filter(|t| asks_for_something(t)) {
+        let Some(t) = t.as_object() else { return Err("tlsTerminate that is not an object".into()) };
+        for (k, v) in t {
+            if !asks_for_something(v) {
+                continue;
+            }
+            match k.as_str() {
+                "excludeDomains" => spec.exclude = strings(v, "tlsTerminate.excludeDomains")?.iter().map(|h| as_allow_pattern(h)).collect(),
+                "extraCaCertPaths" => spec.extra_ca = strings(v, "tlsTerminate.extraCaCertPaths")?,
+                other => return Err(format!("tlsTerminate.{other} (the broker makes its own CA per run)")),
+            }
+        }
+    }
+    Ok(Some(spec))
+}
+
 /// Expand a leading `~` to $HOME so policy files are portable.
 fn expand(s: &str) -> String {
     if let Some(rest) = s.strip_prefix("~/") {
@@ -354,6 +478,10 @@ fn cmd_run(rest: &[String]) -> ! {
     if let Some(dir) = private_tmp {
         let _ = std::fs::remove_dir_all(&dir);
     }
+    // And the masked credentials' CA directory (its certificate and trust bundle).
+    if let Some(dir) = MASK_DIR.get() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     // Drop the egress guard here: `process::exit` below skips destructors, so the
     // scoped network namespace (+ veth + firewall rule) would otherwise leak. The
     // `let _ =` binding drops it immediately (a no-op on non-Linux, where it is ()).
@@ -488,6 +616,86 @@ fn warn_reachable_host_sockets(p: &Policy) {
     }
 }
 
+/// How the broker treats HTTPS, for its start-up line.
+fn tunnel_note(masked: bool) -> &'static str {
+    if masked {
+        "TCP tunnel, no TLS inspection, except TLS terminated toward the masked credentials' hosts"
+    } else {
+        "TCP tunnel, no TLS inspection"
+    }
+}
+
+/// `--settings` masked credentials at `run`: read each real value from this
+/// process's environment (where the caller put it), mint its sentinel, make the
+/// run's CA and write its trust bundle, and set what the agent sees — each
+/// variable holding its sentinel and the trust-store variables pointing at the
+/// bundle — in `env_set`, which wins over `--inherit-env`. The real values stay
+/// in the broker's memory.
+type MaskedSetup = (
+    std::sync::Arc<tartaros_broker::mask::Masks>,
+    std::sync::Arc<tartaros_broker::mitm::MitmCa>,
+    Vec<String>,
+);
+#[cfg(unix)]
+fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
+    use std::sync::Arc;
+    let spec = MASKED.get()?.clone();
+    let mut creds = Vec::new();
+    for (name, hosts) in &spec.creds {
+        let Ok(real) = std::env::var(name) else {
+            eprintln!("tartaros: --settings: masked credential {name} is not set in the launcher's environment; refusing to run.");
+            exit(EXIT_POLICY_REFUSED);
+        };
+        creds.push(tartaros_broker::mask::MaskedCredential::new(name.clone(), real, hosts.clone()).unwrap_or_else(|e| {
+            eprintln!("tartaros: masked credential {name}: {e}");
+            exit(1);
+        }));
+    }
+    let masks = tartaros_broker::mask::Masks::new(creds);
+    let ca = tartaros_broker::mitm::MitmCa::new().unwrap_or_else(|e| {
+        eprintln!("tartaros: masked credentials: {e}");
+        exit(1);
+    });
+    let dir = create_private_tmp().unwrap_or_else(|e| {
+        eprintln!("tartaros: masked credentials: cannot create the CA directory: {e}");
+        exit(1);
+    });
+    let bundle = ca.write_trust_files(&dir).unwrap_or_else(|e| {
+        eprintln!("tartaros: masked credentials: cannot write the trust bundle: {e}");
+        exit(1);
+    });
+    if !spec.extra_ca.is_empty() {
+        let mut text = std::fs::read_to_string(&bundle).unwrap_or_default();
+        for x in &spec.extra_ca {
+            match std::fs::read_to_string(expand(x)) {
+                Ok(pem) => {
+                    text.push_str(pem.trim_end());
+                    text.push('\n');
+                }
+                Err(e) => eprintln!("tartaros: tlsTerminate.extraCaCertPaths: skipping {x}: {e}"),
+            }
+        }
+        let _ = std::fs::write(&bundle, text);
+    }
+    let _ = MASK_DIR.set(dir.clone());
+    p.read_allows.push(dir);
+    p.env_set.extend(masks.sentinel_env());
+    let bundle = bundle.display().to_string();
+    for v in tartaros_broker::mitm::CA_TRUST_VARS {
+        p.env_set.push((v.to_string(), bundle.clone()));
+    }
+    let names: Vec<String> = spec.creds.iter().map(|(n, h)| format!("{n} → {}", h.join(", "))).collect();
+    eprintln!(
+        "tartaros: masked credentials: {} (the agent holds sentinels; TLS to those hosts is terminated by the broker with this run's CA)",
+        names.join("; ")
+    );
+    Some((Arc::new(masks), Arc::new(ca), spec.exclude.clone()))
+}
+#[cfg(not(unix))]
+fn setup_masked_credentials(_p: &mut Policy) -> Option<MaskedSetup> {
+    None // refused while the policy is built (mask_spec)
+}
+
 /// If the policy names allowed egress domains, start the capability broker on
 /// host side as a CONNECT/forward proxy scoped to those hosts (with SSRF defense)
 /// and point the agent's HTTP(S)_PROXY at it. NET-01: a Landlock port grant alone
@@ -531,13 +739,21 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
     // route everything via HTTP_PROXY. Captured before the broker's own port is
     // appended to local_ports below, so the broker never forwards to itself.
     let loopback_ports = p.local_ports.clone();
+    let masked = setup_masked_credentials(p);
     let make_broker = || {
-        tartaros_broker::Broker::new(p.role.clone(), vec![])
+        let b = tartaros_broker::Broker::new(p.role.clone(), vec![])
             .insecure_no_auth() // the sandbox boundary is the auth; no secret to send
             .with_allowed_hosts(hosts.clone())
             .with_connect_ports(vec![443]) // HTTPS only (ADV-03)
             .with_allow_internal(false) // SSRF / rebinding defense stays on
-            .with_loopback_ports(loopback_ports.clone()) // declared local_ports (N1)
+            .with_loopback_ports(loopback_ports.clone()); // declared local_ports (N1)
+        match &masked {
+            None => b,
+            Some((masks, ca, exclude)) => b.with_masks(masks.clone(), ca.clone(), exclude.clone()).unwrap_or_else(|e| {
+                eprintln!("tartaros: masked credentials: cannot set up the upstream TLS: {e}");
+                exit(1);
+            }),
+        }
     };
     // `exempt_loopback`: whether to put loopback in NO_PROXY so the agent connects
     // to a declared local_port DIRECTLY. True in the loopback-broker posture (macOS,
@@ -613,7 +829,7 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
             exit(1);
         });
         set_proxy("127.0.0.1", port, false); // route everything (incl. loopback) via the broker
-        eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; TCP tunnel, no TLS inspection)", hosts.join(", "));
+        eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; {})", hosts.join(", "), tunnel_note(masked.is_some()));
         std::thread::spawn(move || {
             let mut sink = tartaros_broker::RefusalReport::stderr();
             let _ = broker.serve(listener, &mut sink);
@@ -631,7 +847,7 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
     });
     p.local_ports.push(port);
     set_proxy("127.0.0.1", port, true); // loopback broker: direct loopback ok
-    eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; TCP tunnel, no TLS inspection)", hosts.join(", "));
+    eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; {})", hosts.join(", "), tunnel_note(masked.is_some()));
     #[cfg(target_os = "linux")]
     eprintln!("tartaros: warning: {NET01_FALLBACK}");
     std::thread::spawn(move || {
@@ -899,14 +1115,6 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
         eprintln!("tartaros: --settings: cannot guarantee {what} on this backend; refusing to run (apply-fully-or-refuse).");
         exit(EXIT_POLICY_REFUSED);
     };
-    // Masked credentials need a sentinel registry and TLS termination at the
-    // broker, which this backend does not have: refused by name, so a caller
-    // (seisin's key_mode = "inject") hands the role to a sandbox that does.
-    if s.credentials.as_ref().is_some_and(asks_for_something)
-        || s.tls_terminate.as_ref().is_some_and(asks_for_something)
-    {
-        refuse("masked credentials (credentials, tlsTerminate; the broker does not yet terminate TLS to swap a sentinel for the real value)");
-    }
     let refuse_glob = |x: &str| -> ! {
         eprintln!("tartaros: --settings: cannot enforce the glob pattern '{x}' on this backend — TartarOS has no general glob engine (Landlock matches by inode). Use a concrete path, the built-in trust-handoff set (.git/.claude/.codex/.mcp.json/…), or the macOS backend for single-* globs. Refusing (apply-fully-or-refuse).");
         exit(EXIT_POLICY_REFUSED);
@@ -994,6 +1202,16 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
         }
     }
     p.allow_domains = domains;
+    // Masked credentials: what this backend does (env-var masking through the
+    // egress broker) is checked here; what it does not (files, AWS pairs, a CA of
+    // the caller's) is refused by name, so a caller hands the role elsewhere.
+    match mask_spec(s.credentials.as_ref(), s.tls_terminate.as_ref(), &p.allow_domains) {
+        Ok(Some(spec)) => {
+            let _ = MASKED.set(spec);
+        }
+        Ok(None) => {}
+        Err(what) => refuse(&what),
+    }
     p.local_ports.sort_unstable();
     p.local_ports.dedup();
     if !s.network.denied_domains.is_empty() {
@@ -1281,6 +1499,17 @@ fn explain(p: &Policy) {
     }
     if !p.allow_domains.is_empty() {
         println!("egress domains (via broker, HTTPS/CONNECT + SSRF defense): {}", p.allow_domains.join(", "));
+        if let Some(m) = MASKED.get() {
+            for (name, hosts) in &m.creds {
+                println!(
+                    "masked credential {name}: the agent holds a sentinel; the broker terminates TLS to {} and swaps in the real value (headers and body)",
+                    hosts.join(", ")
+                );
+            }
+            if !m.exclude.is_empty() {
+                println!("never terminated (tlsTerminate.excludeDomains): {}", m.exclude.join(", "));
+            }
+        }
     }
     println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
     if !p.allow_mach_register.is_empty() {

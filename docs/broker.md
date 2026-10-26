@@ -57,8 +57,66 @@ Limits:
   APIs.
 - HTTPS through `allowed_hosts` is a blind CONNECT tunnel: TLS is end to end, so no
   header can be added to it. Use a capability for an HTTPS API.
-- **No masked credentials.** sandbox-runtime's `credentials` (a sentinel in the
-  sandbox, swapped for the real value on egress to the credential's hosts) and the
-  `tlsTerminate` it needs are refused by name under `--settings` (exit 78), not
-  ignored: the broker does not terminate TLS. A caller that needs them (seisin's
-  `key_mode = "inject"`) hands that role to a sandbox that has them.
+- Masked credentials (below) cover environment variables only: no files, no AWS
+  SigV4 re-signing.
+
+## Masked credentials (`--settings`)
+
+sandbox-runtime's masked credentials, for a tool that should keep calling the real
+URL with its usual variable (`gh`, `curl` with `$GH_TOKEN`) without the agent ever
+holding the value. seisin's `key_mode = "inject"` writes them.
+
+```json
+{
+  "network": { "allowedDomains": ["api.github.com"] },
+  "credentials": {
+    "envVars": [{ "name": "GH_TOKEN", "mode": "mask", "injectHosts": ["api.github.com"] }]
+  },
+  "tlsTerminate": { "excludeDomains": [] }
+}
+```
+
+- **The value** is read from the launcher's environment by name, at `run` (unset:
+  exit 78). The agent's `GH_TOKEN` is a sentinel, `fake_value_<uuid4>` padded to the
+  real value's length, **even with `--inherit-env`**: the sentinel is set after
+  everything else the environment passes. The map lives in the broker's memory only.
+- **The swap** happens only on egress to the credential's own `injectHosts`: there
+  the broker terminates TLS, with a leaf for that host signed by a CA made for this
+  run, and replaces the sentinel in the request's headers and in its body, streamed
+  (a sentinel split across writes is still found). One credential's sentinel sent to
+  another credential's host, or to any other host, travels as the useless fake.
+  When the swap cannot change the body's length, `Content-Length` is kept; otherwise
+  the body goes upstream chunked.
+- **Upstream** is real TLS verified against the webpki roots, with no proxy from the
+  environment and no redirects followed; the response comes back untouched. One
+  request per terminated connection (`Connection: close`); clients reconnect.
+- **Checks on the terminated side**, as sandbox-runtime makes them: the TLS server
+  name, the `Host` header (one at most) and an absolute request-target must all name
+  the CONNECT target, or 421. The head is capped like the plain proxy's (line length,
+  header count). `Expect: 100-continue` is answered by the broker.
+- **What the agent trusts:** the run's CA certificate and a bundle of it plus the
+  system's roots (and the launcher's `NODE_EXTRA_CA_CERTS`, and
+  `tlsTerminate.extraCaCertPaths`) are written to a short run directory, readable by
+  the agent and removed when the run ends; `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
+  `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO` and the rest of
+  sandbox-runtime's list point at the bundle. The CA's private key never leaves memory.
+- **Every other host** keeps the blind CONNECT tunnel. `tlsTerminate.excludeDomains`
+  is never terminated, masked or not.
+
+What it costs and what it does not do:
+
+- **It is a MITM** over the credential's hosts, by design: the broker sees that
+  traffic in the clear. A tool that pins certificates, or ignores the trust
+  variables, fails there instead of sending anything.
+- **Reflection is not closed:** a host that stores what the agent sends (an issue, a
+  gist) and returns it later hands the real value back. Use a least-scope token.
+- **Missed swaps fail closed:** a sentinel inside a compressed or encoded body reaches
+  the upstream as the fake, and authentication fails; the real value is never sent
+  where it was not declared. A sentinel in the URL (a query string) is not swapped.
+- **Refused by name (exit 78):** `credentials.files`, `credentials.awsPairs`, a mode
+  other than `mask`, a credential with no `injectHosts` or one `allowedDomains` does
+  not cover, `tlsTerminate` without credentials, and a CA of the caller's
+  (`tlsTerminate.caCertPath`).
+- The launcher's own process still holds the real value in its environment, as it
+  holds `value_env` secrets: keep the agent from reading other processes'
+  environments (`--isolate-proc`; on Linux also `--isolate-pids`).
