@@ -30,6 +30,21 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   wired to `tartaros run` yet.
 
 ### Fixed
+- **macOS: a symlink can no longer take the name of a handoff directory.** An
+  agent could create `.claude` as a symlink to a decoy directory holding its own
+  `settings.json`: Seatbelt checks the resolved path, so the rules on
+  `.claude/settings.json` saw the decoy, and a trusted agent would later load it
+  (`trust-handoff-symlink-absent-parent`, critical). Creating a symlink named
+  after an ancestor of a handoff surface (`.claude`, `.git`, `.github`) is now
+  denied at any depth, a rename onto that name included; `mkdir .claude` and
+  `git init` still work.
+- **15 scenarios move from the known gaps to the security bench's corpus**: they
+  pass on every system they list, measured today (chmod, utime and ancestor
+  renames outside the territory, handoff hooks and `.claude` symlinks, request
+  smuggling through the broker, loader-injection variables under
+  `--inherit-env`, among others). The corpus is 156 scenarios: Linux 151 of 152
+  (the PID-namespace one is vacuous in a container), macOS 121 of 121. The 14
+  left keep their per-system status as of today.
 - **docs/limits.md, Windows:** it said `tartaros run` did not dispatch to the
   backend and that there was no egress broker; both have been there since the
   backend landed. It now also says what the `sandbox-user` tier breaks: Windows

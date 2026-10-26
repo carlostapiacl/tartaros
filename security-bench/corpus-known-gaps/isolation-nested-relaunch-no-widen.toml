@@ -1,4 +1,4 @@
-# STATUS 2026-10-15 (known gap): macos=vacuous, linux=control-broke
+# STATUS 2026-10-26 (known gap): macos=vacuous, linux=vacuous
 # derived from nolabs-ai/nono tests/integration/test_child_tool_boundaries.sh ("command sandbox does not inherit session --allow directory") (Apache-2.0)
 # NEEDS RUNNER FEATURE: a `{launcher_bin}` placeholder (path of the tartaros
 # CLI) readable+executable inside the sandbox.

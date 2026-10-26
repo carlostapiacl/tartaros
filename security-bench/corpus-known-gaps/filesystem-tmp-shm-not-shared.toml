@@ -1,4 +1,4 @@
-# STATUS 2026-10-15 (known gap): linux=violation
+# STATUS 2026-10-26 (known gap): linux=violation
 # derived from openai/codex codex-rs/linux-sandbox/tests/suite/sandbox.rs::bwrap_preserves_writable_dev_shm_bind_mount (grant-only) and containers/bubblewrap tests/test-sandbox.py::test_ro_bind_root_is_recursive (idea only, LGPL-2.1-or-later)
 id = "filesystem-tmp-shm-not-shared"
 source = "openai/codex codex-rs/linux-sandbox/tests/suite/sandbox.rs::bwrap_preserves_writable_dev_shm_bind_mount (grant-only) and containers/bubblewrap tests/test-sandbox.py::test_ro_bind_root_is_recursive (idea only, LGPL-2.1-or-later)"

@@ -1,4 +1,4 @@
-# STATUS 2026-10-15 (known gap): linux=control-broke
+# STATUS 2026-10-26 (known gap): linux=violation
 # derived from nolabs-ai/nono tests/integration/test_system_paths.sh ("cannot read foreign /proc/1/maps", "/proc/self readable", grandchild /proc/self issue #602) (Apache-2.0)
 # With isolate_process_info, /proc/<pid> of processes outside the sandbox is
 # unreadable (cmdline is world-readable by default, so this is meaningful even
