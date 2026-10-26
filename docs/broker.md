@@ -89,7 +89,8 @@ holding the value. seisin's `key_mode = "inject"` writes them.
   another credential's host, or to any other host, travels as the useless fake.
   When the swap cannot change the body's length, `Content-Length` is kept; otherwise
   the body goes upstream chunked.
-- **Upstream** is real TLS verified against the webpki roots, with no proxy from the
+- **Upstream** is real TLS verified against the webpki roots and the roots in the
+  launcher's `NODE_EXTRA_CA_CERTS` (as sandbox-runtime's proxy trusts them), with no proxy from the
   environment and no redirects followed; the response comes back untouched. One
   request per terminated connection (`Connection: close`); clients reconnect.
 - **Checks on the terminated side**, as sandbox-runtime makes them: the TLS server

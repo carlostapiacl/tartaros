@@ -185,8 +185,8 @@ pub struct Broker {
     mitm: Option<std::sync::Arc<mitm::MitmCa>>,
     /// `tlsTerminate.excludeDomains`: never terminated, masked or not.
     tls_exclude: Vec<String>,
-    /// The upstream TLS trust for terminated connections (webpki roots; a test
-    /// adds its own CA).
+    /// The upstream TLS trust for terminated connections (webpki roots and the
+    /// launcher's `NODE_EXTRA_CA_CERTS`; a test adds its own CA).
     upstream_tls: Option<std::sync::Arc<rustls::ClientConfig>>,
 }
 
@@ -202,7 +202,7 @@ impl Broker {
         self.mitm = Some(ca);
         self.tls_exclude = exclude;
         if self.upstream_tls.is_none() {
-            self.upstream_tls = Some(mitm::upstream_tls(&[])?);
+            self.upstream_tls = Some(mitm::upstream_tls(&mitm::launcher_extra_roots())?);
         }
         Ok(self)
     }
