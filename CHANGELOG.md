@@ -3,6 +3,19 @@
 All notable changes to TartarOS. This project is pre-1.0; the format is
 loosely [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- **The broker's HTTPS client is ureq 3** (was 2.12). ureq 2.12 could panic
+  inside its response reader when an upstream cut a body short (`failed to read
+  exact buffer length from stream`, seen once in CI): the connection's thread
+  died and the client got an empty reply. ureq 3 reads the environment's
+  `HTTP(S)_PROXY` by default; the broker turns that off, so a request carrying
+  an injected credential still goes to the capability's upstream alone. A test
+  sets every proxy variable to a listener and checks nothing reaches it, and
+  that a 404 and a 302 are relayed (not a 502, not followed). Fewer crates in
+  the lockfile.
+
 ## [0.1.0-alpha.15] — 2026-10-26
 
 ### Security

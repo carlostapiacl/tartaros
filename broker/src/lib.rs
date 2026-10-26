@@ -839,14 +839,22 @@ impl Broker {
 
         // The broker does the TLS. No redirects (P0-B: a 3xx must not send the
         // credential to a different destination). Inject the secret header(s).
-        let agent = ureq::AgentBuilder::new().redirects(0).build();
-        let mut req = agent.request(&method.to_uppercase(), &url);
+        // ureq 3 reads HTTP(S)_PROXY from the environment unless told not to: a
+        // request that carries an injected credential goes straight to the
+        // capability's upstream, never through a proxy the environment names.
+        // A status is an answer to relay, not an error.
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .proxy(None)
+            .build()
+            .into();
+        let mut req = ureq::http::Request::builder().method(method.to_uppercase().as_str()).uri(&url);
         for inj in &cap.injections {
-            req = req.set(&inj.header, &inj.value);
+            req = req.header(&inj.header, &inj.value);
         }
-        let (status, body) = match req.call() {
-            Ok(resp) => (resp.status(), read_capped(resp)),
-            Err(ureq::Error::Status(code, resp)) => (code, read_capped(resp)),
+        let (status, body) = match req.body(()).map_err(|e| e.to_string()).and_then(|r| agent.run(r).map_err(|e| e.to_string())) {
+            Ok(resp) => (resp.status().as_u16(), read_capped(resp)),
             Err(e) => (502, format!("broker upstream error: {e}")),
         };
         let resp = format!(
@@ -877,10 +885,10 @@ fn has_dot_segment(path: &str) -> bool {
 }
 
 /// Read an upstream response body, bounded to `MAX_RESPONSE_BYTES` (P0-B).
-fn read_capped(resp: ureq::Response) -> String {
+fn read_capped(resp: ureq::http::Response<ureq::Body>) -> String {
     use std::io::Read;
     let mut buf = Vec::new();
-    let _ = resp.into_reader().take(MAX_RESPONSE_BYTES).read_to_end(&mut buf);
+    let _ = resp.into_body().into_reader().take(MAX_RESPONSE_BYTES).read_to_end(&mut buf);
     String::from_utf8_lossy(&buf).into_owned()
 }
 
@@ -1456,6 +1464,83 @@ mod tests {
             let resp = ask(p);
             assert!(!resp.starts_with("HTTP/1.1 200") || resp.contains("GET /api/v1/"),
                 "{p} reached the upstream outside its base: {resp:?}");
+        }
+    }
+
+    /// An upstream that answers every request with `status` and a `Location`.
+    fn status_upstream(status: &'static str) -> u16 {
+        let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                let mut r = BufReader::new(s.try_clone().unwrap());
+                let mut s = s;
+                loop {
+                    let mut line = String::new();
+                    if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" { break; }
+                }
+                let _ = write!(s, "HTTP/1.1 {status}\r\nLocation: http://127.0.0.1:9/elsewhere\r\nContent-Length: 2\r\nConnection: close\r\n\r\nup");
+            }
+        });
+        port
+    }
+
+    /// The capability path, with ureq 3: a proxy named in the environment is not
+    /// used (ureq 3 reads one by default; the injected credential must go to the
+    /// upstream alone), a status is relayed rather than turned into a 502, and a
+    /// redirect is relayed, not followed.
+    #[test]
+    fn a_capability_request_ignores_an_environment_proxy_and_relays_statuses() {
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let proxy = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let proxy_port = proxy.local_addr().unwrap().port();
+        let seen = hits.clone();
+        std::thread::spawn(move || {
+            for s in proxy.incoming().flatten() {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(s);
+            }
+        });
+        for var in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+            std::env::set_var(var, format!("http://127.0.0.1:{proxy_port}"));
+        }
+        std::env::remove_var("NO_PROXY");
+        std::env::remove_var("no_proxy");
+
+        let ok = path_upstream();
+        let missing = status_upstream("404 Not Found");
+        let moved = status_upstream("302 Found");
+        let cap = |prefix: &str, up: u16| Capability {
+            prefix: prefix.into(),
+            upstream_base: format!("http://127.0.0.1:{up}"),
+            methods: vec!["GET".into()],
+            injections: vec![Injection { host: None, header: "Authorization".into(), value: "Bearer s3cret".into() }],
+        };
+        let b = Broker::new("qa", vec![])
+            .insecure_no_auth()
+            .with_capabilities(vec![cap("/ok", ok), cap("/missing", missing), cap("/moved", moved)]);
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let ask = |path: &str| -> String {
+            let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes()).unwrap();
+            let mut resp = String::new();
+            let _ = c.read_to_string(&mut resp);
+            resp
+        };
+        let r = ask("/ok/x");
+        assert!(r.starts_with("HTTP/1.1 200") && r.ends_with("GET /x HTTP/1.1"), "upstream not reached directly: {r:?}");
+        assert!(ask("/missing/x").starts_with("HTTP/1.1 404"), "a 404 must be relayed, not made a 502");
+        let r = ask("/moved/x");
+        assert!(r.starts_with("HTTP/1.1 302") && r.ends_with("up"), "a redirect must be relayed, not followed: {r:?}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0, "a credentialed request went through the environment's proxy");
+        for var in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+            std::env::remove_var(var);
         }
     }
 
