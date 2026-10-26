@@ -1,0 +1,26 @@
+# Keeps what carries someone else's code up to date: the Rust crates (the
+# broker's TLS stack among them, which had six RustSec advisories on
+# 2026-10-26 that nothing was watching) and the CI actions. Weekly and grouped,
+# so a bump is one small PR and one run, as in seisin.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+    groups:
+      crates:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
