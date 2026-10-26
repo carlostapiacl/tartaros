@@ -309,6 +309,13 @@ impl Broker {
             let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{why}", why.len());
             s.conn.send_close_notify();
             let _ = s.flush();
+            // Close the write side, then read what the client still sends (its
+            // request, refused unread) until it closes: a socket closed with unread
+            // input sends a reset on Linux, and the client loses the refusal it was
+            // about to read. Bounded: two seconds, 64 KiB.
+            let _ = s.sock.w.shutdown(std::net::Shutdown::Write);
+            let _ = s.sock.w.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+            let _ = io::copy(&mut (&mut s.sock.r).take(64 * 1024), &mut io::sink());
             Ok(())
         };
         if let Some(sni) = tls.conn.server_name() {
