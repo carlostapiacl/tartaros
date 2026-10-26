@@ -769,6 +769,27 @@ struct SandboxSettings {
     filesystem: SandboxFs,
     #[serde(default)]
     network: SandboxNet,
+    /// sandbox-runtime's masked credentials (`envVars`/`files` with `mode: "mask"`,
+    /// AWS pairs): a sentinel in the sandbox, swapped for the real value on egress
+    /// to the credential's hosts. Read only so it can be refused by name, not as an
+    /// unknown field: this backend does not do it (docs/limits.md).
+    #[serde(default)]
+    credentials: Option<serde_json::Value>,
+    /// The TLS termination masking needs. Refused with `credentials`.
+    #[serde(default, rename = "tlsTerminate")]
+    tls_terminate: Option<serde_json::Value>,
+}
+
+/// Does a settings value ask for anything? `null`, `{}`, `[]` and objects made
+/// only of those ask for nothing; anything else does.
+fn asks_for_something(v: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match v {
+        Value::Null => false,
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => o.values().any(asks_for_something),
+        _ => true,
+    }
 }
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -878,6 +899,14 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
         eprintln!("tartaros: --settings: cannot guarantee {what} on this backend; refusing to run (apply-fully-or-refuse).");
         exit(EXIT_POLICY_REFUSED);
     };
+    // Masked credentials need a sentinel registry and TLS termination at the
+    // broker, which this backend does not have: refused by name, so a caller
+    // (seisin's key_mode = "inject") hands the role to a sandbox that does.
+    if s.credentials.as_ref().is_some_and(asks_for_something)
+        || s.tls_terminate.as_ref().is_some_and(asks_for_something)
+    {
+        refuse("masked credentials (credentials, tlsTerminate; the broker does not yet terminate TLS to swap a sentinel for the real value)");
+    }
     let refuse_glob = |x: &str| -> ! {
         eprintln!("tartaros: --settings: cannot enforce the glob pattern '{x}' on this backend — TartarOS has no general glob engine (Landlock matches by inode). Use a concrete path, the built-in trust-handoff set (.git/.claude/.codex/.mcp.json/…), or the macOS backend for single-* globs. Refusing (apply-fully-or-refuse).");
         exit(EXIT_POLICY_REFUSED);

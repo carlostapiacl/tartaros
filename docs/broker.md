@@ -57,3 +57,8 @@ Limits:
   APIs.
 - HTTPS through `allowed_hosts` is a blind CONNECT tunnel: TLS is end to end, so no
   header can be added to it. Use a capability for an HTTPS API.
+- **No masked credentials.** sandbox-runtime's `credentials` (a sentinel in the
+  sandbox, swapped for the real value on egress to the credential's hosts) and the
+  `tlsTerminate` it needs are refused by name under `--settings` (exit 78), not
+  ignored: the broker does not terminate TLS. A caller that needs them (seisin's
+  `key_mode = "inject"`) hands that role to a sandbox that has them.
