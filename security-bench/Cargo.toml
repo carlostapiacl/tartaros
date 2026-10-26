@@ -10,7 +10,7 @@ repository.workspace = true
 [dependencies]
 tartaros-core = { path = "../core" }
 tartaros-broker = { path = "../broker" }
-toml = "0.8.19"
+toml = "1.1.8"
 serde = { version = "1.0.210", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
