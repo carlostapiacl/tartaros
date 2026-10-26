@@ -10,6 +10,10 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   puts it and seisin writes it. It was read from the top level of the settings
   file, so a real seisin `key_mode = "inject"` policy was rejected as an
   unknown field (exit 2) instead of being masked.
+- **The upstream leg of a terminated connection trusts the launcher's
+  `NODE_EXTRA_CA_CERTS`**, besides the webpki roots, as sandbox-runtime's proxy
+  does. A host behind a site-local root, or a TLS-inspecting proxy, failed there
+  although the agent's own trust bundle already held that root.
 
 ### Changed
 - **A run's secrets are out of tartaros's exec environment.** Masked
