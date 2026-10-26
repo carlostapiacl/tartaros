@@ -3,7 +3,7 @@
 All notable changes to TartarOS. This project is pre-1.0; the format is
 loosely [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.1.0-alpha.15] — 2026-10-26
 
 ### Security
 - **TLS crates of the broker's HTTPS client raised past six RustSec advisories.**
