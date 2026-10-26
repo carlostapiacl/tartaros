@@ -5,6 +5,14 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Security
+- **TLS crates of the broker's HTTPS client raised past six RustSec advisories.**
+  `rustls` 0.23.45 → 0.23.46 (RUSTSEC-2026-0346 to 0349), `rustls-webpki`
+  0.103.15 → 0.103.16 (RUSTSEC-2026-0382: distrusted intermediates accepted)
+  and `webpki-roots` 1.0.9 → 1.0.11 (RUSTSEC-2026-0381). All reach tartaros
+  through `ureq`, which the broker uses for upstream HTTPS. Lockfile only;
+  `cargo audit` is clean.
+
 ### Fixed
 - **`explain` warns whenever a writable root cannot take new entries (Linux).**
   Without a mount namespace the carve grants a root's existing children but
