@@ -447,6 +447,52 @@ impl Policy {
     /// or rename whatever Landlock grants. Carving them would withhold their
     /// parent, the whole root for a top-level `.bashrc`, for nothing.
     pub fn linux_write_allowlist_except(&self, already_protected: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
+        self.linux_write_carve(already_protected, false)
+    }
+
+    /// The paths the Linux write carve withholds for, beyond the existing handoff
+    /// paths and the explicit denies, when `hold_absent`: the backend sets it when
+    /// there is no mount namespace (no read-only binds, no placeholders):
+    /// - each read deny inside a writable root that exists: a read deny is by
+    ///   inode, and without this an ancestor could be renamed (`mv a b`) and the
+    ///   secret's path re-created with other content;
+    /// - each absent top-level handoff name (`.mcp.json`, `.claude`) of a root
+    ///   that is not empty, so the root is withheld and the name cannot be
+    ///   created. An empty root (an output directory) is not withheld: nothing in
+    ///   it would be writable. The backend says so at start (`--strict` refuses).
+    pub fn carve_held_paths(&self, hold_absent: bool) -> Vec<PathBuf> {
+        if !hold_absent {
+            return Vec::new();
+        }
+        let roots: Vec<PathBuf> = self.writable_roots.iter().map(|r| resolve_best_effort(r)).collect();
+        let mut out: Vec<PathBuf> = self
+            .read_denies
+            .iter()
+            .map(|d| resolve_best_effort(d))
+            .filter(|d| d.exists() && roots.iter().any(|r| d.starts_with(r) && d != r))
+            .collect();
+        for p in self.handoff_placeholders() {
+            let p = resolve_best_effort(&p);
+            let root_full = p.parent().is_some_and(|r| std::fs::read_dir(r).is_ok_and(|mut e| e.next().is_some()));
+            if root_full && !self.handoff_exempted(&p) {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// The writable roots that are empty, under a carve that holds absent
+    /// handoff names: their top-level names are not held (see `carve_held_paths`).
+    pub fn empty_roots(&self) -> Vec<PathBuf> {
+        self.writable_roots
+            .iter()
+            .filter(|r| std::fs::read_dir(r).is_ok_and(|mut e| e.next().is_none()))
+            .cloned()
+            .collect()
+    }
+
+    /// The Linux write carve. `hold_absent`: see [`Policy::carve_held_paths`].
+    pub fn linux_write_carve(&self, already_protected: &dyn Fn(&Path) -> bool, hold_absent: bool) -> Vec<PathBuf> {
         // Explicit write denies are kept even when the path does not exist yet:
         // the carve then withholds the nearest existing ancestor (only its
         // existing children are granted), so the absent path cannot be created.
@@ -472,13 +518,20 @@ impl Policy {
         denied = denied.iter().map(|p| if unresolvable_link(p) { p.clone() } else { resolve_best_effort(p) }).collect();
         denied.retain(|p| p.exists() || unresolvable_link(p));
         denied.extend(explicit);
+        denied.extend(self.carve_held_paths(hold_absent));
         denied.retain(|p| !already_protected(p));
         denied.sort();
         denied.dedup();
 
         let mut out = Vec::new();
         for root in &self.writable_roots {
-            carve(&resolve_best_effort(root), &denied, &mut out);
+            let root = resolve_best_effort(root);
+            // A root nested inside a deny (`--write proj/out --write-deny proj`):
+            // the deny wins, as on macOS and in sandbox-runtime.
+            if denied.iter().any(|d| root.starts_with(d) && *d != root) {
+                continue;
+            }
+            carve(&root, &denied, &mut out);
         }
         out
     }

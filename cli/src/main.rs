@@ -2141,6 +2141,12 @@ fn explain(p: &Policy) {
             // or not). This is LESS permission, not a contract break — a consumer
             // surfaces it as a notice. The backend answers from the carve the run
             // uses, so the warning is said exactly when the run will refuse.
+            for r in tartaros_linux::unheld_empty_roots(p) {
+                println!(
+                    "warning: on Linux without a mount namespace, {} is empty, so trust-handoff names at its top (.mcp.json, .claude/settings.json, .vscode…) can be created by the agent. Pass --materialize, or put something in it (the root is then withheld for them).",
+                    r.display()
+                );
+            }
             for w in tartaros_linux::roots_without_new_entries(p) {
                 let mut named: Vec<String> = w.denies.iter().take(3).map(|d| d.display().to_string()).collect();
                 if w.denies.len() > 3 { named.push(format!("{} more", w.denies.len() - 3)); }

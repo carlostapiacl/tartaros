@@ -26,6 +26,7 @@ pub(crate) fn compile_all(
     harden: bool,
     restrict_net: bool,
     no_net_grant: bool,
+    metadata_notify: bool,
 ) -> std::io::Result<Vec<BpfProgram>> {
     let mut progs = Vec::new();
     if deny_unix {
@@ -56,8 +57,9 @@ pub(crate) fn compile_all(
         progs.push(compile_deny_clone3_enosys()?);
     }
     // io_uring can create/connect sockets bypassing the socket() filters above, so
-    // deny it whenever any socket filter is active (review #4).
-    if restrict_net || deny_unix || harden {
+    // deny it whenever any socket filter is active (review #4). Also with the
+    // metadata notifier: io_uring's SETXATTR ops would go around it.
+    if restrict_net || deny_unix || harden || metadata_notify {
         progs.push(compile_deny_io_uring()?);
     }
     Ok(progs)

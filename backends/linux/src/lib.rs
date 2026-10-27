@@ -27,6 +27,8 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 mod seccomp;
 #[cfg(target_os = "linux")]
+mod metanotify;
+#[cfg(target_os = "linux")]
 mod namespace;
 #[cfg(target_os = "linux")]
 mod cgroup;
@@ -84,6 +86,17 @@ impl Backend for LandlockBackend {
         }
         policy.check_symlinked_roots().map_err(|reason| PolicyError { reason })?;
         policy.check_handoff_exempt().map_err(|reason| PolicyError { reason })?;
+        #[cfg(target_os = "linux")]
+        if policy.strict {
+            if let Some(root) = unheld_empty_roots(policy).first() {
+                return Err(PolicyError {
+                    reason: format!(
+                        "strict mode: {} is empty and there is no mount namespace, so an absent trust-handoff name at its top (.mcp.json, .claude) cannot be held; pass --materialize or put something in it",
+                        root.display()
+                    ),
+                });
+            }
+        }
         // TartarOS can always express the rest of the policy by restructuring.
         let _allow = policy.linux_write_allowlist();
         Ok(())
@@ -290,7 +303,7 @@ pub fn roots_without_new_entries(policy: &Policy) -> Vec<RootWithoutNewEntries> 
     if uses_bind_mounts(policy) {
         return Vec::new();
     }
-    let grants = policy.linux_write_allowlist_except(&on_readonly_mount);
+    let grants = policy.linux_write_carve(&on_readonly_mount, !namespace::mount_ns_capable());
     let because = carve_because(policy);
     let denied: Vec<PathBuf> = policy
         .fs_rules
@@ -298,6 +311,7 @@ pub fn roots_without_new_entries(policy: &Policy) -> Vec<RootWithoutNewEntries> 
         .filter(|r| r.access == tartaros_core::Access::Deny)
         .map(|r| resolve_best_effort(&r.path))
         .chain(policy.trust_handoff_rules().into_iter().map(|r| resolve_best_effort(&r.path)).filter(|p| p.exists()))
+        .chain(policy.carve_held_paths(!namespace::mount_ns_capable()))
         .filter(|p| !on_readonly_mount(p))
         .collect();
     let mut out = Vec::new();
@@ -317,6 +331,19 @@ pub fn roots_without_new_entries(policy: &Policy) -> Vec<RootWithoutNewEntries> 
         out.push(RootWithoutNewEntries { root: root.clone(), denies, because: because.clone() });
     }
     out
+}
+
+/// Writable roots whose absent top-level handoff names this run cannot hold: the
+/// carve holds them by withholding the root, which an empty root cannot afford
+/// (nothing in it would be writable), and there is no mount namespace for a
+/// placeholder. Empty with a namespace or with `--materialize`.
+#[cfg(target_os = "linux")]
+pub fn unheld_empty_roots(policy: &Policy) -> Vec<PathBuf> {
+    let empty = policy.empty_roots();
+    if empty.is_empty() || policy.materialize_absent_handoff || namespace::mount_ns_capable() {
+        return Vec::new();
+    }
+    empty
 }
 
 /// Why the run uses the carve instead of the bind mounts.
@@ -358,7 +385,8 @@ pub fn absent_handoff_held(policy: &Policy, p: &std::path::Path) -> bool {
     if namespace::mount_ns_capable() {
         return at_top || p.components().any(|c| c.as_os_str() == ".git");
     }
-    policy.materialize_absent_handoff && policy.handoff_placeholders().iter().any(|h| resolve_best_effort(h) == p)
+    (policy.materialize_absent_handoff && policy.handoff_placeholders().iter().any(|h| resolve_best_effort(h) == p))
+        || policy.carve_held_paths(true).iter().any(|h| h == p)
 }
 
 /// A write the policy allows that this run's carve still denies, and why: the
@@ -372,7 +400,7 @@ pub fn carve_denies_write(policy: &Policy, path: &std::path::Path) -> Option<Str
         return None;
     }
     let real = resolve_best_effort(path);
-    let grants = policy.linux_write_allowlist_except(&on_readonly_mount);
+    let grants = policy.linux_write_carve(&on_readonly_mount, !namespace::mount_ns_capable());
     if grants.iter().any(|g| real.starts_with(g)) {
         return None;
     }
@@ -934,7 +962,7 @@ fn confined_command(
     let write_grants: Vec<PathBuf> = if use_bind_mounts {
         policy.writable_roots.clone()
     } else {
-        policy.linux_write_allowlist_except(&on_readonly_mount)
+        policy.linux_write_carve(&on_readonly_mount, !ns_capable)
     };
     // Absent handoff paths: with a mount namespace, an empty read-only file is
     // put at the first missing component of each (`.git/hooks`, `.mcp.json`,
@@ -1007,7 +1035,17 @@ fn confined_command(
         && policy.local_ports.is_empty()
         && policy.allow_domains.is_empty()
         && policy.egress_netns.is_none();
-    let seccomp_progs = seccomp::compile_all(deny_unix, harden_syscalls, restrict_net, no_net_grant)
+    // Without a mount namespace nothing outside the roots is read-only, and
+    // Landlock does not mediate chmod/chown/utimes/xattrs: the supervisor does
+    // (metanotify.rs), against the same write grants Landlock gets.
+    let meta = if ns_capable {
+        None
+    } else {
+        let ch = metanotify::channel().map_err(|e| err(format!("metadata notifier: {e}")))?;
+        metanotify::serve(ch.parent, write_grants.iter().map(|g| tartaros_core::resolve_best_effort(g)).collect());
+        Some((metanotify::compile(), ch.child))
+    };
+    let seccomp_progs = seccomp::compile_all(deny_unix, harden_syscalls, restrict_net, no_net_grant, meta.is_some())
         .map_err(|e| err(format!("seccomp compile: {e}")))?;
     // Read-only bind-mount targets (built here in the parent; the pre_exec closure
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
@@ -1168,6 +1206,9 @@ fn confined_command(
             // pre_exec only applies, never compiles (no allocation after fork,
             // review #7). The filters stack; all were selected by compile_all.
             seccomp::apply_all(&seccomp_progs)?;
+            if let Some((filter, sock)) = &meta {
+                metanotify::install_in_child(filter, std::os::fd::AsRawFd::as_raw_fd(sock))?;
+            }
             // Drop all capabilities when running as real root (review #3), after the
             // privileged setup (cgroup join, namespaces, bind mounts) has run and
             // before the agent execs. A uid-0 agent otherwise keeps CAP_SYS_MODULE,
