@@ -3,6 +3,37 @@
 All notable changes to TartarOS. This project is pre-1.0; the format is
 loosely [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **`--handoff-exempt DIR`** (and `handoff_exempt` in a policy file,
+  `filesystem.handoffExempt` in `--settings`): the trust-handoff set is not
+  protected inside DIR, a dependency tree a setup phase fills (`composer
+  install`, `npm install`) whose packages ship their own `.git/`, `.github/` or
+  `.gitattributes`. DIR must be strictly inside a writable root, not a writable
+  root, not inside a handoff surface and not named like one; otherwise the run
+  is refused (exit 78). Every other rule still holds inside, explicit write-denies
+  included, and the repo's own surfaces stay protected. Said at the start of every
+  run and in `explain`. Measured on macOS: a package with its own `.git/hooks`
+  installs under `vendor/`, and the repo's `.git/hooks` stays denied.
+- **`--egress-log FILE`**: the egress broker's decisions as JSON lines, without
+  the effect collectors `--log` starts (about 0.07 s a run, against 1.6 s with
+  `--log`, measured on macOS). A launcher reads the refused hosts from it instead
+  of parsing stderr; seisin does.
+- **`explain --json`**: what `explain` prints, as data: the roots, the denies, the
+  egress allow-list, the masked credentials, the trust-handoff names and
+  exemptions, the limits, what this host enforces and whether it would refuse. An
+  `--env KEY=VALUE` value is never in it, only the name.
+
+### Changed
+- **docs/limits.md, Windows: Schannel measured.** Under the `sandbox-user` tier
+  Windows refuses SSPI credentials to the restricted token, so `curl.exe`,
+  PowerShell and .NET fail HTTPS there. The alternatives were measured on 16,000
+  folders: a token with deny-only groups (Schannel works) leaves 23 folders
+  writable outside the roots, among them installer and updater folders a
+  privileged process later runs from; a low-integrity token keeps writes closed
+  but stops BusyBox and batch files from running. The restricted token stays.
+
 ## [0.1.0-alpha.17] — 2026-10-26
 
 ### Added

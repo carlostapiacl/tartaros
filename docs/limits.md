@@ -213,7 +213,16 @@ both tiers (2026-10-26, 0.1.0-alpha.17).
   `curl.exe`, PowerShell's `Invoke-WebRequest`, .NET. Clients with their own TLS
   stack work (OpenSSL or rustls: Node, Python, Git for Windows by default; measured
   with a rustls client). No restricting SID we tried changes it (`RESTRICTED`,
-  `Authenticated Users`, `LOCAL`, `INTERACTIVE`, `SYSTEM`).
+  `Authenticated Users`, `LOCAL`, `INTERACTIVE`, `SYSTEM`). The two ways out were
+  measured, over the 16,000 folders two levels under `ProgramData`, `Windows` and
+  `Users\Public`: a token with deny-only groups instead of restricting SIDs lets
+  Schannel work, and leaves 23 folders writable outside the roots (the restricted
+  token leaves one, writable by Everyone), among them installer and updater
+  folders (`OneDrive\setup`, `TP-Link\NSISSetup`, `Oracle\Java`) that a
+  privileged process later runs from; a low-integrity token keeps writes closed
+  and lets Schannel work, but BusyBox fails to start and batch files do not run.
+  So the restricted token stays, and a role that needs HTTPS uses a client with
+  its own TLS stack.
 - **`WRITE_RESTRICTED` runner (sandbox-user).** The command runs under a
   write-restricted token whose restricting SIDs are the user and `Everyone`;
   `Everyone` is required or the loader cannot start a process. A path writable by

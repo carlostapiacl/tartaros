@@ -21,6 +21,7 @@
 //!   --strict               a requested guarantee that cannot be installed aborts the run
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
 //!   --allow-home-handoff   allow writing shell rc / .gitconfig / .ripgreprc (denied by default)
+//!   --handoff-exempt DIR   no trust-handoff protection inside DIR, a dependency tree (repeatable)
 //!   --private-tmp          run-private TMPDIR, AF_UNIX scoped to it (headless browsers)
 //!   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes (no curated base)
 //!   --env KEY[=VALUE]      carry one launcher var through, or set it (default: env is scrubbed)
@@ -31,6 +32,7 @@
 //!   --max-procs N          process limit
 //!   --max-cpu SECS         total CPU-seconds limit (RLIMIT_CPU; root-proof)
 //!   --log FILE             write the effect log here, the egress broker's decisions included
+//!   --egress-log FILE      only the egress broker's decisions (JSON Lines), no effect collectors
 //!   --log-format F         jsonl (default) or otlp (OpenTelemetry, with the launcher's TRACEPARENT)
 //!   --settings FILE        map a sandbox-runtime settings.json onto the generic
 //!                          policy; refuses (exit 78) on anything it can't guarantee
@@ -93,6 +95,10 @@ struct PolicyFile {
     strict: bool,
     #[serde(default)]
     materialize_absent_handoff: bool,
+    /// Directories inside a writable root where the trust-handoff set is not
+    /// protected (dependency trees: `vendor`, `node_modules`). See --handoff-exempt.
+    #[serde(default)]
+    handoff_exempt: Vec<String>,
     /// Unset keeps the default (protected); `false` is the dotfiles-repo opt-out.
     #[serde(default)]
     protect_home_handoff: Option<bool>,
@@ -652,6 +658,10 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --materialize          pre-create absent trust-handoff placeholders
   --allow-home-handoff   let the agent write shell rc / .gitconfig / .ripgreprc in its
                          roots (denied by default; for dotfiles repos)
+  --handoff-exempt DIR   no trust-handoff protection inside DIR (strictly inside a
+                         writable root): a dependency tree a setup phase fills, whose
+                         packages ship .gitattributes/.github/.git. Repeatable; said
+                         at start and in explain
   --private-tmp          run-private TMPDIR; AF_UNIX scoped to it (headless browsers)
   --browser              macOS: minimal extra Seatbelt grants for headless Chromium/Chrome
   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes, without the
@@ -674,6 +684,8 @@ LIMITS:
 OBSERVABILITY:
   --log FILE             write the first-hand effect log (JSON Lines), the egress
                          broker's connect decisions included
+  --egress-log FILE      only the egress broker's decisions (JSON Lines): no effect
+                         collectors, so it costs a run nothing extra
   --log-format F         jsonl (default) or otlp: OpenTelemetry log records in the
                          open effect schema, with the launcher's TRACEPARENT
 
@@ -713,8 +725,15 @@ fn cmd_run(rest: &[String]) -> ! {
     // Domain-scoped egress: start the capability broker and route the agent
     // through it. On Linux-as-root this builds a scoped network namespace (NET-01);
     // the returned guard tears it (netns + veth + firewall rule) down after the run.
-    let egress_guard = start_egress_broker(&mut p, log.as_ref());
+    // The broker writes to --log when there is one, else to --egress-log alone.
+    let broker_log = log.clone().or_else(|| EGRESS_LOG.get().map(|path| LogSpec { path: path.clone(), format: LogFormat::Jsonl }));
+    let egress_guard = start_egress_broker(&mut p, broker_log.as_ref());
     start_credential_broker(&mut p);
+    // A handoff exemption is said every time: it is an opening, and a log of the
+    // run should show it was there.
+    for e in &p.handoff_exempt {
+        eprintln!("tartaros: trust-handoff not protected inside {} (--handoff-exempt)", e.display());
+    }
     // Print the profile's honest caveat before running — a tier must never
     // silently overclaim (esp. multi-tenant on a shared kernel).
     if let Some(pr) = profile {
@@ -1190,7 +1209,26 @@ fn random_token() -> std::io::Result<String> {
 const NET01_FALLBACK: &str = "egress scoping now relies on a port grant that Landlock cannot pin to loopback (NET-01) — a malicious agent that learns the port could reach an external host on it, bypassing the broker. Safe for a trusted-but-fallible agent; for hostile code run as root so the scoped network namespace can be used.";
 
 fn cmd_explain(opts: &[String]) -> ! {
-    let (p, _, profile) = build_policy(opts, true); // explain: verbose
+    // `--json`: the same answer for a program (a launcher reads the handoff set
+    // and the egress allow-list from here instead of parsing the text).
+    let json = opts.iter().any(|o| o == "--json");
+    let opts: Vec<String> = opts.iter().filter(|o| *o != "--json").cloned().collect();
+    let (p, _, profile) = build_policy(&opts, !json); // explain: verbose
+    #[cfg(target_os = "linux")]
+    let blocked = tartaros_linux::host_blocks_run(&p);
+    #[cfg(target_os = "macos")]
+    let blocked = tartaros_macos::host_blocks_run(&p);
+    #[cfg(target_os = "windows")]
+    let blocked = {
+        use tartaros_core::Backend;
+        tartaros_windows::WindowsBackend.validate(&p).err().map(|e| e.reason)
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let blocked: Option<String> = None;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&explain_json(&p, profile.as_ref(), blocked.as_deref())).unwrap_or_default());
+        exit(if blocked.is_some() { EXIT_POLICY_REFUSED } else { 0 });
+    }
     if let Some(pr) = profile {
         println!("profile: {} — {}", pr.name(), pr.tier());
         if let Some(c) = pr.caveat() {
@@ -1203,17 +1241,6 @@ fn cmd_explain(opts: &[String]) -> ! {
     // (an external audit) never shows a green ✓ for a policy this host cannot enforce
     // (e.g. no Landlock on Docker Desktop's linuxkit kernel). Same fail-closed
     // contract as `run`, just without spawning anything.
-    #[cfg(target_os = "linux")]
-    let blocked = tartaros_linux::host_blocks_run(&p);
-    #[cfg(target_os = "macos")]
-    let blocked = tartaros_macos::host_blocks_run(&p);
-    #[cfg(target_os = "windows")]
-    let blocked = {
-        use tartaros_core::Backend;
-        tartaros_windows::WindowsBackend.validate(&p).err().map(|e| e.reason)
-    };
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    let blocked: Option<String> = None;
     if let Some(reason) = blocked {
         eprintln!("\ntartaros: this host cannot enforce this policy: {reason}");
         exit(EXIT_POLICY_REFUSED);
@@ -1261,6 +1288,10 @@ struct SandboxFs {
     allow_read: Vec<String>,
     #[serde(default, rename = "denyRead")]
     deny_read: Vec<String>,
+    /// tartaros's own extension (sandbox-runtime has no such field): directories
+    /// where the trust-handoff set is not protected — `--handoff-exempt`.
+    #[serde(default, rename = "handoffExempt")]
+    handoff_exempt: Vec<String>,
 }
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -1420,6 +1451,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     };
     for x in &s.filesystem.deny_read.clone() { map_deny(x, false, true, p); }
     for x in &s.filesystem.deny_write.clone() { map_deny(x, true, false, p); }
+    for x in &s.filesystem.handoff_exempt { p.handoff_exempt.push(PathBuf::from(expand_path(x))); }
     // Network: we default-deny. Anything we cannot enforce in-sandbox is refused.
     p.network = Some(Network::Denied);
     // Per-domain egress IS enforceable: the broker runs as a CONNECT/forward proxy
@@ -1583,6 +1615,11 @@ struct LogSpec {
     format: LogFormat,
 }
 
+/// `--egress-log FILE`: only the egress broker's decisions, as JSON lines, with
+/// no effect collectors. `--log` turns those on too, and they cost a launcher
+/// that only wants the refused hosts more than a second a run (measured, macOS).
+static EGRESS_LOG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LogFormat {
     Jsonl,
@@ -1643,6 +1680,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
         p.harden_syscalls = pf.harden_syscalls;
         p.strict = pf.strict;
         p.materialize_absent_handoff = pf.materialize_absent_handoff;
+        p.handoff_exempt = pf.handoff_exempt.iter().map(|s| PathBuf::from(expand_path(s))).collect();
         if let Some(on) = pf.protect_home_handoff {
             p.protect_home_handoff = on;
         }
@@ -1721,6 +1759,8 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             "--max-cpu" => p.max_cpu_secs = Some(parse_num_or_exit(&val(), "--max-cpu (seconds)")),
             "--isolate-proc" => p.isolate_process_info = true,
             "--log" => log = Some(val()),
+            "--egress-log" => { let _ = EGRESS_LOG.set(val()); }
+            "--handoff-exempt" => p.handoff_exempt.push(PathBuf::from(expand_path(&val()))),
             "--log-format" => log_format = Some(match val().as_str() {
                 "jsonl" => LogFormat::Jsonl,
                 "otlp" => LogFormat::Otlp,
@@ -1739,6 +1779,62 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
 
 /// Print exactly what a policy grants, without running anything — so a security
 /// team can audit a profile before deploying it.
+/// `explain --json`: what `explain` prints, as data. Paths as strings, the
+/// environment by NAME only (a `--env KEY=VALUE` value is never shown), and the
+/// trust-handoff set as the names protected at any depth under each root.
+fn explain_json(p: &Policy, profile: Option<&Profile>, blocked: Option<&str>) -> serde_json::Value {
+    let paths = |v: &[std::path::PathBuf]| v.iter().map(|x| x.display().to_string()).collect::<Vec<_>>();
+    let masked = MASKED.get().map(|m| {
+        m.creds.iter().map(|(n, h)| serde_json::json!({ "name": n, "hosts": h })).collect::<Vec<_>>()
+    }).unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    let enforcement = tartaros_macos::enforcement_report(p);
+    #[cfg(target_os = "linux")]
+    let enforcement = tartaros_linux::enforcement_report(p);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let enforcement: Vec<String> = Vec::new();
+    serde_json::json!({
+        "tartaros": env!("CARGO_PKG_VERSION"),
+        "backend": backend_os(),
+        "profile": profile.map(|pr| pr.name()),
+        "role": p.role,
+        "network": format!("{:?}", p.network),
+        "egress_domains": p.allow_domains,
+        "masked_credentials": masked,
+        "local_ports": p.local_ports,
+        "writable_roots": paths(&p.writable_roots),
+        "write_denied": p.fs_rules.iter().filter(|r| r.access == Access::Deny).map(|r| r.path.display().to_string()).collect::<Vec<_>>(),
+        "read_denied": paths(&p.read_denies),
+        "read_allowed": paths(&p.read_allows),
+        "trust_handoff": {
+            "names": tartaros_core::HANDOFF_CONFIG_NAMES,
+            "git": tartaros_core::HANDOFF_GIT_NAMES,
+            "home": if p.protect_home_handoff { tartaros_core::HANDOFF_HOME_NAMES.to_vec() } else { Vec::new() },
+            "exempt": paths(&p.handoff_exempt),
+        },
+        "isolate_pids": p.isolate_pids,
+        "isolate_network": p.isolate_network,
+        "isolate_process_info": p.isolate_process_info,
+        "harden_syscalls": p.harden_syscalls,
+        "strict": p.strict,
+        "private_tmp": p.private_tmp,
+        "deny_unix_sockets": p.deny_unix_sockets,
+        "environment": {
+            "inherit": p.inherit_env,
+            "allowlist": tartaros_core::ENV_ALLOWLIST,
+            "passthrough": p.env_passthrough.iter().map(|e| e.split_once('=').map(|(k, _)| k).unwrap_or(e).to_string()).collect::<Vec<_>>(),
+        },
+        "limits": {
+            "timeout_secs": p.timeout.map(|t| t.as_secs()),
+            "max_memory_bytes": p.max_memory_bytes,
+            "max_processes": p.max_processes,
+            "max_cpu_secs": p.max_cpu_secs,
+        },
+        "enforcement": enforcement,
+        "blocked": blocked,
+    })
+}
+
 fn explain(p: &Policy) {
     println!("role: {}", if p.role.is_empty() { "(unset)" } else { &p.role });
     println!("network: {:?}", p.network);
@@ -1819,6 +1915,10 @@ fn explain(p: &Policy) {
     // the protection covers paths that do not exist yet (pre-planting defense), and
     // walking a large writable tree (e.g. --write /tmp) just to print it would be a
     // needless stat storm.
+    if !p.handoff_exempt.is_empty() {
+        println!("\ntrust-handoff NOT protected inside (--handoff-exempt):");
+        for e in &p.handoff_exempt { println!("  ~ {}", e.display()); }
+    }
     println!("\ntrust-handoff protected (deny write at any depth under each writable root):");
     for name in tartaros_core::HANDOFF_CONFIG_NAMES { println!("  ! **/{name}"); }
     for name in tartaros_core::HANDOFF_GIT_NAMES { println!("  ! **/{name}  (in any git repo)"); }

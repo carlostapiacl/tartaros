@@ -367,6 +367,7 @@ impl Backend for AppContainerBackend {
             }
         }
         policy.check_symlinked_roots().map_err(|reason| PolicyError { reason })?;
+        policy.check_handoff_exempt().map_err(|reason| PolicyError { reason })?;
         let mut unsupported: Vec<&str> = Vec::new();
         match policy.network {
             None | Some(Network::Denied) => {}

@@ -176,6 +176,12 @@ pub struct Policy {
     /// later runs. Landlock protects by inode, so a path must exist to be carved;
     /// this materializes it. A workspace side effect — hence opt-in.
     pub materialize_absent_handoff: bool,
+    /// Directories inside a writable root where the trust-handoff set is NOT
+    /// protected: dependency trees a setup phase fills (`vendor/`, `node_modules/`)
+    /// whose packages ship their own `.gitattributes`, `.github/` or `.git/`. An
+    /// explicit, listed exemption (see [`Policy::check_handoff_exempt`]); every
+    /// other rule still holds inside, and the repo's own surfaces stay protected.
+    pub handoff_exempt: Vec<PathBuf>,
     /// Opt-in: also protect the per-user home-handoff surface
     /// (`HANDOFF_HOME_NAMES`: shell rc files, `.gitconfig`, `.ripgreprc`) under the
     /// writable roots, denied even if absent. Off by default because it breaks
@@ -709,6 +715,7 @@ impl Policy {
         for root in &self.writable_roots {
             expand_root(root, self.protect_home_handoff, &mut out);
         }
+        out.retain(|r| !self.handoff_exempted(&r.path));
         // Upward check: a writable root named INSIDE a handoff surface (e.g. under
         // `<repo>/.git/hooks/`) is denied wholesale — the downward walk can't see
         // the enclosing surface, so without this the root would be fully writable
@@ -719,6 +726,44 @@ impl Policy {
         }
         dedup(&mut out);
         out
+    }
+
+    /// Whether `path` lies in a `handoff_exempt` directory (resolved).
+    pub fn handoff_exempted(&self, path: &Path) -> bool {
+        if self.handoff_exempt.is_empty() {
+            return false;
+        }
+        let p = resolve_best_effort(path);
+        self.handoff_exempt.iter().any(|e| p.starts_with(resolve_best_effort(e)))
+    }
+
+    /// `handoff_exempt` refuses what would turn the exemption into a hole: a
+    /// directory that is not strictly inside a writable root, is a writable root
+    /// itself, lies inside a handoff surface (`.git/hooks/x`), or is named like
+    /// one (`.claude`, `.git`). Err carries the reason (refused, exit 78).
+    pub fn check_handoff_exempt(&self) -> Result<(), String> {
+        for e in &self.handoff_exempt {
+            if !e.is_absolute() {
+                return Err(format!("handoff exemption {}: must be an absolute path", e.display()));
+            }
+            let real = resolve_best_effort(e);
+            let Some(root) = self.writable_roots.iter().map(|r| resolve_best_effort(r)).find(|r| real.starts_with(r) && real != *r) else {
+                return Err(format!("handoff exemption {}: must be strictly inside a writable root", e.display()));
+            };
+            if root_inside_handoff_surface(&real) {
+                return Err(format!("handoff exemption {}: lies inside a trust-handoff surface", e.display()));
+            }
+            // Only below the root: a root that itself lives under, say, ~/.claude is fine.
+            let below = real.strip_prefix(&root).unwrap_or(&real);
+            let named = below.components().any(|c| {
+                let s = c.as_os_str().to_string_lossy();
+                HANDOFF_CONFIG_NAMES.iter().chain(HANDOFF_GIT_NAMES).any(|n| n.split('/').next() == Some(&*s))
+            });
+            if named {
+                return Err(format!("handoff exemption {}: names a trust-handoff surface itself", e.display()));
+            }
+        }
+        Ok(())
     }
 
     /// Writable roots that are named INSIDE a directory handoff surface
@@ -1247,6 +1292,27 @@ pub struct RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handoff_exemption_drops_the_rules_inside_it_and_keeps_the_repos() {
+        let base = std::env::temp_dir().join(format!("tt-exempt-{}", std::process::id()));
+        let repo = base.join("repo");
+        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(repo.join("vendor/pkg/.git/hooks")).unwrap();
+        let mut p = Policy { writable_roots: vec![repo.clone()], ..Default::default() };
+        let has = |p: &Policy, s: &str| p.trust_handoff_rules().iter().any(|r| r.path.to_string_lossy().ends_with(s));
+        assert!(has(&p, "vendor/pkg/.git/hooks"));
+        p.handoff_exempt = vec![repo.join("vendor")];
+        assert!(p.check_handoff_exempt().is_ok());
+        assert!(!has(&p, "vendor/pkg/.git/hooks"));
+        assert!(has(&p, "repo/.git/hooks"));
+        for bad in [repo.clone(), repo.join(".vscode"), repo.join(".git/hooks/x"), base.join("outside"), PathBuf::from("rel")] {
+            p.handoff_exempt = vec![bad.clone()];
+            assert!(p.check_handoff_exempt().is_err(), "{} should be refused", bad.display());
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
     use std::fs;
 
     fn has_deny(rules: &[FsRule], p: &Path) -> bool {
