@@ -46,6 +46,7 @@ use serde::Deserialize;
 
 #[cfg(target_os = "linux")]
 mod egress_ns;
+mod snapshot;
 
 /// Teardown guard for scoped-egress state held across the run. On Linux it owns the
 /// network namespace (NET-01); elsewhere there is nothing to tear down.
@@ -680,6 +681,8 @@ fn main() {
         Some("run") => cmd_run(&args[1..]),
         Some("explain") => cmd_explain(&args[1..]),
         Some("why") => cmd_why(&args[1..]),
+        Some("snapshot") => cmd_snapshot(&args[1..]),
+        Some("rollback") => cmd_rollback(&args[1..]),
         Some("version" | "--version" | "-V") => {
             println!("tartaros {} ({})", env!("CARGO_PKG_VERSION"), backend_os());
             exit(0);
@@ -725,6 +728,8 @@ USAGE:
   tartaros run [options] -- <command> [args...]   run a command confined by a policy
   tartaros explain [options]                      print what a policy grants, without running
   tartaros why read|write PATH [options]          which rule of the policy allows or denies that access
+  tartaros snapshot list | diff ID                the snapshots taken with run --snapshot
+  tartaros rollback ID [--dry-run]                put the writable roots back as snapshot ID found them
   tartaros version                                print version and backend
   tartaros help                                   this help
 
@@ -776,6 +781,12 @@ ENVIRONMENT (secrets in the launcher's env are NOT governed by Landlock/Seatbelt
   --allow-exposed-secrets  run even if another process's exec record (a shell that
                          exported it) holds a masked credential's or the broker's secret
 
+SNAPSHOTS:
+  --snapshot             snapshot the writable roots before the run; `tartaros rollback ID`
+                         restores them (the store, outside the roots, is read-denied)
+  --snapshot-exclude N   leave directories named N out (node_modules, target); repeatable
+  --snapshot-max-bytes B refuse the run (78) if the roots hold more (default 2 GiB)
+
 LIMITS:
   --timeout SECS         kill the run after SECS (exit 124)
   --max-mem BYTES        address-space / cgroup memory cap
@@ -809,7 +820,8 @@ fn cmd_run(rest: &[String]) -> ! {
         eprintln!("error: no command after `--`");
         exit(2);
     }
-    let (mut p, log, profile) = build_policy(opts, false); // run: quiet
+    let (opts, snap_spec) = snapshot_flags(opts);
+    let (mut p, log, profile) = build_policy(&opts, false); // run: quiet
     // Secrets out of tartaros's exec environment before anything can read it.
     #[cfg(unix)]
     reexec_without_secrets();
@@ -818,6 +830,7 @@ fn cmd_run(rest: &[String]) -> ! {
     if p.writable_roots.is_empty() {
         eprintln!("warning: no --write roots; the command cannot write anywhere");
     }
+    let snap = snap_spec.on.then(|| take_run_snapshot(&mut p, &snap_spec));
     // Note: the environment is scrubbed to a safe allowlist by the BACKEND at spawn
     // (F-13, `Policy::child_env`), so secrets in the launcher's env never reach the
     // agent and the guarantee holds for any embedder, not just this CLI. The broker
@@ -845,6 +858,18 @@ fn cmd_run(rest: &[String]) -> ! {
     let private_tmp = setup_private_tmp(&mut p);
     warn_reachable_host_sockets(&p);
     let code = run(&p, &cmd, log.as_ref());
+    if let Some(m) = &snap {
+        match snapshot::diff(m) {
+            Ok(d) => eprintln!(
+                "tartaros: since snapshot {}: {} added, {} changed, {} removed (tartaros snapshot diff {0}; tartaros rollback {0})",
+                m.id,
+                d.added.len(),
+                d.changed.len(),
+                d.removed.len()
+            ),
+            Err(e) => eprintln!("tartaros: snapshot {}: {e}", m.id),
+        }
+    }
     // Tear down the run-private temp dir (our own ephemeral scratch for this run).
     if let Some(dir) = private_tmp {
         let _ = std::fs::remove_dir_all(&dir);
@@ -1372,6 +1397,141 @@ fn cmd_explain(opts: &[String]) -> ! {
         exit(EXIT_POLICY_REFUSED);
     }
     exit(0);
+}
+
+/// `run`'s snapshot flags, taken out of the policy options.
+fn snapshot_flags(opts: &[String]) -> (Vec<String>, snapshot::Spec) {
+    let mut spec = snapshot::Spec { max_bytes: snapshot::DEFAULT_MAX_BYTES, ..Default::default() };
+    let mut rest = Vec::new();
+    let mut it = opts.iter();
+    while let Some(o) = it.next() {
+        match o.as_str() {
+            "--snapshot" => spec.on = true,
+            "--snapshot-exclude" | "--snapshot-max-bytes" => {
+                let Some(v) = it.next() else {
+                    eprintln!("tartaros: {o} needs a value");
+                    exit(2);
+                };
+                if o == "--snapshot-exclude" {
+                    if v.is_empty() || v.contains('/') || v == "." || v == ".." {
+                        eprintln!("tartaros: --snapshot-exclude takes a directory name, not a path");
+                        exit(2);
+                    }
+                    spec.exclude.push(v.clone());
+                } else {
+                    spec.max_bytes = v.parse().unwrap_or_else(|_| {
+                        eprintln!("tartaros: --snapshot-max-bytes takes a number of bytes");
+                        exit(2);
+                    });
+                }
+            }
+            _ => rest.push(o.clone()),
+        }
+    }
+    if !spec.on && (!spec.exclude.is_empty() || spec.max_bytes != snapshot::DEFAULT_MAX_BYTES) {
+        eprintln!("tartaros: --snapshot-exclude and --snapshot-max-bytes go with --snapshot");
+        exit(2);
+    }
+    (rest, spec)
+}
+
+/// Snapshot the roots before the run, or refuse it (78): a run asked to be
+/// undoable never starts without its snapshot.
+fn take_run_snapshot(p: &mut Policy, spec: &snapshot::Spec) -> snapshot::Manifest {
+    use tartaros_core::resolve_best_effort;
+    let store = snapshot::store();
+    if let Err(e) = std::fs::create_dir_all(&store) {
+        eprintln!("tartaros: snapshot store {}: {e}; refusing to run", store.display());
+        exit(EXIT_POLICY_REFUSED);
+    }
+    let store = resolve_best_effort(&store);
+    let roots: Vec<PathBuf> = p.writable_roots.iter().map(|r| resolve_best_effort(r)).collect();
+    if let Some(r) = roots.iter().find(|r| store.starts_with(r)) {
+        eprintln!(
+            "tartaros: the snapshot store {} lies inside the writable root {}: the agent could alter it. Set TARTAROS_STATE_DIR elsewhere; refusing to run",
+            store.display(),
+            r.display()
+        );
+        exit(EXIT_POLICY_REFUSED);
+    }
+    let skipped: Vec<PathBuf> = p.read_denies.iter().map(|d| resolve_best_effort(d)).collect();
+    match snapshot::take(&roots, &spec.exclude, &skipped, spec.max_bytes) {
+        Ok(m) => {
+            let files: usize = m.roots.iter().map(|r| r.entries.values().filter(|e| matches!(e, snapshot::Entry::File { .. })).count()).sum();
+            eprintln!("tartaros: snapshot {} of the writable roots ({files} files); `tartaros rollback {}` restores them", m.id, m.id);
+            p.read_denies.push(store);
+            m
+        }
+        Err(e) => {
+            eprintln!("tartaros: {e}; refusing to run");
+            exit(EXIT_POLICY_REFUSED);
+        }
+    }
+}
+
+fn cmd_snapshot(args: &[String]) -> ! {
+    match (args.first().map(String::as_str), args.get(1)) {
+        (Some("list"), None) => {
+            for m in snapshot::list() {
+                let roots: Vec<String> = m.roots.iter().map(|r| r.path.display().to_string()).collect();
+                println!("{}  {}  {}", m.id, snapshot::stamp(m.created_unix), roots.join(" "));
+            }
+            exit(0);
+        }
+        (Some("diff"), Some(id)) => {
+            let m = snapshot::load(id).unwrap_or_else(|e| {
+                eprintln!("tartaros: {e}");
+                exit(1);
+            });
+            let d = snapshot::diff(&m).unwrap_or_else(|e| {
+                eprintln!("tartaros: {e}");
+                exit(1);
+            });
+            for (tag, v) in [("added", &d.added), ("changed", &d.changed), ("removed", &d.removed)] {
+                for p in v {
+                    println!("{tag}\t{}", p.display());
+                }
+            }
+            exit(0);
+        }
+        _ => {
+            eprintln!("tartaros: usage: tartaros snapshot list | tartaros snapshot diff ID");
+            exit(2);
+        }
+    }
+}
+
+fn cmd_rollback(args: &[String]) -> ! {
+    let dry = args.iter().any(|a| a == "--dry-run");
+    let ids: Vec<&String> = args.iter().filter(|a| *a != "--dry-run").collect();
+    let [id] = ids.as_slice() else {
+        eprintln!("tartaros: usage: tartaros rollback ID [--dry-run]");
+        exit(2);
+    };
+    let m = snapshot::load(id).unwrap_or_else(|e| {
+        eprintln!("tartaros: {e}");
+        exit(1);
+    });
+    match snapshot::rollback(&m, dry) {
+        Ok((before, d, failed)) => {
+            for (tag, v) in [("remove", &d.added), ("restore", &d.changed), ("re-create", &d.removed)] {
+                for p in v {
+                    println!("{tag}\t{}", p.display());
+                }
+            }
+            if let Some(b) = before {
+                eprintln!("tartaros: rolled back to {}; the state it replaced is snapshot {b} (`tartaros rollback {b}` undoes this)", m.id);
+            }
+            for f in &failed {
+                eprintln!("tartaros: not restored: {f}");
+            }
+            exit(if failed.is_empty() { 0 } else { 1 });
+        }
+        Err(e) => {
+            eprintln!("tartaros: {e}");
+            exit(1);
+        }
+    }
 }
 
 /// `tartaros why read|write PATH [options]`: the rule that decides one access,
