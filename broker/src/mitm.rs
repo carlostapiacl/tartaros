@@ -290,10 +290,10 @@ impl Broker {
     /// Should a CONNECT to `host` be terminated? Only when a masked credential
     /// injects into it and `tlsTerminate.excludeDomains` does not exclude it.
     pub(crate) fn terminates(&self, host: &str) -> bool {
-        match (&self.masks, &self.mitm) {
-            (Some(m), Some(_)) => m.injects_into(host) && !crate::host_covered(&self.tls_exclude, host),
-            _ => false,
+        if self.mitm.is_none() || crate::host_covered(&self.tls_exclude, host) {
+            return false;
         }
+        self.masks.as_ref().is_some_and(|m| m.injects_into(host)) || self.rules.as_ref().is_some_and(|r| r.covers(host))
     }
 
     /// Serve one terminated CONNECT (see the module doc). `target` is the
@@ -307,9 +307,12 @@ impl Broker {
         mut client: TcpStream,
         tx: &std::sync::mpsc::Sender<EffectEvent>,
     ) -> io::Result<()> {
-        let (Some(masks), Some(ca)) = (self.masks.as_ref(), self.mitm.as_ref()) else {
-            return Err(io::Error::other("termination without masks"));
+        let Some(ca) = self.mitm.as_ref() else {
+            return Err(io::Error::other("termination without a CA"));
         };
+        // A host terminated for its request rules alone has nothing to swap.
+        let no_masks = crate::mask::Masks::new(Vec::new());
+        let masks = self.masks.as_deref().unwrap_or(&no_masks);
         let cfg = ca.server_config(host)?;
         client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
         client.flush()?;
@@ -399,6 +402,12 @@ impl Broker {
         let Some(framing) = body_framing(&headers) else {
             return refuse(r.get_mut(), "400 Bad Request", "ambiguous body framing");
         };
+        // The request rules, once the request is known to be for this host.
+        if let Some(rules) = self.rules.as_ref().filter(|r| r.covers(host)) {
+            if let Err(why) = rules.check(host, &method, &path) {
+                return refuse(r.get_mut(), "403 Forbidden", &why);
+            }
+        }
 
         // What goes upstream: the headers with the sentinels swapped, minus the
         // hop-by-hop ones, the proxy's own, and the framing (set again below).
@@ -764,6 +773,55 @@ mod tests {
 
     fn get(host: &str, port: u16, extra: &str) -> Vec<Vec<u8>> {
         vec![format!("GET /x HTTP/1.1\r\nHost: {host}:{port}\r\n{extra}\r\n").into_bytes()]
+    }
+
+    /// A broker on loopback with request rules and no masked credential.
+    fn ruled_broker(rules: Vec<crate::rules::RequestRule>, up_ca: &CertificateDer<'static>) -> (u16, Arc<MitmCa>) {
+        let ca = Arc::new(MitmCa::new().unwrap());
+        let b = Broker::new("qa", vec![])
+            .insecure_no_auth()
+            .with_allow_internal(true)
+            .with_allowed_hosts(vec!["127.0.0.1".into(), "localhost".into()])
+            .with_upstream_roots(std::slice::from_ref(up_ca))
+            .unwrap()
+            .with_request_rules(Arc::new(crate::rules::Rules::new(rules).unwrap()), ca.clone())
+            .unwrap();
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        (port, ca)
+    }
+
+    fn req(method: &str, path: &str, host: &str, port: u16) -> Vec<Vec<u8>> {
+        vec![format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Length: 0\r\n\r\n").into_bytes()]
+    }
+
+    #[test]
+    fn a_request_rule_lets_its_method_and_path_through_and_refuses_the_rest() {
+        let (up, up_ca) = tls_upstream(None);
+        let rule = crate::rules::RequestRule { host: "127.0.0.1".into(), methods: vec!["GET".into()], paths: vec!["/repos/acme/".into()] };
+        let (b, ca) = ruled_broker(vec![rule], &up_ca);
+        let at = format!("127.0.0.1:{up}");
+        let ok = through(b, &at, "127.0.0.1", Some(ca.cert_der()), &req("GET", "/repos/acme/app", "127.0.0.1", up));
+        assert!(ok.starts_with("HTTP/1.1 200") && ok.contains("GET /repos/acme/app"), "{ok}");
+        for (m, p) in [("POST", "/repos/acme/app"), ("GET", "/repos/evil/app"), ("GET", "/repos/acme/%2e%2e/evil"), ("GET", "/repos/acme-evil")] {
+            let no = through(b, &at, "127.0.0.1", Some(ca.cert_der()), &req(m, p, "127.0.0.1", up));
+            assert!(no.starts_with("HTTP/1.1 403"), "{m} {p}: {no}");
+            assert!(!no.contains(&format!("{m} {p} HTTP/1.1\r\nHost")), "{m} {p} reached the upstream: {no}");
+        }
+    }
+
+    #[test]
+    fn a_host_with_no_rule_keeps_the_blind_tunnel() {
+        let (up, up_ca) = tls_upstream(None);
+        let rule = crate::rules::RequestRule { host: "localhost".into(), methods: vec!["GET".into()], paths: vec![] };
+        let (b, _ca) = ruled_broker(vec![rule], &up_ca);
+        // 127.0.0.1 is allowed and has no rule: not terminated, any method goes.
+        let out = through(b, &format!("127.0.0.1:{up}"), "127.0.0.1", Some(&up_ca), &req("DELETE", "/anything", "127.0.0.1", up));
+        assert!(out.starts_with("HTTP/1.1 200") && out.contains("DELETE /anything"), "{out}");
     }
 
     #[test]
