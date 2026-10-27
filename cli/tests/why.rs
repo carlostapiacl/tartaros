@@ -33,14 +33,19 @@ fn why_says_what_the_sandbox_does() {
         policy(&mut why);
         let out = why.output().unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        assert_eq!(out.status.code(), Some(if allowed { 0 } else { 1 }), "{rel}: {text}");
-        assert!(text.contains(word), "{rel}: {text}");
+        // A Linux host that carves (no mount namespace) withholds more than the
+        // policy says; `why` reports that instead, and must still match the run.
+        let carved = text.contains("Linux: nothing new can be created");
+        if !carved {
+            assert_eq!(out.status.code(), Some(if allowed { 0 } else { 1 }), "{rel}: {text}");
+            assert!(text.contains(word), "{rel}: {text}");
+        }
         let mut run = Command::new(BIN);
         run.arg("run");
         policy(&mut run);
         run.args(["--", "sh", "-c", &format!("echo x > '{}'", path.display())]);
         let ran = run.output().unwrap();
-        assert_eq!(ran.status.success(), allowed, "{rel}: why said {text}, the run said {}", String::from_utf8_lossy(&ran.stderr));
+        assert_eq!(ran.status.success(), out.status.success(), "{rel}: why said {text}, the run said {}", String::from_utf8_lossy(&ran.stderr));
     }
     // A write deny that does not exist yet: on Linux the carve withholds its
     // nearest existing ancestor, so a new file beside it is denied too, and
