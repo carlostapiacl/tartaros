@@ -887,9 +887,23 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     let (fixture_content, unix_paths) = prepare(&root_s);
 
     // start any loopback servers the scenario needs (network cases)
+    // A port that cannot be bound is said (INFRA_ERROR), never left to show up
+    // as the control failing to connect; a busy port gets a few seconds first.
     let mut servers = Vec::new();
+    let mut server_err: Option<String> = None;
     for s in &c.server {
-        if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", s.port)) {
+        let mut bound = std::net::TcpListener::bind(("127.0.0.1", s.port));
+        for _ in 0..20 {
+            if bound.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            bound = std::net::TcpListener::bind(("127.0.0.1", s.port));
+        }
+        if let Err(e) = &bound {
+            server_err.get_or_insert(format!("server port {}: {e}", s.port));
+        }
+        if let Ok(l) = bound {
             let l2 = l.try_clone().ok();
             std::thread::spawn(move || {
                 for stream in l.incoming().flatten() {
@@ -995,6 +1009,14 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
             source: c.source.clone(),
         }
     };
+
+    if let Some(e) = server_err {
+        drop(servers);
+        for p in &unix_paths {
+            let _ = std::fs::remove_file(p);
+        }
+        return infra(e);
+    }
 
     // attack: forbidden op must NOT succeed (or must exit with expect_exit).
     // In mutation mode the attack may succeed and print fixture data (e.g. a test

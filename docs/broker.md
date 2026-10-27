@@ -57,8 +57,8 @@ Limits:
   APIs.
 - HTTPS through `allowed_hosts` is a blind CONNECT tunnel: TLS is end to end, so no
   header can be added to it. Use a capability for an HTTPS API.
-- Masked credentials (below) cover environment variables only: no files, no AWS
-  SigV4 re-signing.
+- Masked credentials (below) cover environment variables, AWS pairs included
+  (re-signed); not credential files.
 
 ## Masked credentials (`--settings`)
 
@@ -116,11 +116,53 @@ What it costs and what it does not do:
 - **Missed swaps fail closed:** a sentinel inside a compressed or encoded body reaches
   the upstream as the fake, and authentication fails; the real value is never sent
   where it was not declared. A sentinel in the URL (a query string) is not swapped.
-- **Refused by name (exit 78):** `credentials.files`, `credentials.awsPairs`, a mode
+- **AWS keys are re-signed.** A masked AWS pair (`credentials.awsPairs`, or
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` both masked) gives the agent a
+  fake key id and secret, so the SigV4 signature its SDK computes is over the fake
+  secret. On the pair's hosts the broker re-signs the request with the real pair:
+  same scope, signed headers and `x-amz-date`, over the request as it goes up (the
+  body read whole, up to 32 MiB, its hash recomputed). What carries a signature
+  the broker cannot reproduce is refused (403): an `aws-chunked` streaming body, a
+  presigned URL and SigV4a. A session token is masked like any variable. Ported
+  from sandbox-runtime's signer and checked against AWS's documented example.
+- **Refused by name (exit 78):** `credentials.files`, a mode
   other than `mask`, a credential with no `injectHosts` or one `allowedDomains` does
   not cover, `tlsTerminate` without credentials, and a CA of the caller's
   (`tlsTerminate.caCertPath`).
 - See *Secrets and exec environments* below for what the launcher must not do.
+
+## Request rules (`--allow-request`)
+
+An allowed domain is HTTPS to all of it: with `--allow-domain api.github.com` and a
+token, an agent can push to any repository the token reaches. A request rule
+narrows a domain to the methods and paths a role needs:
+
+```sh
+tartaros run --allow-domain api.github.com \
+  --allow-request "GET api.github.com" \
+  --allow-request "POST,PATCH api.github.com/repos/acme/" -- …
+```
+
+In a policy file, `[[request_rule]]` with `host`, `methods` and `paths`; in
+`--settings`, `network.requestRules: [{ "host", "methods", "paths" }]` (tartaros's
+own field: sandbox-runtime filters requests with a callback, not a setting).
+
+- **A host with rules is terminated** with the run's CA, as a masked credential's
+  host is, and the agent trusts that CA through the same variables. Hosts without
+  rules keep the blind tunnel.
+- **Every request must match a rule**: its method among the rule's (none listed:
+  any) and its path under one of the rule's prefixes (none listed: any). Anything
+  else gets 403 before it leaves, and the refusal is logged with the method and
+  path (`--log`, `--egress-log`, stderr).
+- **The path fails closed:** a `.` or `..` segment in any spelling is refused, a
+  prefix matches at a segment boundary (`/repos/acme` is not `/repos/acme-evil`),
+  and a path spelled differently from the prefix (another case, percent-encoded
+  letters) does not match. The query is not part of the path.
+- **Refused before the run (exit 78):** a rule for a host that is not an allowed
+  domain, one that `tlsTerminate.excludeDomains` excludes (its requests could not
+  be read), and a rule written wrong (a lower-case method, a prefix with `..`).
+- It is a MITM over those hosts, with the costs said above for masked credentials:
+  a client that pins certificates fails there.
 
 ## Secrets and exec environments
 

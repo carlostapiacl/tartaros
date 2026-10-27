@@ -75,6 +75,8 @@ pub struct Capability {
 mod egress;
 mod limits;
 pub mod mask;
+pub mod rules;
+pub mod sigv4;
 pub mod mitm;
 
 /// Does one of `patterns` (exact hosts, or `.domain` for a domain and its
@@ -119,6 +121,15 @@ impl<W: Write> RefusalReport<W> {
 impl<W: Write> EffectSink for RefusalReport<W> {
     fn emit(&mut self, ev: &EffectEvent) {
         if ev.outcome != Outcome::Denied {
+            return;
+        }
+        // A request refused on a terminated connection: its target already says
+        // `host:port (why)`, and the why holds the request's path.
+        if ev.action == "broker-terminate-refused" {
+            if self.seen.insert(ev.target.clone()) {
+                let _ = writeln!(self.out, "tartaros: egress broker refused {}", ev.target);
+                let _ = self.out.flush();
+            }
             return;
         }
         let why = match ev.action.as_str() {
@@ -185,6 +196,9 @@ pub struct Broker {
     mitm: Option<std::sync::Arc<mitm::MitmCa>>,
     /// `tlsTerminate.excludeDomains`: never terminated, masked or not.
     tls_exclude: Vec<String>,
+    /// Request rules (`rules.rs`): the hosts they name are terminated too, and each
+    /// request on them must match a rule's method and path prefix.
+    rules: Option<std::sync::Arc<rules::Rules>>,
     /// The upstream TLS trust for terminated connections (webpki roots and the
     /// launcher's `NODE_EXTRA_CA_CERTS`; a test adds its own CA).
     upstream_tls: Option<std::sync::Arc<rustls::ClientConfig>>,
@@ -201,6 +215,18 @@ impl Broker {
         self.masks = Some(masks);
         self.mitm = Some(ca);
         self.tls_exclude = exclude;
+        if self.upstream_tls.is_none() {
+            self.upstream_tls = Some(mitm::upstream_tls(&mitm::launcher_extra_roots())?);
+        }
+        Ok(self)
+    }
+
+    /// Request rules, terminated with the run's CA. A host a rule names but
+    /// `tlsTerminate.excludeDomains` excludes cannot be checked; the caller refuses
+    /// that combination before the run.
+    pub fn with_request_rules(mut self, rules: std::sync::Arc<rules::Rules>, ca: std::sync::Arc<mitm::MitmCa>) -> std::io::Result<Self> {
+        self.rules = Some(rules);
+        self.mitm = Some(ca);
         if self.upstream_tls.is_none() {
             self.upstream_tls = Some(mitm::upstream_tls(&mitm::launcher_extra_roots())?);
         }
@@ -232,6 +258,7 @@ impl Broker {
             masks: None,
             mitm: None,
             tls_exclude: Vec::new(),
+            rules: None,
             upstream_tls: None,
         }
     }
@@ -924,7 +951,7 @@ impl Broker {
 /// slashes are decoded? The HTTP client normalizes `%2e%2e` to `..` as it builds
 /// the upstream URL (WHATWG URL parsing), so `/up/%2e%2e/%2e%2e/admin` would leave
 /// the capability's base path with the credential injected.
-fn has_dot_segment(path: &str) -> bool {
+pub(crate) fn has_dot_segment(path: &str) -> bool {
     let decoded = path
         .replace("%2e", ".")
         .replace("%2E", ".")

@@ -21,6 +21,8 @@
 //!   --strict               a requested guarantee that cannot be installed aborts the run
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
 //!   --allow-home-handoff   allow writing shell rc / .gitconfig / .ripgreprc (denied by default)
+//!   --handoff-exempt DIR   no trust-handoff protection inside DIR, a dependency tree (repeatable)
+//!   --allow-request SPEC   "METHODS host[/path]": the only requests an allowed domain gets (repeatable)
 //!   --private-tmp          run-private TMPDIR, AF_UNIX scoped to it (headless browsers)
 //!   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes (no curated base)
 //!   --env KEY[=VALUE]      carry one launcher var through, or set it (default: env is scrubbed)
@@ -31,6 +33,7 @@
 //!   --max-procs N          process limit
 //!   --max-cpu SECS         total CPU-seconds limit (RLIMIT_CPU; root-proof)
 //!   --log FILE             write the effect log here, the egress broker's decisions included
+//!   --egress-log FILE      only the egress broker's decisions (JSON Lines), no effect collectors
 //!   --log-format F         jsonl (default) or otlp (OpenTelemetry, with the launcher's TRACEPARENT)
 //!   --settings FILE        map a sandbox-runtime settings.json onto the generic
 //!                          policy; refuses (exit 78) on anything it can't guarantee
@@ -43,6 +46,7 @@ use serde::Deserialize;
 
 #[cfg(target_os = "linux")]
 mod egress_ns;
+mod snapshot;
 
 /// Teardown guard for scoped-egress state held across the run. On Linux it owns the
 /// network namespace (NET-01); elsewhere there is nothing to tear down.
@@ -93,6 +97,13 @@ struct PolicyFile {
     strict: bool,
     #[serde(default)]
     materialize_absent_handoff: bool,
+    /// Directories inside a writable root where the trust-handoff set is not
+    /// protected (dependency trees: `vendor`, `node_modules`). See --handoff-exempt.
+    #[serde(default)]
+    handoff_exempt: Vec<String>,
+    /// `[[request_rule]]`: host, methods, path prefixes. See --allow-request.
+    #[serde(default)]
+    request_rule: Vec<RequestRuleFile>,
     /// Unset keeps the default (protected); `false` is the dotfiles-repo opt-out.
     #[serde(default)]
     protect_home_handoff: Option<bool>,
@@ -188,8 +199,72 @@ struct MaskSpec {
     exclude: Vec<String>,
     /// `tlsTerminate.extraCaCertPaths`: appended to the agent's trust bundle.
     extra_ca: Vec<String>,
+    /// AWS pairs (access key id, secret access key) by variable name, re-signed.
+    aws: Vec<(String, String)>,
 }
 static MASKED: std::sync::OnceLock<MaskSpec> = std::sync::OnceLock::new();
+
+/// Request rules (`--allow-request`, `[[request_rule]]`, `network.requestRules`):
+/// the methods and path prefixes the agent may send to a host. The broker
+/// terminates those hosts and refuses any other request (broker/src/rules.rs).
+static REQUEST_RULES: std::sync::Mutex<Vec<tartaros_broker::rules::RequestRule>> = std::sync::Mutex::new(Vec::new());
+
+/// A rule from a policy file or `--settings`.
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct RequestRuleFile {
+    host: String,
+    #[serde(default)]
+    methods: Vec<String>,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+fn add_request_rule(host: String, methods: Vec<String>, paths: Vec<String>) {
+    REQUEST_RULES.lock().unwrap().push(tartaros_broker::rules::RequestRule { host, methods, paths });
+}
+
+/// `--allow-request "GET,POST api.github.com/repos/acme/"`: methods (`*` for any),
+/// a space, the host and an optional path prefix.
+fn parse_allow_request(spec: &str) {
+    let Some((methods, rest)) = spec.trim().split_once(char::is_whitespace) else {
+        eprintln!("error: --allow-request \"METHODS host[/path]\", e.g. \"GET api.github.com\" or \"POST api.github.com/repos/acme/\"");
+        exit(2);
+    };
+    let methods: Vec<String> = if methods == "*" { Vec::new() } else { methods.split(',').map(|m| m.trim().to_string()).collect() };
+    let rest = rest.trim();
+    let (host, path) = match rest.find('/') {
+        Some(i) => (rest[..i].to_string(), vec![rest[i..].to_string()]),
+        None => (rest.to_string(), Vec::new()),
+    };
+    add_request_rule(host, methods, path);
+}
+
+/// The rules, validated, and each host checked against the policy: it must be
+/// an allowed egress domain, and one TLS termination may reach. Refused (78) otherwise.
+fn request_rules(p: &Policy) -> Option<std::sync::Arc<tartaros_broker::rules::Rules>> {
+    let list = REQUEST_RULES.lock().unwrap().clone();
+    if list.is_empty() {
+        return None;
+    }
+    let rules = tartaros_broker::rules::Rules::new(list.clone()).unwrap_or_else(|e| {
+        eprintln!("tartaros: {e}; refusing to run.");
+        exit(EXIT_POLICY_REFUSED);
+    });
+    let excluded = MASKED.get().map(|m| m.exclude.clone()).unwrap_or_default();
+    for r in &list {
+        let name = r.host.trim_start_matches('.');
+        if !tartaros_broker::host_covered(&p.allow_domains, name) {
+            eprintln!("tartaros: request rule for {}: not an allowed egress domain (--allow-domain); refusing to run.", r.host);
+            exit(EXIT_POLICY_REFUSED);
+        }
+        if tartaros_broker::host_covered(&excluded, name) {
+            eprintln!("tartaros: request rule for {}: tlsTerminate.excludeDomains excludes it, so its requests cannot be read; refusing to run.", r.host);
+            exit(EXIT_POLICY_REFUSED);
+        }
+    }
+    Some(std::sync::Arc::new(rules))
+}
 /// The run's CA directory, removed when the run ends.
 static MASK_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
@@ -246,7 +321,7 @@ fn mask_spec(
         match k.as_str() {
             "envVars" => {}
             "files" => return Err("masked credential files (credentials.files)".into()),
-            "awsPairs" => return Err("AWS SigV4 re-signing (credentials.awsPairs)".into()),
+            "awsPairs" => {}
             other => return Err(format!("credentials.{other}")),
         }
     }
@@ -291,6 +366,34 @@ fn mask_spec(
     }
     if spec.creds.is_empty() {
         return Err("credentials with nothing in envVars".into());
+    }
+    // AWS pairs: re-signed on egress (broker/src/sigv4.rs). Explicit
+    // `awsPairs` entries, and the conventional AWS_ACCESS_KEY_ID /
+    // AWS_SECRET_ACCESS_KEY when both are masked and no entry names them, as
+    // sandbox-runtime pairs them. A session token is masked like any variable.
+    let masked = |n: &str| spec.creds.iter().any(|(c, _)| c == n);
+    for p in obj.get("awsPairs").and_then(Value::as_array).into_iter().flatten() {
+        let Some(p) = p.as_object() else { return Err("credentials.awsPairs entry that is not an object".into()) };
+        let get = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        for k in p.keys() {
+            if !["accessKeyIdVar", "secretAccessKeyVar", "sessionTokenVar"].contains(&k.as_str()) {
+                return Err(format!("credentials.awsPairs: {k}"));
+            }
+        }
+        let (id, secret) = (get("accessKeyIdVar"), get("secretAccessKeyVar"));
+        for n in [&id, &secret] {
+            if !masked(n) {
+                return Err(format!("credentials.awsPairs names {n:?}, which is not a masked credential in envVars"));
+            }
+        }
+        let token = get("sessionTokenVar");
+        if !token.is_empty() && !masked(&token) {
+            return Err(format!("credentials.awsPairs names {token:?}, which is not a masked credential in envVars"));
+        }
+        spec.aws.push((id, secret));
+    }
+    if spec.aws.is_empty() && masked("AWS_ACCESS_KEY_ID") && masked("AWS_SECRET_ACCESS_KEY") {
+        spec.aws.push(("AWS_ACCESS_KEY_ID".into(), "AWS_SECRET_ACCESS_KEY".into()));
     }
     if let Some(t) = tls.filter(|t| asks_for_something(t)) {
         let Some(t) = t.as_object() else { return Err("tlsTerminate that is not an object".into()) };
@@ -577,6 +680,9 @@ fn main() {
     match args.first().map(|s| s.as_str()) {
         Some("run") => cmd_run(&args[1..]),
         Some("explain") => cmd_explain(&args[1..]),
+        Some("why") => cmd_why(&args[1..]),
+        Some("snapshot") => cmd_snapshot(&args[1..]),
+        Some("rollback") => cmd_rollback(&args[1..]),
         Some("version" | "--version" | "-V") => {
             println!("tartaros {} ({})", env!("CARGO_PKG_VERSION"), backend_os());
             exit(0);
@@ -621,6 +727,9 @@ TartarOS — secure agent runtime. NOTHING ESCAPES THE BOUNDARY.
 USAGE:
   tartaros run [options] -- <command> [args...]   run a command confined by a policy
   tartaros explain [options]                      print what a policy grants, without running
+  tartaros why read|write PATH [options]          which rule of the policy allows or denies that access
+  tartaros snapshot list | diff ID                the snapshots taken with run --snapshot
+  tartaros rollback ID [--dry-run]                put the writable roots back as snapshot ID found them
   tartaros version                                print version and backend
   tartaros help                                   this help
 
@@ -652,6 +761,13 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --materialize          pre-create absent trust-handoff placeholders
   --allow-home-handoff   let the agent write shell rc / .gitconfig / .ripgreprc in its
                          roots (denied by default; for dotfiles repos)
+  --allow-request SPEC   'METHODS host[/path]' (METHODS: GET,POST… or *): the requests the
+                         agent may send to an allowed domain. Its TLS is terminated with
+                         the run's CA and any other request is refused (403). Repeatable
+  --handoff-exempt DIR   no trust-handoff protection inside DIR (strictly inside a
+                         writable root): a dependency tree a setup phase fills, whose
+                         packages ship .gitattributes/.github/.git. Repeatable; said
+                         at start and in explain
   --private-tmp          run-private TMPDIR; AF_UNIX scoped to it (headless browsers)
   --browser              macOS: minimal extra Seatbelt grants for headless Chromium/Chrome
   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes, without the
@@ -665,6 +781,12 @@ ENVIRONMENT (secrets in the launcher's env are NOT governed by Landlock/Seatbelt
   --allow-exposed-secrets  run even if another process's exec record (a shell that
                          exported it) holds a masked credential's or the broker's secret
 
+SNAPSHOTS:
+  --snapshot             snapshot the writable roots before the run; `tartaros rollback ID`
+                         restores them (the store, outside the roots, is read-denied)
+  --snapshot-exclude N   leave directories named N out (node_modules, target); repeatable
+  --snapshot-max-bytes B refuse the run (78) if the roots hold more (default 2 GiB)
+
 LIMITS:
   --timeout SECS         kill the run after SECS (exit 124)
   --max-mem BYTES        address-space / cgroup memory cap
@@ -674,6 +796,8 @@ LIMITS:
 OBSERVABILITY:
   --log FILE             write the first-hand effect log (JSON Lines), the egress
                          broker's connect decisions included
+  --egress-log FILE      only the egress broker's decisions (JSON Lines): no effect
+                         collectors, so it costs a run nothing extra
   --log-format F         jsonl (default) or otlp: OpenTelemetry log records in the
                          open effect schema, with the launcher's TRACEPARENT
 
@@ -696,7 +820,8 @@ fn cmd_run(rest: &[String]) -> ! {
         eprintln!("error: no command after `--`");
         exit(2);
     }
-    let (mut p, log, profile) = build_policy(opts, false); // run: quiet
+    let (opts, snap_spec) = snapshot_flags(opts);
+    let (mut p, log, profile) = build_policy(&opts, false); // run: quiet
     // Secrets out of tartaros's exec environment before anything can read it.
     #[cfg(unix)]
     reexec_without_secrets();
@@ -705,6 +830,7 @@ fn cmd_run(rest: &[String]) -> ! {
     if p.writable_roots.is_empty() {
         eprintln!("warning: no --write roots; the command cannot write anywhere");
     }
+    let snap = snap_spec.on.then(|| take_run_snapshot(&mut p, &snap_spec));
     // Note: the environment is scrubbed to a safe allowlist by the BACKEND at spawn
     // (F-13, `Policy::child_env`), so secrets in the launcher's env never reach the
     // agent and the guarantee holds for any embedder, not just this CLI. The broker
@@ -713,8 +839,15 @@ fn cmd_run(rest: &[String]) -> ! {
     // Domain-scoped egress: start the capability broker and route the agent
     // through it. On Linux-as-root this builds a scoped network namespace (NET-01);
     // the returned guard tears it (netns + veth + firewall rule) down after the run.
-    let egress_guard = start_egress_broker(&mut p, log.as_ref());
+    // The broker writes to --log when there is one, else to --egress-log alone.
+    let broker_log = log.clone().or_else(|| EGRESS_LOG.get().map(|path| LogSpec { path: path.clone(), format: LogFormat::Jsonl }));
+    let egress_guard = start_egress_broker(&mut p, broker_log.as_ref());
     start_credential_broker(&mut p);
+    // A handoff exemption is said every time: it is an opening, and a log of the
+    // run should show it was there.
+    for e in &p.handoff_exempt {
+        eprintln!("tartaros: trust-handoff not protected inside {} (--handoff-exempt)", e.display());
+    }
     // Print the profile's honest caveat before running — a tier must never
     // silently overclaim (esp. multi-tenant on a shared kernel).
     if let Some(pr) = profile {
@@ -725,6 +858,18 @@ fn cmd_run(rest: &[String]) -> ! {
     let private_tmp = setup_private_tmp(&mut p);
     warn_reachable_host_sockets(&p);
     let code = run(&p, &cmd, log.as_ref());
+    if let Some(m) = &snap {
+        match snapshot::diff(m) {
+            Ok(d) => eprintln!(
+                "tartaros: since snapshot {}: {} added, {} changed, {} removed (tartaros snapshot diff {0}; tartaros rollback {0})",
+                m.id,
+                d.added.len(),
+                d.changed.len(),
+                d.removed.len()
+            ),
+            Err(e) => eprintln!("tartaros: snapshot {}: {e}", m.id),
+        }
+    }
     // Tear down the run-private temp dir (our own ephemeral scratch for this run).
     if let Some(dir) = private_tmp {
         let _ = std::fs::remove_dir_all(&dir);
@@ -870,7 +1015,7 @@ fn warn_reachable_host_sockets(p: &Policy) {
 /// How the broker treats HTTPS, for its start-up line.
 fn tunnel_note(masked: bool) -> &'static str {
     if masked {
-        "TCP tunnel, no TLS inspection, except TLS terminated toward the masked credentials' hosts"
+        "TCP tunnel, no TLS inspection, except TLS terminated toward the hosts of masked credentials and request rules"
     } else {
         "TCP tunnel, no TLS inspection"
     }
@@ -889,7 +1034,13 @@ type MaskedSetup = (
 );
 fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
     use std::sync::Arc;
-    let spec = MASKED.get()?.clone();
+    // Request rules need the run's CA too, with or without a masked credential.
+    let ruled = !REQUEST_RULES.lock().unwrap().is_empty();
+    let spec = match MASKED.get() {
+        Some(s) => s.clone(),
+        None if ruled => MaskSpec::default(),
+        None => return None,
+    };
     let mut creds = Vec::new();
     for (name, hosts) in &spec.creds {
         let Some(real) = secret_var(name) else {
@@ -901,7 +1052,10 @@ fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
             exit(1);
         }));
     }
-    let masks = tartaros_broker::mask::Masks::new(creds);
+    let masks = tartaros_broker::mask::Masks::new(creds).with_aws_pairs(spec.aws.clone()).unwrap_or_else(|e| {
+        eprintln!("tartaros: masked credentials: {e}");
+        exit(EXIT_POLICY_REFUSED);
+    });
     let ca = tartaros_broker::mitm::MitmCa::new().unwrap_or_else(|e| {
         eprintln!("tartaros: masked credentials: {e}");
         exit(1);
@@ -935,10 +1089,12 @@ fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
         p.env_set.push((v.to_string(), bundle.clone()));
     }
     let names: Vec<String> = spec.creds.iter().map(|(n, h)| format!("{n} → {}", h.join(", "))).collect();
-    eprintln!(
-        "tartaros: masked credentials: {} (the agent holds sentinels; TLS to those hosts is terminated by the broker with this run's CA)",
-        names.join("; ")
-    );
+    if !names.is_empty() {
+        eprintln!(
+            "tartaros: masked credentials: {} (the agent holds sentinels; TLS to those hosts is terminated by the broker with this run's CA)",
+            names.join("; ")
+        );
+    }
     Some((Arc::new(masks), Arc::new(ca), spec.exclude.clone()))
 }
 /// If the policy names allowed egress domains, start the capability broker on
@@ -984,7 +1140,14 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
     // route everything via HTTP_PROXY. Captured before the broker's own port is
     // appended to local_ports below, so the broker never forwards to itself.
     let loopback_ports = p.local_ports.clone();
+    let rules = request_rules(p);
     let masked = setup_masked_credentials(p);
+    if let Some(r) = &rules {
+        eprintln!(
+            "tartaros: request rules for {}: TLS to those hosts is terminated with this run's CA, and a request no rule allows is refused (403)",
+            r.hosts().join(", ")
+        );
+    }
     let make_broker = || {
         let b = tartaros_broker::Broker::new(p.role.clone(), vec![])
             .insecure_no_auth() // the sandbox boundary is the auth; no secret to send
@@ -992,12 +1155,19 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
             .with_connect_ports(vec![443]) // HTTPS only (ADV-03)
             .with_allow_internal(false) // SSRF / rebinding defense stays on
             .with_loopback_ports(loopback_ports.clone()); // declared local_ports (N1)
-        match &masked {
+        let b = match &masked {
             None => b,
             Some((masks, ca, exclude)) => b.with_masks(masks.clone(), ca.clone(), exclude.clone()).unwrap_or_else(|e| {
                 eprintln!("tartaros: masked credentials: cannot set up the upstream TLS: {e}");
                 exit(1);
             }),
+        };
+        match (&rules, &masked) {
+            (Some(r), Some((_, ca, _))) => b.with_request_rules(r.clone(), ca.clone()).unwrap_or_else(|e| {
+                eprintln!("tartaros: request rules: cannot set up the upstream TLS: {e}");
+                exit(1);
+            }),
+            _ => b,
         }
     };
     // `exempt_loopback`: whether to put loopback in NO_PROXY so the agent connects
@@ -1190,7 +1360,26 @@ fn random_token() -> std::io::Result<String> {
 const NET01_FALLBACK: &str = "egress scoping now relies on a port grant that Landlock cannot pin to loopback (NET-01) — a malicious agent that learns the port could reach an external host on it, bypassing the broker. Safe for a trusted-but-fallible agent; for hostile code run as root so the scoped network namespace can be used.";
 
 fn cmd_explain(opts: &[String]) -> ! {
-    let (p, _, profile) = build_policy(opts, true); // explain: verbose
+    // `--json`: the same answer for a program (a launcher reads the handoff set
+    // and the egress allow-list from here instead of parsing the text).
+    let json = opts.iter().any(|o| o == "--json");
+    let opts: Vec<String> = opts.iter().filter(|o| *o != "--json").cloned().collect();
+    let (p, _, profile) = build_policy(&opts, !json); // explain: verbose
+    #[cfg(target_os = "linux")]
+    let blocked = tartaros_linux::host_blocks_run(&p);
+    #[cfg(target_os = "macos")]
+    let blocked = tartaros_macos::host_blocks_run(&p);
+    #[cfg(target_os = "windows")]
+    let blocked = {
+        use tartaros_core::Backend;
+        tartaros_windows::WindowsBackend.validate(&p).err().map(|e| e.reason)
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let blocked: Option<String> = None;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&explain_json(&p, profile.as_ref(), blocked.as_deref())).unwrap_or_default());
+        exit(if blocked.is_some() { EXIT_POLICY_REFUSED } else { 0 });
+    }
     if let Some(pr) = profile {
         println!("profile: {} — {}", pr.name(), pr.tier());
         if let Some(c) = pr.caveat() {
@@ -1203,22 +1392,181 @@ fn cmd_explain(opts: &[String]) -> ! {
     // (an external audit) never shows a green ✓ for a policy this host cannot enforce
     // (e.g. no Landlock on Docker Desktop's linuxkit kernel). Same fail-closed
     // contract as `run`, just without spawning anything.
-    #[cfg(target_os = "linux")]
-    let blocked = tartaros_linux::host_blocks_run(&p);
-    #[cfg(target_os = "macos")]
-    let blocked = tartaros_macos::host_blocks_run(&p);
-    #[cfg(target_os = "windows")]
-    let blocked = {
-        use tartaros_core::Backend;
-        tartaros_windows::WindowsBackend.validate(&p).err().map(|e| e.reason)
-    };
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    let blocked: Option<String> = None;
     if let Some(reason) = blocked {
         eprintln!("\ntartaros: this host cannot enforce this policy: {reason}");
         exit(EXIT_POLICY_REFUSED);
     }
     exit(0);
+}
+
+/// `run`'s snapshot flags, taken out of the policy options.
+fn snapshot_flags(opts: &[String]) -> (Vec<String>, snapshot::Spec) {
+    let mut spec = snapshot::Spec { max_bytes: snapshot::DEFAULT_MAX_BYTES, ..Default::default() };
+    let mut rest = Vec::new();
+    let mut it = opts.iter();
+    while let Some(o) = it.next() {
+        match o.as_str() {
+            "--snapshot" => spec.on = true,
+            "--snapshot-exclude" | "--snapshot-max-bytes" => {
+                let Some(v) = it.next() else {
+                    eprintln!("tartaros: {o} needs a value");
+                    exit(2);
+                };
+                if o == "--snapshot-exclude" {
+                    if v.is_empty() || v.contains('/') || v == "." || v == ".." {
+                        eprintln!("tartaros: --snapshot-exclude takes a directory name, not a path");
+                        exit(2);
+                    }
+                    spec.exclude.push(v.clone());
+                } else {
+                    spec.max_bytes = v.parse().unwrap_or_else(|_| {
+                        eprintln!("tartaros: --snapshot-max-bytes takes a number of bytes");
+                        exit(2);
+                    });
+                }
+            }
+            _ => rest.push(o.clone()),
+        }
+    }
+    if !spec.on && (!spec.exclude.is_empty() || spec.max_bytes != snapshot::DEFAULT_MAX_BYTES) {
+        eprintln!("tartaros: --snapshot-exclude and --snapshot-max-bytes go with --snapshot");
+        exit(2);
+    }
+    (rest, spec)
+}
+
+/// Snapshot the roots before the run, or refuse it (78): a run asked to be
+/// undoable never starts without its snapshot.
+fn take_run_snapshot(p: &mut Policy, spec: &snapshot::Spec) -> snapshot::Manifest {
+    use tartaros_core::resolve_best_effort;
+    let store = snapshot::store();
+    if let Err(e) = std::fs::create_dir_all(&store) {
+        eprintln!("tartaros: snapshot store {}: {e}; refusing to run", store.display());
+        exit(EXIT_POLICY_REFUSED);
+    }
+    let store = resolve_best_effort(&store);
+    let roots: Vec<PathBuf> = p.writable_roots.iter().map(|r| resolve_best_effort(r)).collect();
+    if let Some(r) = roots.iter().find(|r| store.starts_with(r)) {
+        eprintln!(
+            "tartaros: the snapshot store {} lies inside the writable root {}: the agent could alter it. Set TARTAROS_STATE_DIR elsewhere; refusing to run",
+            store.display(),
+            r.display()
+        );
+        exit(EXIT_POLICY_REFUSED);
+    }
+    let skipped: Vec<PathBuf> = p.read_denies.iter().map(|d| resolve_best_effort(d)).collect();
+    match snapshot::take(&roots, &spec.exclude, &skipped, spec.max_bytes) {
+        Ok(m) => {
+            let files: usize = m.roots.iter().map(|r| r.entries.values().filter(|e| matches!(e, snapshot::Entry::File { .. })).count()).sum();
+            eprintln!("tartaros: snapshot {} of the writable roots ({files} files); `tartaros rollback {}` restores them", m.id, m.id);
+            p.read_denies.push(store);
+            m
+        }
+        Err(e) => {
+            eprintln!("tartaros: {e}; refusing to run");
+            exit(EXIT_POLICY_REFUSED);
+        }
+    }
+}
+
+fn cmd_snapshot(args: &[String]) -> ! {
+    match (args.first().map(String::as_str), args.get(1)) {
+        (Some("list"), None) => {
+            for m in snapshot::list() {
+                let roots: Vec<String> = m.roots.iter().map(|r| r.path.display().to_string()).collect();
+                println!("{}  {}  {}", m.id, snapshot::stamp(m.created_unix), roots.join(" "));
+            }
+            exit(0);
+        }
+        (Some("diff"), Some(id)) => {
+            let m = snapshot::load(id).unwrap_or_else(|e| {
+                eprintln!("tartaros: {e}");
+                exit(1);
+            });
+            let d = snapshot::diff(&m).unwrap_or_else(|e| {
+                eprintln!("tartaros: {e}");
+                exit(1);
+            });
+            for (tag, v) in [("added", &d.added), ("changed", &d.changed), ("removed", &d.removed)] {
+                for p in v {
+                    println!("{tag}\t{}", p.display());
+                }
+            }
+            exit(0);
+        }
+        _ => {
+            eprintln!("tartaros: usage: tartaros snapshot list | tartaros snapshot diff ID");
+            exit(2);
+        }
+    }
+}
+
+fn cmd_rollback(args: &[String]) -> ! {
+    let dry = args.iter().any(|a| a == "--dry-run");
+    let ids: Vec<&String> = args.iter().filter(|a| *a != "--dry-run").collect();
+    let [id] = ids.as_slice() else {
+        eprintln!("tartaros: usage: tartaros rollback ID [--dry-run]");
+        exit(2);
+    };
+    let m = snapshot::load(id).unwrap_or_else(|e| {
+        eprintln!("tartaros: {e}");
+        exit(1);
+    });
+    match snapshot::rollback(&m, dry) {
+        Ok((before, d, failed)) => {
+            for (tag, v) in [("remove", &d.added), ("restore", &d.changed), ("re-create", &d.removed)] {
+                for p in v {
+                    println!("{tag}\t{}", p.display());
+                }
+            }
+            if let Some(b) = before {
+                eprintln!("tartaros: rolled back to {}; the state it replaced is snapshot {b} (`tartaros rollback {b}` undoes this)", m.id);
+            }
+            for f in &failed {
+                eprintln!("tartaros: not restored: {f}");
+            }
+            exit(if failed.is_empty() { 0 } else { 1 });
+        }
+        Err(e) => {
+            eprintln!("tartaros: {e}");
+            exit(1);
+        }
+    }
+}
+
+/// `tartaros why read|write PATH [options]`: the rule that decides one access,
+/// from the policy (`Policy::why`) and, on Linux, from the carve the run would
+/// install. For the agent, or the person, who got an
+/// EACCES and wants to know which line of the policy to change: Landlock says
+/// nothing about it, and Seatbelt only to the unified log. Exit 0 allowed, 1
+/// denied.
+fn cmd_why(opts: &[String]) -> ! {
+    let usage = || -> ! {
+        eprintln!("tartaros: usage: tartaros why read|write PATH [policy options]");
+        exit(2);
+    };
+    let write = match opts.first().map(String::as_str) {
+        Some("read") => false,
+        Some("write") => true,
+        _ => usage(),
+    };
+    let Some(path) = opts.get(1).filter(|p| !p.starts_with("--")) else { usage() };
+    let (p, _, _) = build_policy(&opts[2..], false);
+    let path = std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path));
+    #[cfg(target_os = "linux")]
+    let held = |a: &std::path::Path| tartaros_linux::absent_handoff_held(&p, a);
+    #[cfg(target_os = "windows")]
+    let held = |a: &std::path::Path| tartaros_windows::placeholder_plan(&p).iter().any(|h| a.starts_with(h));
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let held = |_: &std::path::Path| true;
+    let (allowed, why) = p.why(&path, write, &held);
+    #[cfg(target_os = "linux")]
+    let (allowed, why) = match (allowed && write).then(|| tartaros_linux::carve_denies_write(&p, &path)).flatten() {
+        Some(carve) => (false, carve),
+        None => (allowed, why),
+    };
+    println!("{} {}: {} ({why})", if write { "write" } else { "read" }, path.display(), if allowed { "allowed" } else { "denied" });
+    exit(if allowed { 0 } else { 1 });
 }
 
 /// sandbox-runtime settings schema (the subset we read). An adapter maps it onto
@@ -1261,6 +1609,10 @@ struct SandboxFs {
     allow_read: Vec<String>,
     #[serde(default, rename = "denyRead")]
     deny_read: Vec<String>,
+    /// tartaros's own extension (sandbox-runtime has no such field): directories
+    /// where the trust-handoff set is not protected — `--handoff-exempt`.
+    #[serde(default, rename = "handoffExempt")]
+    handoff_exempt: Vec<String>,
 }
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -1270,6 +1622,9 @@ struct SandboxFs {
 struct SandboxNet {
     #[serde(default, rename = "allowedDomains")]
     allowed_domains: Vec<String>,
+    /// tartaros's own extension: `[{host, methods, paths}]`, see --allow-request.
+    #[serde(default, rename = "requestRules")]
+    request_rules: Vec<RequestRuleFile>,
     #[serde(default, rename = "deniedDomains")]
     denied_domains: Vec<String>,
     #[serde(default, rename = "allowUnixSockets")]
@@ -1420,6 +1775,8 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     };
     for x in &s.filesystem.deny_read.clone() { map_deny(x, false, true, p); }
     for x in &s.filesystem.deny_write.clone() { map_deny(x, true, false, p); }
+    for x in &s.filesystem.handoff_exempt { p.handoff_exempt.push(PathBuf::from(expand_path(x))); }
+    for r in &s.network.request_rules { add_request_rule(r.host.clone(), r.methods.clone(), r.paths.clone()); }
     // Network: we default-deny. Anything we cannot enforce in-sandbox is refused.
     p.network = Some(Network::Denied);
     // Per-domain egress IS enforceable: the broker runs as a CONNECT/forward proxy
@@ -1583,6 +1940,11 @@ struct LogSpec {
     format: LogFormat,
 }
 
+/// `--egress-log FILE`: only the egress broker's decisions, as JSON lines, with
+/// no effect collectors. `--log` turns those on too, and they cost a launcher
+/// that only wants the refused hosts more than a second a run (measured, macOS).
+static EGRESS_LOG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LogFormat {
     Jsonl,
@@ -1643,6 +2005,10 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
         p.harden_syscalls = pf.harden_syscalls;
         p.strict = pf.strict;
         p.materialize_absent_handoff = pf.materialize_absent_handoff;
+        p.handoff_exempt = pf.handoff_exempt.iter().map(|s| PathBuf::from(expand_path(s))).collect();
+        for r in &pf.request_rule {
+            add_request_rule(r.host.clone(), r.methods.clone(), r.paths.clone());
+        }
         if let Some(on) = pf.protect_home_handoff {
             p.protect_home_handoff = on;
         }
@@ -1721,6 +2087,9 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             "--max-cpu" => p.max_cpu_secs = Some(parse_num_or_exit(&val(), "--max-cpu (seconds)")),
             "--isolate-proc" => p.isolate_process_info = true,
             "--log" => log = Some(val()),
+            "--egress-log" => { let _ = EGRESS_LOG.set(val()); }
+            "--handoff-exempt" => p.handoff_exempt.push(PathBuf::from(expand_path(&val()))),
+            "--allow-request" => parse_allow_request(&val()),
             "--log-format" => log_format = Some(match val().as_str() {
                 "jsonl" => LogFormat::Jsonl,
                 "otlp" => LogFormat::Otlp,
@@ -1739,6 +2108,65 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
 
 /// Print exactly what a policy grants, without running anything — so a security
 /// team can audit a profile before deploying it.
+/// `explain --json`: what `explain` prints, as data. Paths as strings, the
+/// environment by NAME only (a `--env KEY=VALUE` value is never shown), and the
+/// trust-handoff set as the names protected at any depth under each root.
+fn explain_json(p: &Policy, profile: Option<&Profile>, blocked: Option<&str>) -> serde_json::Value {
+    let paths = |v: &[std::path::PathBuf]| v.iter().map(|x| x.display().to_string()).collect::<Vec<_>>();
+    let masked = MASKED.get().map(|m| {
+        m.creds.iter().map(|(n, h)| serde_json::json!({ "name": n, "hosts": h })).collect::<Vec<_>>()
+    }).unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    let enforcement = tartaros_macos::enforcement_report(p);
+    #[cfg(target_os = "linux")]
+    let enforcement = tartaros_linux::enforcement_report(p);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let enforcement: Vec<String> = Vec::new();
+    serde_json::json!({
+        "tartaros": env!("CARGO_PKG_VERSION"),
+        "backend": backend_os(),
+        "profile": profile.map(|pr| pr.name()),
+        "role": p.role,
+        "network": format!("{:?}", p.network),
+        "egress_domains": p.allow_domains,
+        "masked_credentials": masked,
+        "request_rules": REQUEST_RULES.lock().unwrap().iter()
+            .map(|r| serde_json::json!({ "host": r.host, "methods": r.methods, "paths": r.paths }))
+            .collect::<Vec<_>>(),
+        "local_ports": p.local_ports,
+        "writable_roots": paths(&p.writable_roots),
+        "write_denied": p.fs_rules.iter().filter(|r| r.access == Access::Deny).map(|r| r.path.display().to_string()).collect::<Vec<_>>(),
+        "read_denied": paths(&p.read_denies),
+        "read_allowed": paths(&p.read_allows),
+        "trust_handoff": {
+            "names": tartaros_core::HANDOFF_CONFIG_NAMES,
+            "git": tartaros_core::HANDOFF_GIT_NAMES,
+            "home": if p.protect_home_handoff { tartaros_core::HANDOFF_HOME_NAMES.to_vec() } else { Vec::new() },
+            "exempt": paths(&p.handoff_exempt),
+        },
+        "isolate_pids": p.isolate_pids,
+        "isolate_network": p.isolate_network,
+        "isolate_process_info": p.isolate_process_info,
+        "harden_syscalls": p.harden_syscalls,
+        "strict": p.strict,
+        "private_tmp": p.private_tmp,
+        "deny_unix_sockets": p.deny_unix_sockets,
+        "environment": {
+            "inherit": p.inherit_env,
+            "allowlist": tartaros_core::ENV_ALLOWLIST,
+            "passthrough": p.env_passthrough.iter().map(|e| e.split_once('=').map(|(k, _)| k).unwrap_or(e).to_string()).collect::<Vec<_>>(),
+        },
+        "limits": {
+            "timeout_secs": p.timeout.map(|t| t.as_secs()),
+            "max_memory_bytes": p.max_memory_bytes,
+            "max_processes": p.max_processes,
+            "max_cpu_secs": p.max_cpu_secs,
+        },
+        "enforcement": enforcement,
+        "blocked": blocked,
+    })
+}
+
 fn explain(p: &Policy) {
     println!("role: {}", if p.role.is_empty() { "(unset)" } else { &p.role });
     println!("network: {:?}", p.network);
@@ -1757,6 +2185,11 @@ fn explain(p: &Policy) {
             if !m.exclude.is_empty() {
                 println!("never terminated (tlsTerminate.excludeDomains): {}", m.exclude.join(", "));
             }
+        }
+        for r in REQUEST_RULES.lock().unwrap().iter() {
+            let methods = if r.methods.is_empty() { "any method".to_string() } else { r.methods.join(",") };
+            let paths = if r.paths.is_empty() { "any path".to_string() } else { r.paths.join(", ") };
+            println!("request rule {}: {methods} on {paths} (TLS terminated; anything else refused, 403)", r.host);
         }
     }
     println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
@@ -1819,6 +2252,10 @@ fn explain(p: &Policy) {
     // the protection covers paths that do not exist yet (pre-planting defense), and
     // walking a large writable tree (e.g. --write /tmp) just to print it would be a
     // needless stat storm.
+    if !p.handoff_exempt.is_empty() {
+        println!("\ntrust-handoff NOT protected inside (--handoff-exempt):");
+        for e in &p.handoff_exempt { println!("  ~ {}", e.display()); }
+    }
     println!("\ntrust-handoff protected (deny write at any depth under each writable root):");
     for name in tartaros_core::HANDOFF_CONFIG_NAMES { println!("  ! **/{name}"); }
     for name in tartaros_core::HANDOFF_GIT_NAMES { println!("  ! **/{name}  (in any git repo)"); }

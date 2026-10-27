@@ -57,11 +57,16 @@ the domains you list ([evidence](evidence/2026-10-14/macos/claude-code-allow-dom
   and paths moved by renaming an ancestor directory. That includes the sandbox's
   own config, so the agent can't switch the sandbox off.
 
+**Undo a run.**
+- `--snapshot` records the writable roots before the run, and `tartaros rollback
+  ID` puts them back, files the agent added, changed or deleted included.
+
 **No silent fallback.**
 - If the host can't provide a protection you asked for, TartarOS refuses to start
   or reports it `UNSUPPORTED`. It never runs you with less than you asked for and
   calls it a success.
-- `tartaros explain` prints exactly what a policy grants before anything runs.
+- `tartaros explain` prints exactly what a policy grants before anything runs, and
+  `tartaros why write PATH` names the rule that decides one access.
 
 **Works where other sandboxes don't.**
 - The base sandbox (Landlock and seccomp on Linux, Seatbelt on macOS) needs no
@@ -174,9 +179,19 @@ it guarantees, and the caveat prints on `run` and on `explain`.
 ## Install
 
 ```
+brew install carlostapiacl/tap/tartaros    # macOS and Linux, prebuilt
+npm i -g @carlostapiacl/tartaros
+```
+
+Each release binary carries signed build provenance:
+`gh attestation verify tartaros-darwin-arm64 --repo carlostapiacl/tartaros`.
+From source:
+
+```
 cargo build --release -p tartaros-cli      # target/release/tartaros
 tartaros version                           # version + active backend
 tartaros explain --config role.toml        # audit a policy without running it
+tartaros why write .git/hooks/x --config role.toml   # which rule denies this write
 ```
 
 On Linux you can build a fully static binary for minimal containers:

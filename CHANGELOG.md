@@ -3,6 +3,84 @@
 All notable changes to TartarOS. This project is pre-1.0; the format is
 loosely [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+## [0.1.0-alpha.18] — 2026-10-27
+
+### Added
+- **`run --snapshot` and `tartaros rollback ID`.** The writable roots are
+  recorded before the run (a manifest, and each file's content stored once by
+  sha256 outside the roots, read-denied for the run); `tartaros snapshot diff ID`
+  lists what changed and `tartaros rollback ID` restores it. Rollback snapshots
+  the current state first, so it can be undone, and never writes through a
+  symlink. `--snapshot-exclude NAME`, `--snapshot-max-bytes` (2 GiB; over it the
+  run is refused, 78). Read-denied paths are neither copied nor touched.
+- **Signed releases and Homebrew.** Each binary gets a GitHub build-provenance
+  attestation (Sigstore, keyless; `gh attestation verify`), and the release
+  carries a Homebrew formula generated from its SHA256SUMS.
+- **`tartaros why read|write PATH [options]`**: the rule of the policy that allows
+  or denies one access (the writable root, the write-deny, the trust-handoff name
+  and the root it is protected under, the read-deny or the read-allow that wins).
+  Exit 0 allowed, 1 denied. It reads the policy, so it answers the same on every
+  backend, Linux included, where Landlock reports nothing about a denial. A test
+  checks each answer against a real write under the same policy.
+- **Masked AWS keys are re-signed (SigV4).** `credentials.awsPairs`, or
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` both masked: the agent's SDK
+  signs with a fake pair, and on the pair's hosts the broker re-signs with the
+  real one (same scope, signed headers and date; the body read whole, up to
+  32 MiB, its hash recomputed). An `aws-chunked` body, a presigned URL and SigV4a
+  cannot be re-signed and are refused (403). The signer is ported from
+  sandbox-runtime (NOTICE) and checked against AWS's documented example; a
+  request to a host the pair does not inject into keeps its fake signature and
+  fails there. `credentials.awsPairs` was refused before.
+- **Request rules: `--allow-request "METHODS host[/path]"`** (`[[request_rule]]` in
+  a policy file, `network.requestRules` in `--settings`): the methods and path
+  prefixes an allowed domain gets. The broker terminates that host's TLS with the
+  run's CA and refuses any other request with 403, logged with its method and
+  path. Paths fail closed (dot segments in any spelling, prefixes at a segment
+  boundary, spelled as written). A rule for a host that is not allowed, or that
+  `excludeDomains` excludes, refuses the run (78). Measured against httpbin.org on
+  macOS: `GET /get` allowed; `POST /post`, `GET /anything` and `/get/../anything`
+  refused. docs/broker.md.
+- **`--handoff-exempt DIR`** (and `handoff_exempt` in a policy file,
+  `filesystem.handoffExempt` in `--settings`): the trust-handoff set is not
+  protected inside DIR, a dependency tree a setup phase fills (`composer
+  install`, `npm install`) whose packages ship their own `.git/`, `.github/` or
+  `.gitattributes`. DIR must be strictly inside a writable root, not a writable
+  root, not inside a handoff surface and not named like one; otherwise the run
+  is refused (exit 78). Every other rule still holds inside, explicit write-denies
+  included, and the repo's own surfaces stay protected. Said at the start of every
+  run and in `explain`. Measured on macOS: a package with its own `.git/hooks`
+  installs under `vendor/`, and the repo's `.git/hooks` stays denied.
+- **`--egress-log FILE`**: the egress broker's decisions as JSON lines, without
+  the effect collectors `--log` starts (about 0.07 s a run, against 1.6 s with
+  `--log`, measured on macOS). A launcher reads the refused hosts from it instead
+  of parsing stderr; seisin does.
+- **`explain --json`**: what `explain` prints, as data: the roots, the denies, the
+  egress allow-list, the masked credentials, the trust-handoff names and
+  exemptions, the limits, what this host enforces and whether it would refuse. An
+  `--env KEY=VALUE` value is never in it, only the name.
+
+### Fixed
+- **Linux without namespaces: a repository's missing `.git/hooks` could be
+  created.** The carve protects only what exists, so in a `.git` with no `hooks`
+  directory (a go-git or libgit2 checkout, `git init --template=`) `mkdir
+  .git/hooks && echo x > .git/hooks/pre-commit` succeeded, `--materialize`
+  included; the corpus scenario `trust-handoff-hooks-dir-absent` failed as a
+  non-root user on Ubuntu. The run now puts an empty `hooks` directory and an
+  empty read-only `config` there before building the carve and removes them when
+  it ends, if still empty. With a mount namespace nothing changes (placeholders
+  bound read-only, as before).
+
+### Changed
+- **docs/limits.md, Windows: Schannel measured.** Under the `sandbox-user` tier
+  Windows refuses SSPI credentials to the restricted token, so `curl.exe`,
+  PowerShell and .NET fail HTTPS there. The alternatives were measured on 16,000
+  folders: a token with deny-only groups (Schannel works) leaves 23 folders
+  writable outside the roots, among them installer and updater folders a
+  privileged process later runs from; a low-integrity token keeps writes closed
+  but stops BusyBox and batch files from running. The restricted token stays.
+
 ## [0.1.0-alpha.17] — 2026-10-26
 
 ### Added

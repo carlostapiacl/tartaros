@@ -30,7 +30,9 @@ than you asked for.
   directory (`sub/.bashrc`, macOS covers it by pattern), and a repository the agent
   **creates during the run** (its hooks are new; no sandbox measured protects
   that). Without namespaces Linux falls back to the carve and opt-in
-  `--materialize`. The home-handoff surface (shell rc, `.gitconfig`,
+  `--materialize`; a repository's missing `.git/hooks` or `.git/config` is held
+  there too since 0.1.0-alpha.18 (an empty `hooks` directory and an empty
+  read-only `config` are put in place before the carve and removed after the run). The home-handoff surface (shell rc, `.gitconfig`,
   `.ripgreprc`) is protected **by default** since 0.1.0-alpha.7, as
   sandbox-runtime does; `--allow-home-handoff` lifts it for a dotfiles repo.
 - **Moving the whole `.git` dir aside: blocked on both OS.** `mv .git .git-moved
@@ -213,7 +215,16 @@ both tiers (2026-10-26, 0.1.0-alpha.17).
   `curl.exe`, PowerShell's `Invoke-WebRequest`, .NET. Clients with their own TLS
   stack work (OpenSSL or rustls: Node, Python, Git for Windows by default; measured
   with a rustls client). No restricting SID we tried changes it (`RESTRICTED`,
-  `Authenticated Users`, `LOCAL`, `INTERACTIVE`, `SYSTEM`).
+  `Authenticated Users`, `LOCAL`, `INTERACTIVE`, `SYSTEM`). The two ways out were
+  measured, over the 16,000 folders two levels under `ProgramData`, `Windows` and
+  `Users\Public`: a token with deny-only groups instead of restricting SIDs lets
+  Schannel work, and leaves 23 folders writable outside the roots (the restricted
+  token leaves one, writable by Everyone), among them installer and updater
+  folders (`OneDrive\setup`, `TP-Link\NSISSetup`, `Oracle\Java`) that a
+  privileged process later runs from; a low-integrity token keeps writes closed
+  and lets Schannel work, but BusyBox fails to start and batch files do not run.
+  So the restricted token stays, and a role that needs HTTPS uses a client with
+  its own TLS stack.
 - **`WRITE_RESTRICTED` runner (sandbox-user).** The command runs under a
   write-restricted token whose restricting SIDs are the user and `Everyone`;
   `Everyone` is required or the loader cannot start a process. A path writable by
