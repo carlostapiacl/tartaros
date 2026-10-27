@@ -771,11 +771,22 @@ impl Policy {
         }
         let rel: Vec<String> = real.strip_prefix(&root).unwrap_or(&real).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
         let home: &[&str] = if self.protect_home_handoff { HANDOFF_HOME_NAMES } else { &[] };
-        for name in HANDOFF_CONFIG_NAMES.iter().chain(HANDOFF_GIT_NAMES).chain(home) {
+        let named = HANDOFF_CONFIG_NAMES.iter().chain(HANDOFF_GIT_NAMES).chain(home).find(|name| {
             let n: Vec<&str> = name.split('/').collect();
-            if rel.windows(n.len()).any(|w| w.iter().zip(&n).all(|(a, b)| a == b)) {
+            rel.windows(n.len()).any(|w| w.iter().zip(&n).all(|(a, b)| a == b))
+        });
+        // macOS denies a handoff name at any depth by pattern; Linux and Windows
+        // deny the concrete paths `trust_handoff_rules` expands to, which leave
+        // out a new name in a nested directory (docs/limits.md).
+        if cfg!(target_os = "macos") {
+            if let Some(name) = named {
                 return (false, format!("trust-handoff: {name} is protected at any depth under {}", root.display()));
             }
+        } else if let Some(rule) = self.trust_handoff_rules().into_iter().find(|r| r.access == Access::Deny && real.starts_with(resolve_best_effort(&r.path))) {
+            let name = named.copied().unwrap_or("a handoff path");
+            return (false, format!("trust-handoff: {name}, denied at {}", resolve_best_effort(&rule.path).display()));
+        } else if let Some(name) = named {
+            return (true, format!("writable root {}; a new {name} in a subdirectory is not held on this platform (docs/limits.md)", root.display()));
         }
         (true, format!("writable root {}", root.display()))
     }

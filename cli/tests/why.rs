@@ -22,7 +22,9 @@ fn why_says_what_the_sandbox_does() {
         ("src/secret/x", false, "write-denied"),
         (".git/hooks/pre-commit", false, ".git/hooks"),
         ("pkg/.vscode/settings.json", false, ".vscode"),
-        ("sub/.gitattributes", false, ".gitattributes"),
+        // Linux and Windows do not hold a new name in a nested directory
+        // (docs/limits.md); `why` says that, and the run agrees either way.
+        ("sub/.gitattributes", cfg!(not(target_os = "macos")), ".gitattributes"),
         ("vendor/pkg/.git/hooks/a", true, "--handoff-exempt"),
     ];
     for (rel, allowed, word) in cases {
