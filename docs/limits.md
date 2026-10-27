@@ -117,6 +117,17 @@ than you asked for.
     directory too, and would not let it write the file it just created. A
     consumer that needs a fresh path should make a subdirectory of the root, or
     allow the run a user namespace.
+  - what the read-only remount gave is replaced, since 0.1.0-alpha.18, by the
+    carve and the supervisor. chmod, chown, utimes and xattr calls go to the
+    supervisor over seccomp user notification; it opens the object the call names
+    and changes it only where Landlock lets the run write (EACCES elsewhere),
+    with its own capabilities dropped. That needs ptrace access to the run's
+    processes (Yama `ptrace_scope` 1 reaches the supervisor's descendants; a
+    process reparented outside the run gets EACCES). A read deny inside a root
+    withholds its ancestors, so they cannot be renamed. An absent top-level
+    handoff name (`.mcp.json`) withholds the root when the root is not empty;
+    an empty root cannot afford it, so the run says so at start and `--strict`
+    refuses. A writable root nested inside a write deny is denied with it.
 
   The base sandbox — FS carve + trust-handoff, read-deny, per-port network,
   resource caps, the broker — needs **no** namespace and runs unprivileged on

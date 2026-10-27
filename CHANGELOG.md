@@ -6,6 +6,16 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **`run --snapshot` and `tartaros rollback ID`.** The writable roots are
+  recorded before the run (a manifest, and each file's content stored once by
+  sha256 outside the roots, read-denied for the run); `tartaros snapshot diff ID`
+  lists what changed and `tartaros rollback ID` restores it. Rollback snapshots
+  the current state first, so it can be undone, and never writes through a
+  symlink. `--snapshot-exclude NAME`, `--snapshot-max-bytes` (2 GiB; over it the
+  run is refused, 78). Read-denied paths are neither copied nor touched.
+- **Signed releases and Homebrew.** Each binary gets a GitHub build-provenance
+  attestation (Sigstore, keyless; `gh attestation verify`), and the release
+  carries a Homebrew formula generated from its SHA256SUMS.
 - **`tartaros why read|write PATH [options]`**: the rule of the policy that allows
   or denies one access (the writable root, the write-deny, the trust-handoff name
   and the root it is protected under, the read-deny or the read-allow that wins).
@@ -50,6 +60,22 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   `--env KEY=VALUE` value is never in it, only the name.
 
 ### Fixed
+- **Linux without namespaces: chmod, chown, utimes and xattrs outside the
+  roots.** Landlock does not mediate them and there is no read-only remount
+  without a mount namespace, so an agent could `chmod 0777` a file outside its
+  territory or forge an mtime. Those calls now go to the supervisor (seccomp user
+  notification), which performs them on the object it opened only where the run
+  may write, with its capabilities dropped; EACCES elsewhere. Corpus:
+  `filesystem-chmod-outside`, `filesystem-utime-outside`.
+- **Linux without namespaces: renaming an ancestor of a read deny** inside a root
+  (`mv a b`, then the secret's path re-created) is refused: the carve withholds
+  the ancestors (`secrets-read-deny-ancestor-rename`).
+- **Linux without namespaces: an absent `.mcp.json` at a root's top** could be
+  created; a root that is not empty is now withheld for it. An empty root cannot
+  be, and the run says so (`--strict` refuses) (`lifecycle-no-host-artifacts`).
+- **A writable root nested inside a write deny** (`--write proj/out --write-deny
+  proj`) was writable under the Linux carve; the deny wins, as on macOS
+  (`write-deny-covers-nested-root`).
 - **Linux without namespaces: a repository's missing `.git/hooks` could be
   created.** The carve protects only what exists, so in a `.git` with no `hooks`
   directory (a go-git or libgit2 checkout, `git init --template=`) `mkdir
