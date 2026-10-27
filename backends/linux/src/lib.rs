@@ -929,7 +929,7 @@ fn confined_command(
 
     // The carve needs the git internals to exist to deny them (see
     // create_git_placeholders); made before the carve reads the tree.
-    let git_placeholders = if use_bind_mounts || ns_capable { Placeholders::default() } else { create_git_placeholders(policy).map_err(err)? };
+    let mut git_placeholders = if use_bind_mounts || ns_capable { Placeholders::default() } else { create_git_placeholders(policy).map_err(err)? };
     // Write grant: whole roots when bind mounts protect the handoff; else the carve.
     let write_grants: Vec<PathBuf> = if use_bind_mounts {
         policy.writable_roots.clone()
@@ -942,7 +942,7 @@ fn confined_command(
     // neither create the path nor a symlink in its place. sandbox-runtime does the
     // same with /dev/null. The files are removed when the run ends. Created after
     // the carve above, which must not see them as existing denies.
-    let placeholders = if ns_capable { create_placeholders(policy).map_err(err)? } else { git_placeholders };
+    let placeholders = if ns_capable { create_placeholders(policy).map_err(err)? } else { Placeholders::default() };
     let plan = if ns_capable {
         let binds: Vec<PathBuf> = robind_paths.iter().chain(placeholders.paths()).cloned().collect();
         mount_plan(policy, &binds)
@@ -1013,6 +1013,10 @@ fn confined_command(
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
     let robind_cstrings: Vec<std::ffi::CString> =
         robind_paths.iter().chain(placeholders.paths()).filter_map(|p| cstring(p)).collect();
+    // The carve's git placeholders are denied by Landlock, never bound: they go
+    // back with the others only to be removed when the run ends.
+    let mut placeholders = placeholders;
+    placeholders.0.append(&mut git_placeholders.0);
     let MountPlan { pins, seal, hide, hide_files } = plan;
     let mount_ns = ns_capable || isolate_pids || isolate_network;
     // Pre-build (in the parent) everything pre_exec would otherwise allocate after
