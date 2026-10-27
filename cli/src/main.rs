@@ -679,6 +679,7 @@ fn main() {
     match args.first().map(|s| s.as_str()) {
         Some("run") => cmd_run(&args[1..]),
         Some("explain") => cmd_explain(&args[1..]),
+        Some("why") => cmd_why(&args[1..]),
         Some("version" | "--version" | "-V") => {
             println!("tartaros {} ({})", env!("CARGO_PKG_VERSION"), backend_os());
             exit(0);
@@ -723,6 +724,7 @@ TartarOS — secure agent runtime. NOTHING ESCAPES THE BOUNDARY.
 USAGE:
   tartaros run [options] -- <command> [args...]   run a command confined by a policy
   tartaros explain [options]                      print what a policy grants, without running
+  tartaros why read|write PATH [options]          which rule of the policy allows or denies that access
   tartaros version                                print version and backend
   tartaros help                                   this help
 
@@ -1370,6 +1372,29 @@ fn cmd_explain(opts: &[String]) -> ! {
         exit(EXIT_POLICY_REFUSED);
     }
     exit(0);
+}
+
+/// `tartaros why read|write PATH [options]`: the rule that decides one access,
+/// from the policy (`Policy::why`). For the agent, or the person, who got an
+/// EACCES and wants to know which line of the policy to change: Landlock says
+/// nothing about it, and Seatbelt only to the unified log. Exit 0 allowed, 1
+/// denied.
+fn cmd_why(opts: &[String]) -> ! {
+    let usage = || -> ! {
+        eprintln!("tartaros: usage: tartaros why read|write PATH [policy options]");
+        exit(2);
+    };
+    let write = match opts.first().map(String::as_str) {
+        Some("read") => false,
+        Some("write") => true,
+        _ => usage(),
+    };
+    let Some(path) = opts.get(1).filter(|p| !p.starts_with("--")) else { usage() };
+    let (p, _, _) = build_policy(&opts[2..], false);
+    let path = std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path));
+    let (allowed, why) = p.why(&path, write);
+    println!("{} {}: {} ({why})", if write { "write" } else { "read" }, path.display(), if allowed { "allowed" } else { "denied" });
+    exit(if allowed { 0 } else { 1 });
 }
 
 /// sandbox-runtime settings schema (the subset we read). An adapter maps it onto

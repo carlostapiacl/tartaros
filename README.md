@@ -61,7 +61,8 @@ the domains you list ([evidence](evidence/2026-10-14/macos/claude-code-allow-dom
 - If the host can't provide a protection you asked for, TartarOS refuses to start
   or reports it `UNSUPPORTED`. It never runs you with less than you asked for and
   calls it a success.
-- `tartaros explain` prints exactly what a policy grants before anything runs.
+- `tartaros explain` prints exactly what a policy grants before anything runs, and
+  `tartaros why write PATH` names the rule that decides one access.
 
 **Works where other sandboxes don't.**
 - The base sandbox (Landlock and seccomp on Linux, Seatbelt on macOS) needs no
@@ -177,6 +178,7 @@ it guarantees, and the caveat prints on `run` and on `explain`.
 cargo build --release -p tartaros-cli      # target/release/tartaros
 tartaros version                           # version + active backend
 tartaros explain --config role.toml        # audit a policy without running it
+tartaros why write .git/hooks/x --config role.toml   # which rule denies this write
 ```
 
 On Linux you can build a fully static binary for minimal containers:
