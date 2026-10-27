@@ -1537,7 +1537,10 @@ mod tests {
             assert!(got.is_empty(), "the bind mounts let the root take new entries");
         } else {
             assert_eq!(got.len(), 1);
-            assert_eq!(got[0].denies, vec![root.join("claude")]);
+            // With the deny, the absent top-level handoff names this non-empty
+            // root is withheld for (`Policy::carve_held_paths`).
+            assert!(got[0].denies.contains(&root.join("claude")), "{:?}", got[0].denies);
+            assert!(got[0].denies.contains(&root.join(".mcp.json")), "{:?}", got[0].denies);
             assert!(got[0].because.starts_with("no mount namespace"), "{}", got[0].because);
         }
     }
