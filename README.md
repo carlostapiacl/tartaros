@@ -8,7 +8,7 @@ leaves behind runs later outside the box. Every one of those claims is a test in
 this repo that you can run on your own machine.
 
 Open source (Apache-2.0) · macOS and Linux · Windows backend (preview) · one binary · no Docker, no VM, no
-account, no login · written in Rust · `v0.1.0-alpha.17`
+account, no login · written in Rust · `v0.1.0-alpha.18`
 
 [Website](https://carlostapiacl.github.io/tartaros/) ·
 [Evidence](https://carlostapiacl.github.io/tartaros/evidence.html) ·
@@ -88,7 +88,7 @@ OTel tool. `TRACEPARENT`/`TRACESTATE` reach the agent like `LANG` does.
 sandbox-runtime config. It enforces every field it can and refuses, with exit 78,
 the ones it can't, instead of dropping them.
 
-## Don't take our word for it
+## Checking it yourself
 
 Each guarantee is a contract in [`security-bench/corpus/`](security-bench/corpus/):
 an **attack**, a **legitimate control** that must keep working, and an
