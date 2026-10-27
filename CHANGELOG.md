@@ -49,6 +49,17 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   exemptions, the limits, what this host enforces and whether it would refuse. An
   `--env KEY=VALUE` value is never in it, only the name.
 
+### Fixed
+- **Linux without namespaces: a repository's missing `.git/hooks` could be
+  created.** The carve protects only what exists, so in a `.git` with no `hooks`
+  directory (a go-git or libgit2 checkout, `git init --template=`) `mkdir
+  .git/hooks && echo x > .git/hooks/pre-commit` succeeded, `--materialize`
+  included; the corpus scenario `trust-handoff-hooks-dir-absent` failed as a
+  non-root user on Ubuntu. The run now puts an empty `hooks` directory and an
+  empty read-only `config` there before building the carve and removes them when
+  it ends, if still empty. With a mount namespace nothing changes (placeholders
+  bound read-only, as before).
+
 ### Changed
 - **docs/limits.md, Windows: Schannel measured.** Under the `sandbox-user` tier
   Windows refuses SSPI credentials to the restricted token, so `curl.exe`,

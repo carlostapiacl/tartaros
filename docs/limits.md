@@ -30,7 +30,9 @@ than you asked for.
   directory (`sub/.bashrc`, macOS covers it by pattern), and a repository the agent
   **creates during the run** (its hooks are new; no sandbox measured protects
   that). Without namespaces Linux falls back to the carve and opt-in
-  `--materialize`. The home-handoff surface (shell rc, `.gitconfig`,
+  `--materialize`; a repository's missing `.git/hooks` or `.git/config` is held
+  there too since 0.1.0-alpha.18 (an empty `hooks` directory and an empty
+  read-only `config` are put in place before the carve and removed after the run). The home-handoff surface (shell rc, `.gitconfig`,
   `.ripgreprc`) is protected **by default** since 0.1.0-alpha.7, as
   sandbox-runtime does; `--allow-home-handoff` lifts it for a dotfiles repo.
 - **Moving the whole `.git` dir aside: blocked on both OS.** `mv .git .git-moved
