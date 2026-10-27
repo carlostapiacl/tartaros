@@ -1375,7 +1375,8 @@ fn cmd_explain(opts: &[String]) -> ! {
 }
 
 /// `tartaros why read|write PATH [options]`: the rule that decides one access,
-/// from the policy (`Policy::why`). For the agent, or the person, who got an
+/// from the policy (`Policy::why`) and, on Linux, from the carve the run would
+/// install. For the agent, or the person, who got an
 /// EACCES and wants to know which line of the policy to change: Landlock says
 /// nothing about it, and Seatbelt only to the unified log. Exit 0 allowed, 1
 /// denied.
@@ -1393,6 +1394,11 @@ fn cmd_why(opts: &[String]) -> ! {
     let (p, _, _) = build_policy(&opts[2..], false);
     let path = std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path));
     let (allowed, why) = p.why(&path, write);
+    #[cfg(target_os = "linux")]
+    let (allowed, why) = match (allowed && write).then(|| tartaros_linux::carve_denies_write(&p, &path)).flatten() {
+        Some(carve) => (false, carve),
+        None => (allowed, why),
+    };
     println!("{} {}: {} ({why})", if write { "write" } else { "read" }, path.display(), if allowed { "allowed" } else { "denied" });
     exit(if allowed { 0 } else { 1 });
 }

@@ -291,17 +291,7 @@ pub fn roots_without_new_entries(policy: &Policy) -> Vec<RootWithoutNewEntries> 
         return Vec::new();
     }
     let grants = policy.linux_write_allowlist_except(&on_readonly_mount);
-    let absent_inside = absent_write_denies_in_roots(policy);
-    let because = if !namespace::mount_ns_capable() {
-        format!("no mount namespace on this host: {}", namespace::userns_blocker_hint())
-    } else if !absent_inside.is_empty() {
-        format!(
-            "a write deny inside a writable root does not exist yet ({}), and a read-only bind mount needs something to bind",
-            absent_inside[0].display()
-        )
-    } else {
-        "a trust-handoff link there resolves nowhere, and a read-only bind mount needs something to bind".into()
-    };
+    let because = carve_because(policy);
     let denied: Vec<PathBuf> = policy
         .fs_rules
         .iter()
@@ -327,6 +317,45 @@ pub fn roots_without_new_entries(policy: &Policy) -> Vec<RootWithoutNewEntries> 
         out.push(RootWithoutNewEntries { root: root.clone(), denies, because: because.clone() });
     }
     out
+}
+
+/// Why the run uses the carve instead of the bind mounts.
+#[cfg(target_os = "linux")]
+fn carve_because(policy: &Policy) -> String {
+    let absent_inside = absent_write_denies_in_roots(policy);
+    if !namespace::mount_ns_capable() {
+        format!("no mount namespace on this host: {}", namespace::userns_blocker_hint())
+    } else if !absent_inside.is_empty() {
+        format!(
+            "a write deny inside a writable root does not exist yet ({}), and a read-only bind mount needs something to bind",
+            absent_inside[0].display()
+        )
+    } else {
+        "a trust-handoff link there resolves nowhere, and a read-only bind mount needs something to bind".into()
+    }
+}
+
+/// A write the policy allows that this run's carve still denies, and why: the
+/// carve grants a withheld directory's existing children only, so a new entry
+/// in it is denied (`tartaros why` asks this after `Policy::why`). None when the
+/// run uses the bind mounts or the carve grants the path.
+#[cfg(target_os = "linux")]
+pub fn carve_denies_write(policy: &Policy, path: &std::path::Path) -> Option<String> {
+    use tartaros_core::resolve_best_effort;
+    if uses_bind_mounts(policy) {
+        return None;
+    }
+    let real = resolve_best_effort(path);
+    let grants = policy.linux_write_allowlist_except(&on_readonly_mount);
+    if grants.iter().any(|g| real.starts_with(g)) {
+        return None;
+    }
+    let held = real.ancestors().skip(1).find(|a| a.exists()).unwrap_or(&real).to_path_buf();
+    Some(format!(
+        "Linux: nothing new can be created in {}, because {}; its existing entries stay writable",
+        held.display(),
+        carve_because(policy)
+    ))
 }
 
 /// Is `p` an existing path on a read-only mount? Such a path cannot be written,
