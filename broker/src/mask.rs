@@ -91,11 +91,42 @@ pub fn mint_sentinel(real: &str) -> io::Result<String> {
 #[derive(Clone, Debug, Default)]
 pub struct Masks {
     creds: Vec<MaskedCredential>,
+    /// AWS pairs, by credential name: (access key id, secret access key). A
+    /// request signed with the pair's fake key id is re-signed (`sigv4.rs`).
+    aws: Vec<(String, String)>,
 }
 
 impl Masks {
     pub fn new(creds: Vec<MaskedCredential>) -> Self {
-        Masks { creds }
+        Masks { creds, aws: Vec::new() }
+    }
+    /// Link masked credentials into AWS pairs, by name. Each name must be a
+    /// masked credential of this run.
+    pub fn with_aws_pairs(mut self, pairs: Vec<(String, String)>) -> io::Result<Self> {
+        for (k, s) in &pairs {
+            for n in [k, s] {
+                if !self.creds.iter().any(|c| &c.name == n) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("AWS pair names {n}, which is not a masked credential")));
+                }
+            }
+        }
+        self.aws = pairs;
+        Ok(self)
+    }
+    /// For a request to `host` signed with `fake_key_id`: the real key id and
+    /// secret to re-sign it with, when `fake_key_id` is a pair's sentinel and
+    /// `host` is one of that key id's hosts. Otherwise None, and the request
+    /// goes as it is: its fake signature fails upstream.
+    pub fn aws_resign(&self, host: &str, fake_key_id: &str) -> Option<(String, String)> {
+        let get = |n: &str| self.creds.iter().find(|c| c.name == n);
+        self.aws.iter().find_map(|(k, s)| {
+            let (k, s) = (get(k)?, get(s)?);
+            (k.sentinel == fake_key_id && k.applies_to(host)).then(|| (k.real.clone(), s.real.clone()))
+        })
+    }
+    /// Is `fake_key_id` the fake key id of any pair (whatever the host)?
+    pub fn is_aws_fake(&self, fake_key_id: &str) -> bool {
+        self.aws.iter().any(|(k, _)| self.creds.iter().any(|c| &c.name == k && c.sentinel == fake_key_id))
     }
     pub fn is_empty(&self) -> bool {
         self.creds.is_empty()

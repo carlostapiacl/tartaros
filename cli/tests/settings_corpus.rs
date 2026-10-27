@@ -150,6 +150,9 @@ fn applied_masked_env_credentials() {
     assert_eq!(explain_settings("cred-env", &masked(&w, env, r#"{"excludeDomains":[]}"#)), 0, "env-var masking is enforced");
     let wild = r#"{"envVars":[{"name":"T","mode":"mask","injectHosts":["*.example.com"]}]}"#;
     assert_eq!(explain_settings("cred-wild", &masked(&w, wild, "null")), 0, "a domain pattern the allow-list covers");
+    // An AWS pair is re-signed (broker/src/sigv4.rs): named explicitly, or the conventional pair.
+    let aws = r#"{"envVars":[{"name":"MY_ID","mode":"mask","injectHosts":["api.github.com"]},{"name":"MY_SECRET","mode":"mask","injectHosts":["api.github.com"]}],"awsPairs":[{"accessKeyIdVar":"MY_ID","secretAccessKeyVar":"MY_SECRET"}]}"#;
+    assert_eq!(explain_settings("cred-aws", &masked(&w, aws, "null")), 0, "an AWS pair of masked variables");
 }
 
 #[test]
@@ -158,7 +161,7 @@ fn refused_what_masking_does_not_cover() {
     let w = w.display();
     let cases = [
         ("cred-files", r#"{"envVars":[],"files":[{"path":"/x","mode":"mask","injectHosts":["api.github.com"]}]}"#, "null"),
-        ("cred-aws", r#"{"awsPairs":[{"accessKeyIdVar":"A","secretKeyVar":"B"}]}"#, "null"),
+        ("cred-aws-unmasked", r#"{"envVars":[{"name":"T","mode":"mask","injectHosts":["api.github.com"]}],"awsPairs":[{"accessKeyIdVar":"A","secretAccessKeyVar":"B"}]}"#, "null"),
         ("cred-mode", r#"{"envVars":[{"name":"T","mode":"pass","injectHosts":["api.github.com"]}]}"#, "null"),
         ("cred-nohost", r#"{"envVars":[{"name":"T","mode":"mask","injectHosts":[]}]}"#, "null"),
         ("cred-unreach", r#"{"envVars":[{"name":"T","mode":"mask","injectHosts":["evil.com"]}]}"#, "null"),

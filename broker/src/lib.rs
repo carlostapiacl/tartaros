@@ -76,6 +76,7 @@ mod egress;
 mod limits;
 pub mod mask;
 pub mod rules;
+pub mod sigv4;
 pub mod mitm;
 
 /// Does one of `patterns` (exact hosts, or `.domain` for a domain and its
