@@ -22,6 +22,7 @@
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
 //!   --allow-home-handoff   allow writing shell rc / .gitconfig / .ripgreprc (denied by default)
 //!   --handoff-exempt DIR   no trust-handoff protection inside DIR, a dependency tree (repeatable)
+//!   --allow-request SPEC   "METHODS host[/path]": the only requests an allowed domain gets (repeatable)
 //!   --private-tmp          run-private TMPDIR, AF_UNIX scoped to it (headless browsers)
 //!   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes (no curated base)
 //!   --env KEY[=VALUE]      carry one launcher var through, or set it (default: env is scrubbed)
@@ -99,6 +100,9 @@ struct PolicyFile {
     /// protected (dependency trees: `vendor`, `node_modules`). See --handoff-exempt.
     #[serde(default)]
     handoff_exempt: Vec<String>,
+    /// `[[request_rule]]`: host, methods, path prefixes. See --allow-request.
+    #[serde(default)]
+    request_rule: Vec<RequestRuleFile>,
     /// Unset keeps the default (protected); `false` is the dotfiles-repo opt-out.
     #[serde(default)]
     protect_home_handoff: Option<bool>,
@@ -196,6 +200,68 @@ struct MaskSpec {
     extra_ca: Vec<String>,
 }
 static MASKED: std::sync::OnceLock<MaskSpec> = std::sync::OnceLock::new();
+
+/// Request rules (`--allow-request`, `[[request_rule]]`, `network.requestRules`):
+/// the methods and path prefixes the agent may send to a host. The broker
+/// terminates those hosts and refuses any other request (broker/src/rules.rs).
+static REQUEST_RULES: std::sync::Mutex<Vec<tartaros_broker::rules::RequestRule>> = std::sync::Mutex::new(Vec::new());
+
+/// A rule from a policy file or `--settings`.
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct RequestRuleFile {
+    host: String,
+    #[serde(default)]
+    methods: Vec<String>,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+fn add_request_rule(host: String, methods: Vec<String>, paths: Vec<String>) {
+    REQUEST_RULES.lock().unwrap().push(tartaros_broker::rules::RequestRule { host, methods, paths });
+}
+
+/// `--allow-request "GET,POST api.github.com/repos/acme/"`: methods (`*` for any),
+/// a space, the host and an optional path prefix.
+fn parse_allow_request(spec: &str) {
+    let Some((methods, rest)) = spec.trim().split_once(char::is_whitespace) else {
+        eprintln!("error: --allow-request \"METHODS host[/path]\", e.g. \"GET api.github.com\" or \"POST api.github.com/repos/acme/\"");
+        exit(2);
+    };
+    let methods: Vec<String> = if methods == "*" { Vec::new() } else { methods.split(',').map(|m| m.trim().to_string()).collect() };
+    let rest = rest.trim();
+    let (host, path) = match rest.find('/') {
+        Some(i) => (rest[..i].to_string(), vec![rest[i..].to_string()]),
+        None => (rest.to_string(), Vec::new()),
+    };
+    add_request_rule(host, methods, path);
+}
+
+/// The rules, validated, and each host checked against the policy: it must be
+/// an allowed egress domain, and one TLS termination may reach. Refused (78) otherwise.
+fn request_rules(p: &Policy) -> Option<std::sync::Arc<tartaros_broker::rules::Rules>> {
+    let list = REQUEST_RULES.lock().unwrap().clone();
+    if list.is_empty() {
+        return None;
+    }
+    let rules = tartaros_broker::rules::Rules::new(list.clone()).unwrap_or_else(|e| {
+        eprintln!("tartaros: {e}; refusing to run.");
+        exit(EXIT_POLICY_REFUSED);
+    });
+    let excluded = MASKED.get().map(|m| m.exclude.clone()).unwrap_or_default();
+    for r in &list {
+        let name = r.host.trim_start_matches('.');
+        if !tartaros_broker::host_covered(&p.allow_domains, name) {
+            eprintln!("tartaros: request rule for {}: not an allowed egress domain (--allow-domain); refusing to run.", r.host);
+            exit(EXIT_POLICY_REFUSED);
+        }
+        if tartaros_broker::host_covered(&excluded, name) {
+            eprintln!("tartaros: request rule for {}: tlsTerminate.excludeDomains excludes it, so its requests cannot be read; refusing to run.", r.host);
+            exit(EXIT_POLICY_REFUSED);
+        }
+    }
+    Some(std::sync::Arc::new(rules))
+}
 /// The run's CA directory, removed when the run ends.
 static MASK_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
@@ -658,6 +724,9 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --materialize          pre-create absent trust-handoff placeholders
   --allow-home-handoff   let the agent write shell rc / .gitconfig / .ripgreprc in its
                          roots (denied by default; for dotfiles repos)
+  --allow-request SPEC   'METHODS host[/path]' (METHODS: GET,POST… or *): the requests the
+                         agent may send to an allowed domain. Its TLS is terminated with
+                         the run's CA and any other request is refused (403). Repeatable
   --handoff-exempt DIR   no trust-handoff protection inside DIR (strictly inside a
                          writable root): a dependency tree a setup phase fills, whose
                          packages ship .gitattributes/.github/.git. Repeatable; said
@@ -889,7 +958,7 @@ fn warn_reachable_host_sockets(p: &Policy) {
 /// How the broker treats HTTPS, for its start-up line.
 fn tunnel_note(masked: bool) -> &'static str {
     if masked {
-        "TCP tunnel, no TLS inspection, except TLS terminated toward the masked credentials' hosts"
+        "TCP tunnel, no TLS inspection, except TLS terminated toward the hosts of masked credentials and request rules"
     } else {
         "TCP tunnel, no TLS inspection"
     }
@@ -908,7 +977,13 @@ type MaskedSetup = (
 );
 fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
     use std::sync::Arc;
-    let spec = MASKED.get()?.clone();
+    // Request rules need the run's CA too, with or without a masked credential.
+    let ruled = !REQUEST_RULES.lock().unwrap().is_empty();
+    let spec = match MASKED.get() {
+        Some(s) => s.clone(),
+        None if ruled => MaskSpec { creds: Vec::new(), exclude: Vec::new(), extra_ca: Vec::new() },
+        None => return None,
+    };
     let mut creds = Vec::new();
     for (name, hosts) in &spec.creds {
         let Some(real) = secret_var(name) else {
@@ -954,10 +1029,12 @@ fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
         p.env_set.push((v.to_string(), bundle.clone()));
     }
     let names: Vec<String> = spec.creds.iter().map(|(n, h)| format!("{n} → {}", h.join(", "))).collect();
-    eprintln!(
-        "tartaros: masked credentials: {} (the agent holds sentinels; TLS to those hosts is terminated by the broker with this run's CA)",
-        names.join("; ")
-    );
+    if !names.is_empty() {
+        eprintln!(
+            "tartaros: masked credentials: {} (the agent holds sentinels; TLS to those hosts is terminated by the broker with this run's CA)",
+            names.join("; ")
+        );
+    }
     Some((Arc::new(masks), Arc::new(ca), spec.exclude.clone()))
 }
 /// If the policy names allowed egress domains, start the capability broker on
@@ -1003,7 +1080,14 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
     // route everything via HTTP_PROXY. Captured before the broker's own port is
     // appended to local_ports below, so the broker never forwards to itself.
     let loopback_ports = p.local_ports.clone();
+    let rules = request_rules(p);
     let masked = setup_masked_credentials(p);
+    if let Some(r) = &rules {
+        eprintln!(
+            "tartaros: request rules for {}: TLS to those hosts is terminated with this run's CA, and a request no rule allows is refused (403)",
+            r.hosts().join(", ")
+        );
+    }
     let make_broker = || {
         let b = tartaros_broker::Broker::new(p.role.clone(), vec![])
             .insecure_no_auth() // the sandbox boundary is the auth; no secret to send
@@ -1011,12 +1095,19 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
             .with_connect_ports(vec![443]) // HTTPS only (ADV-03)
             .with_allow_internal(false) // SSRF / rebinding defense stays on
             .with_loopback_ports(loopback_ports.clone()); // declared local_ports (N1)
-        match &masked {
+        let b = match &masked {
             None => b,
             Some((masks, ca, exclude)) => b.with_masks(masks.clone(), ca.clone(), exclude.clone()).unwrap_or_else(|e| {
                 eprintln!("tartaros: masked credentials: cannot set up the upstream TLS: {e}");
                 exit(1);
             }),
+        };
+        match (&rules, &masked) {
+            (Some(r), Some((_, ca, _))) => b.with_request_rules(r.clone(), ca.clone()).unwrap_or_else(|e| {
+                eprintln!("tartaros: request rules: cannot set up the upstream TLS: {e}");
+                exit(1);
+            }),
+            _ => b,
         }
     };
     // `exempt_loopback`: whether to put loopback in NO_PROXY so the agent connects
@@ -1301,6 +1392,9 @@ struct SandboxFs {
 struct SandboxNet {
     #[serde(default, rename = "allowedDomains")]
     allowed_domains: Vec<String>,
+    /// tartaros's own extension: `[{host, methods, paths}]`, see --allow-request.
+    #[serde(default, rename = "requestRules")]
+    request_rules: Vec<RequestRuleFile>,
     #[serde(default, rename = "deniedDomains")]
     denied_domains: Vec<String>,
     #[serde(default, rename = "allowUnixSockets")]
@@ -1452,6 +1546,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     for x in &s.filesystem.deny_read.clone() { map_deny(x, false, true, p); }
     for x in &s.filesystem.deny_write.clone() { map_deny(x, true, false, p); }
     for x in &s.filesystem.handoff_exempt { p.handoff_exempt.push(PathBuf::from(expand_path(x))); }
+    for r in &s.network.request_rules { add_request_rule(r.host.clone(), r.methods.clone(), r.paths.clone()); }
     // Network: we default-deny. Anything we cannot enforce in-sandbox is refused.
     p.network = Some(Network::Denied);
     // Per-domain egress IS enforceable: the broker runs as a CONNECT/forward proxy
@@ -1681,6 +1776,9 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
         p.strict = pf.strict;
         p.materialize_absent_handoff = pf.materialize_absent_handoff;
         p.handoff_exempt = pf.handoff_exempt.iter().map(|s| PathBuf::from(expand_path(s))).collect();
+        for r in &pf.request_rule {
+            add_request_rule(r.host.clone(), r.methods.clone(), r.paths.clone());
+        }
         if let Some(on) = pf.protect_home_handoff {
             p.protect_home_handoff = on;
         }
@@ -1761,6 +1859,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             "--log" => log = Some(val()),
             "--egress-log" => { let _ = EGRESS_LOG.set(val()); }
             "--handoff-exempt" => p.handoff_exempt.push(PathBuf::from(expand_path(&val()))),
+            "--allow-request" => parse_allow_request(&val()),
             "--log-format" => log_format = Some(match val().as_str() {
                 "jsonl" => LogFormat::Jsonl,
                 "otlp" => LogFormat::Otlp,
@@ -1801,6 +1900,9 @@ fn explain_json(p: &Policy, profile: Option<&Profile>, blocked: Option<&str>) ->
         "network": format!("{:?}", p.network),
         "egress_domains": p.allow_domains,
         "masked_credentials": masked,
+        "request_rules": REQUEST_RULES.lock().unwrap().iter()
+            .map(|r| serde_json::json!({ "host": r.host, "methods": r.methods, "paths": r.paths }))
+            .collect::<Vec<_>>(),
         "local_ports": p.local_ports,
         "writable_roots": paths(&p.writable_roots),
         "write_denied": p.fs_rules.iter().filter(|r| r.access == Access::Deny).map(|r| r.path.display().to_string()).collect::<Vec<_>>(),
@@ -1853,6 +1955,11 @@ fn explain(p: &Policy) {
             if !m.exclude.is_empty() {
                 println!("never terminated (tlsTerminate.excludeDomains): {}", m.exclude.join(", "));
             }
+        }
+        for r in REQUEST_RULES.lock().unwrap().iter() {
+            let methods = if r.methods.is_empty() { "any method".to_string() } else { r.methods.join(",") };
+            let paths = if r.paths.is_empty() { "any path".to_string() } else { r.paths.join(", ") };
+            println!("request rule {}: {methods} on {paths} (TLS terminated; anything else refused, 403)", r.host);
         }
     }
     println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);

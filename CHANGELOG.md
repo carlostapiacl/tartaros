@@ -6,6 +6,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Request rules: `--allow-request "METHODS host[/path]"`** (`[[request_rule]]` in
+  a policy file, `network.requestRules` in `--settings`): the methods and path
+  prefixes an allowed domain gets. The broker terminates that host's TLS with the
+  run's CA and refuses any other request with 403, logged with its method and
+  path. Paths fail closed (dot segments in any spelling, prefixes at a segment
+  boundary, spelled as written). A rule for a host that is not allowed, or that
+  `excludeDomains` excludes, refuses the run (78). Measured against httpbin.org on
+  macOS: `GET /get` allowed; `POST /post`, `GET /anything` and `/get/../anything`
+  refused. docs/broker.md.
 - **`--handoff-exempt DIR`** (and `handoff_exempt` in a policy file,
   `filesystem.handoffExempt` in `--settings`): the trust-handoff set is not
   protected inside DIR, a dependency tree a setup phase fills (`composer
