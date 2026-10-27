@@ -1393,7 +1393,13 @@ fn cmd_why(opts: &[String]) -> ! {
     let Some(path) = opts.get(1).filter(|p| !p.starts_with("--")) else { usage() };
     let (p, _, _) = build_policy(&opts[2..], false);
     let path = std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path));
-    let (allowed, why) = p.why(&path, write);
+    #[cfg(target_os = "linux")]
+    let held = |a: &std::path::Path| tartaros_linux::absent_handoff_held(&p, a);
+    #[cfg(target_os = "windows")]
+    let held = |a: &std::path::Path| tartaros_windows::placeholder_plan(&p).iter().any(|h| a.starts_with(h));
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let held = |_: &std::path::Path| true;
+    let (allowed, why) = p.why(&path, write, &held);
     #[cfg(target_os = "linux")]
     let (allowed, why) = match (allowed && write).then(|| tartaros_linux::carve_denies_write(&p, &path)).flatten() {
         Some(carve) => (false, carve),
