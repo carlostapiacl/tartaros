@@ -5,7 +5,7 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-## [0.1.0-alpha.18] — 2026-10-26
+## [0.1.0-alpha.18] — 2026-10-27
 
 ### Added
 - **`run --snapshot` and `tartaros rollback ID`.** The writable roots are
