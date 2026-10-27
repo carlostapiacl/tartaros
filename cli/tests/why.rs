@@ -11,7 +11,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_tartaros");
 fn why_says_what_the_sandbox_does() {
     let dir = std::env::temp_dir().join(format!("tartaros-why-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("src/secret")).unwrap();
     let w = dir.to_str().unwrap();
     let policy = |c: &mut Command| {
         c.args(["--write", w, "--write-deny", &format!("{w}/src/secret"), "--handoff-exempt", &format!("{w}/vendor")]);
@@ -41,6 +41,29 @@ fn why_says_what_the_sandbox_does() {
         run.args(["--", "sh", "-c", &format!("echo x > '{}'", path.display())]);
         let ran = run.output().unwrap();
         assert_eq!(ran.status.success(), allowed, "{rel}: why said {text}, the run said {}", String::from_utf8_lossy(&ran.stderr));
+    }
+    // A write deny that does not exist yet: on Linux the carve withholds its
+    // nearest existing ancestor, so a new file beside it is denied too, and
+    // `why` has to say so (it reads the same carve).
+    let fresh = dir.join("fresh");
+    std::fs::create_dir_all(fresh.join("src")).unwrap();
+    let f = fresh.to_str().unwrap();
+    let target = fresh.join("src/new");
+    let out = Command::new(BIN)
+        .args(["why", "write"])
+        .arg(&target)
+        .args(["--write", f, "--write-deny", &format!("{f}/src/absent")])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let ran = Command::new(BIN)
+        .args(["run", "--write", f, "--write-deny", &format!("{f}/src/absent"), "--"])
+        .args(["sh", "-c", &format!("echo x > '{}'", target.display())])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.success(), ran.status.success(), "why said {text}, the run said {}", String::from_utf8_lossy(&ran.stderr));
+    if cfg!(target_os = "linux") && !out.status.success() {
+        assert!(text.contains("nothing new can be created"), "{text}");
     }
     let out = Command::new(BIN).args(["why", "write", "/etc/tartaros-why"]).args(["--write", w]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
