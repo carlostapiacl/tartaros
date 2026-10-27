@@ -57,6 +57,10 @@ the domains you list ([evidence](evidence/2026-10-14/macos/claude-code-allow-dom
   and paths moved by renaming an ancestor directory. That includes the sandbox's
   own config, so the agent can't switch the sandbox off.
 
+**Undo a run.**
+- `--snapshot` records the writable roots before the run, and `tartaros rollback
+  ID` puts them back, files the agent added, changed or deleted included.
+
 **No silent fallback.**
 - If the host can't provide a protection you asked for, TartarOS refuses to start
   or reports it `UNSUPPORTED`. It never runs you with less than you asked for and
@@ -173,6 +177,15 @@ it guarantees, and the caveat prints on `run` and on `explain`.
 | `multi-tenant` | + egress-free network namespace | the most a single kernel can give; full tenant isolation is the [microVM backend](docs/microvm-backend.md) |
 
 ## Install
+
+```
+brew install carlostapiacl/tap/tartaros    # macOS and Linux, prebuilt
+npm i -g @carlostapiacl/tartaros
+```
+
+Each release binary carries signed build provenance:
+`gh attestation verify tartaros-darwin-arm64 --repo carlostapiacl/tartaros`.
+From source:
 
 ```
 cargo build --release -p tartaros-cli      # target/release/tartaros

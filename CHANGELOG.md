@@ -5,7 +5,19 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.18] — 2026-10-26
+
 ### Added
+- **`run --snapshot` and `tartaros rollback ID`.** The writable roots are
+  recorded before the run (a manifest, and each file's content stored once by
+  sha256 outside the roots, read-denied for the run); `tartaros snapshot diff ID`
+  lists what changed and `tartaros rollback ID` restores it. Rollback snapshots
+  the current state first, so it can be undone, and never writes through a
+  symlink. `--snapshot-exclude NAME`, `--snapshot-max-bytes` (2 GiB; over it the
+  run is refused, 78). Read-denied paths are neither copied nor touched.
+- **Signed releases and Homebrew.** Each binary gets a GitHub build-provenance
+  attestation (Sigstore, keyless; `gh attestation verify`), and the release
+  carries a Homebrew formula generated from its SHA256SUMS.
 - **`tartaros why read|write PATH [options]`**: the rule of the policy that allows
   or denies one access (the writable root, the write-deny, the trust-handoff name
   and the root it is protected under, the read-deny or the read-allow that wins).
