@@ -593,6 +593,7 @@ name = "tartaros-cli"
 version = "0.1.0-alpha.17"
 dependencies = [
  "libc",
+ "ring",
  "serde",
  "serde_json",
  "tartaros-broker",
