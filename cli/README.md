@@ -1,7 +1,8 @@
 # tartaros CLI
 
 Subcommands: `run` (confine a command), `explain` (print what a policy grants,
-without running — for auditing a profile before deploying it), `version`, `help`.
+without running — for auditing a profile before deploying it), `why` (the rule
+that decides one access), `snapshot` and `rollback` (undo a run), `version`, `help`.
 
 Run a command confined by a policy, on the OS backend (Landlock / Seatbelt).
 
@@ -113,6 +114,33 @@ Prints the role, network/ports, writable roots, read-denied secrets, the
 trust-handoff protected set expanded to any depth, and the generated Seatbelt
 profile (macOS) or Landlock allow-lists (Linux). "Política verificable": a
 security team reviews exactly what a profile grants before it ships.
+
+## why — which rule decides an access
+
+```
+tartaros why write .git/hooks/pre-commit --config role-dev.toml
+```
+
+Prints `allowed` or `denied` and the rule: the writable root, the write deny,
+the trust-handoff name and the root it is protected under, or the read deny or
+read allow that wins. Exit 0 allowed, 1 denied. On Linux it reads the same
+carve the run installs, so a new entry in a withheld directory says why.
+
+## snapshot and rollback — undo a run
+
+```
+tartaros run --snapshot --snapshot-exclude node_modules --write . -- agent …
+tartaros snapshot diff ID     # added, changed, removed since
+tartaros rollback ID          # put the roots back (--dry-run lists the plan)
+```
+
+`--snapshot` records every directory, file and symlink under the writable roots
+before the run; contents are stored once by sha256 in
+`$TARTAROS_STATE_DIR/snapshots` (default `~/.local/state/tartaros`), which must
+lie outside the roots and is read-denied for the run. A run whose roots exceed
+`--snapshot-max-bytes` (2 GiB) is refused. Rollback snapshots the current state
+first, so it can be undone, and never writes through a symlink the agent left.
+Read-denied paths and excluded names are neither snapshotted nor touched.
 
 ## Observed audit vs guaranteed enforcement
 
