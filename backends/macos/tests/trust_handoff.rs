@@ -180,3 +180,31 @@ fn max_mem_is_refused_on_macos_with_a_clear_message() {
     assert!(be.validate(&ok).is_ok(), "--max-procs/--max-cpu must still be accepted");
     fs::remove_dir_all(&work).ok();
 }
+
+#[test]
+fn a_handoff_exemption_opens_the_dependency_tree_and_nothing_else() {
+    let work = mk_work();
+    let be = SeatbeltBackend;
+    let vendor = work.join("vendor");
+    fs::create_dir_all(&vendor).unwrap();
+    let mut p = policy_for(&work);
+    p.handoff_exempt = vec![vendor.clone()];
+    // A package that ships its own handoff-named files installs.
+    let pkg = vendor.join("pkg");
+    let rc = sh(&be, &p, &format!(
+        "mkdir -p {0}/.github/workflows {0}/.git/hooks && echo x > {0}/.github/workflows/ci.yml && echo x > {0}/.git/hooks/pre-commit",
+        pkg.display()));
+    assert_eq!(rc, 0);
+    assert!(pkg.join(".git/hooks/pre-commit").exists());
+    // The repo's own surfaces stay protected.
+    let rc = sh(&be, &p, &format!("echo x > {}", work.join(".git/hooks/pre-commit").display()));
+    assert_ne!(rc, 0);
+    assert!(!work.join(".git/hooks/pre-commit").exists());
+    // An exemption that is the root, or names a surface, is refused before anything runs.
+    for bad in [work.clone(), work.join(".claude"), work.join(".git/hooks/x")] {
+        let mut q = policy_for(&work);
+        q.handoff_exempt = vec![bad.clone()];
+        assert!(be.validate(&q).is_err(), "{} should be refused", bad.display());
+    }
+    fs::remove_dir_all(&work).ok();
+}

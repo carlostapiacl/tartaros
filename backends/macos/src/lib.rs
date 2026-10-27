@@ -35,6 +35,7 @@ impl Backend for SeatbeltBackend {
             }
         }
         policy.check_symlinked_roots().map_err(|reason| PolicyError { reason })?;
+        policy.check_handoff_exempt().map_err(|reason| PolicyError { reason })?;
         // Fail closed on Linux-only hardening: Seatbelt cannot provide a PID /
         // network namespace or a seccomp syscall filter, so honouring a policy
         // that requested one by silently running WITHOUT it would hand back a
@@ -576,6 +577,20 @@ fn build_profile(policy: &Policy) -> String {
     let (symlinked, capped) = policy.symlinked_handoff_denies(SYMLINK_SCAN_CAP);
     for surface in symlinked {
         emit_deny(&mut p, &surface, &policy.writable_roots);
+    }
+    // `handoff_exempt`: dependency trees a setup phase fills, whose packages ship
+    // their own `.gitattributes`, `.github/` or `.git/`. The rules above cover
+    // them like any directory; re-open writes there (last match wins), then
+    // re-apply the explicit write-denies that fall inside, so a `--write-deny`
+    // still beats the exemption. Validated in `validate` (check_handoff_exempt).
+    for e in &policy.handoff_exempt {
+        let real = canonical_best_effort(e);
+        p.push_str(&format!("(allow file-write* (subpath {}))\n", quote(&real)));
+        for rule in policy.fs_rules.iter().filter(|r| r.access == Access::Deny) {
+            if canonical_best_effort(&rule.path).starts_with(&real) {
+                emit_deny(&mut p, &rule.path, &policy.writable_roots);
+            }
+        }
     }
     if capped {
         eprintln!(

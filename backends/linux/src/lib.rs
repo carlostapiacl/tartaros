@@ -83,6 +83,7 @@ impl Backend for LandlockBackend {
             });
         }
         policy.check_symlinked_roots().map_err(|reason| PolicyError { reason })?;
+        policy.check_handoff_exempt().map_err(|reason| PolicyError { reason })?;
         // TartarOS can always express the rest of the policy by restructuring.
         let _allow = policy.linux_write_allowlist();
         Ok(())
