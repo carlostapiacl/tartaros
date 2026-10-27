@@ -6,6 +6,12 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **`tartaros why read|write PATH [options]`**: the rule of the policy that allows
+  or denies one access (the writable root, the write-deny, the trust-handoff name
+  and the root it is protected under, the read-deny or the read-allow that wins).
+  Exit 0 allowed, 1 denied. It reads the policy, so it answers the same on every
+  backend, Linux included, where Landlock reports nothing about a denial. A test
+  checks each answer against a real write under the same policy.
 - **Masked AWS keys are re-signed (SigV4).** `credentials.awsPairs`, or
   `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` both masked: the agent's SDK
   signs with a fake pair, and on the pair's hosts the broker re-signs with the

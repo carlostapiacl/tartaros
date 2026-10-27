@@ -728,6 +728,58 @@ impl Policy {
         out
     }
 
+    /// Which rule decides an access, from the policy alone (`tartaros why`): the
+    /// question a denied agent cannot ask the kernel on every platform (Landlock
+    /// reports nothing before 6.15). `(allowed, the rule)`. It follows the
+    /// backends' precedence; what it cannot see (a path created later through a
+    /// symlink, a host's missing capability) `explain` and the run say.
+    pub fn why(&self, path: &Path, write: bool) -> (bool, String) {
+        let real = resolve_best_effort(path);
+        if !write {
+            let mut decision: Option<(usize, bool, String)> = None;
+            for d in &self.read_denies {
+                let d = resolve_best_effort(d);
+                if real.starts_with(&d) && decision.as_ref().is_none_or(|(n, _, _)| d.components().count() >= *n) {
+                    decision = Some((d.components().count(), false, format!("read-denied by {}", d.display())));
+                }
+            }
+            for a in &self.read_allows {
+                let a = resolve_best_effort(a);
+                if real.starts_with(&a) && decision.as_ref().is_some_and(|(n, allowed, _)| !*allowed && a.components().count() > *n) {
+                    decision = Some((a.components().count(), true, format!("re-allowed by {} inside a read-deny", a.display())));
+                }
+            }
+            return match decision {
+                Some((_, allowed, why)) => (allowed, why),
+                None => (true, "readable: only a read-deny stops a read".into()),
+            };
+        }
+        let Some(root) = self.writable_roots.iter().map(|r| resolve_best_effort(r)).filter(|r| real.starts_with(r)).max_by_key(|r| r.components().count()) else {
+            return (false, "outside every writable root".into());
+        };
+        for r in self.fs_rules.iter().filter(|r| r.access == Access::Deny) {
+            let d = resolve_best_effort(&r.path);
+            if real.starts_with(&d) {
+                return (false, format!("write-denied by {}", d.display()));
+            }
+        }
+        if root_inside_handoff_surface(&root) {
+            return (false, format!("the writable root {} lies inside a trust-handoff surface", root.display()));
+        }
+        if self.handoff_exempted(&real) {
+            return (true, format!("writable root {}; trust-handoff not protected here (--handoff-exempt)", root.display()));
+        }
+        let rel: Vec<String> = real.strip_prefix(&root).unwrap_or(&real).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+        let home: &[&str] = if self.protect_home_handoff { HANDOFF_HOME_NAMES } else { &[] };
+        for name in HANDOFF_CONFIG_NAMES.iter().chain(HANDOFF_GIT_NAMES).chain(home) {
+            let n: Vec<&str> = name.split('/').collect();
+            if rel.windows(n.len()).any(|w| w.iter().zip(&n).all(|(a, b)| a == b)) {
+                return (false, format!("trust-handoff: {name} is protected at any depth under {}", root.display()));
+            }
+        }
+        (true, format!("writable root {}", root.display()))
+    }
+
     /// Whether `path` lies in a `handoff_exempt` directory (resolved).
     pub fn handoff_exempted(&self, path: &Path) -> bool {
         if self.handoff_exempt.is_empty() {
