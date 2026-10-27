@@ -3,7 +3,7 @@ id = "read-deny-under-write-deny"
 source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Layering: writable root > write-denied project > read-denied secret inside
 # it. Applying the write deny (a read-only view of proj) must not re-expose

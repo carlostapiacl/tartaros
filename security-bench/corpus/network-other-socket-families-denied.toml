@@ -1,4 +1,3 @@
-# STATUS 2026-10-15 (by design): AF_VSOCK/AF_PACKET are now denied, but AF_NETLINK
 # stays allowed — glibc uses it for name resolution and it is kernel-only, not
 # network egress. This scenario accepts netlink, so it is not a gap we close.
 # derived from openai/codex codex-rs/linux-sandbox/tests/suite/managed_proxy_unix_sockets_tests.rs::managed_proxy_allow_all_unix_sockets_preserves_network_isolation (Apache-2.0)

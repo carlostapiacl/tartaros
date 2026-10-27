@@ -7,7 +7,7 @@ id = "filesystem-write-deny-unlink-recreate"
 source = "nolabs-ai/nono crates/nono-cli/tests/glob_deny_after_start_run.rs (deleted_and_recreated_file_stays_denied) (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 [policy]
 writable_roots = ["{root}/work"]

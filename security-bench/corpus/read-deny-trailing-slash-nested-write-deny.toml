@@ -3,7 +3,7 @@ id = "read-deny-trailing-slash-nested-write-deny"
 source = "anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A read-denied dir spelled WITH a trailing slash, plus a write-deny on a subdir
 # under it. The write-deny protection (a read-only bind in srt, a rule in ours) must

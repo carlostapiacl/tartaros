@@ -3,7 +3,7 @@ id = "fs-dangling-symlink-create-outside"
 source = "anthropics/sandbox-runtime test/sandbox/integration.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # fs-symlink-escape uses a fixture link to an EXISTING outside dir. Here the agent
 # plants the link itself, at run time, to an outside path that does NOT exist yet,

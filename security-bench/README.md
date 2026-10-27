@@ -40,22 +40,28 @@ a blind spot — the corpus never actually tested that enforcement — and the r
 exits non-zero. The mutations weaken the policy the runner passes, never the
 backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind spots.
 
-## Scorecard (measured 2026-10-15, a Linux host kernel 6.8)
+## Scorecard (measured 2026-10-26)
 
-The corpus has 140 scenarios; 103 are derived from other sandboxes' public test
+The corpus has 156 scenarios; 123 are derived from other sandboxes' public test
 suites and credited in [`SOURCES.md`](SOURCES.md). Confirmed-open scenarios live in
 [`corpus-known-gaps/`](corpus-known-gaps/) with their per-OS status.
 
-| | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) |
-|---|---|---|
-| scenarios | 136/136 pass | 109/109 pass (2026-10-26) |
-| security violations (critical) | 0 | 0 |
-| legitimate ops broken | 0 | 0 |
-| mutation blind spots | 0 | 0 |
+| | Linux (kernel 6.8) | macOS 15.7 (cross-platform subset) | Windows 10 19045, both tiers |
+|---|---|---|---|
+| scenarios | 151/152 pass, 1 vacuous (below) | 121/121 pass | 87/87 pass |
+| security violations (critical) | 0 | 0 | 0 |
+| legitimate ops broken | 0 | 0 | 0 |
+| mutation blind spots | 0 (2026-10-15) | 0 (2026-10-15) | not run |
 
-macOS runs the cross-platform subset (scenarios whose `os` includes macOS).
-Targets: violations 0, blind spots 0, legitimate ops ≥ 99%. The Linux figure is
-measured on kernel 6.8 with all host capabilities present
+macOS runs the cross-platform subset (scenarios whose `os` includes macOS). Windows
+runs the scenarios whose `os` includes Windows, on the `appcontainer` and the
+`sandbox-user` tier (`TARTAROS_WINDOWS_TIER`), with `TARTAROS_SH` naming a POSIX sh
+(BusyBox); a scenario got `windows` only after passing on both tiers, its baseline
+included.
+Targets: violations 0, blind spots 0, legitimate ops ≥ 99%. The 2026-10-26 Linux
+figure was measured as root in a privileged container on a kernel 6.8 VM, where the
+PID-namespace scenario is vacuous; the earlier ones on that VM directly, with all host
+capabilities present
 (`landlock cgroup_v2 userns`); two scenarios are capability-sensitive and need a
 real cgroup-v2-delegated, populated host to be meaningful (the PID-namespace and
 process-cap tests), so a quiescent or cgroup-undelegated environment reports them

@@ -4,7 +4,7 @@ id = "write-deny-glob-chars-dir"
 source = "anthropics/sandbox-runtime test/sandbox/literal-path-entries.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The project folder is named "[WIP] project" (brackets plus a space). As a write
 # root it must be writable by its literal name, and a write-deny inside it must hold.

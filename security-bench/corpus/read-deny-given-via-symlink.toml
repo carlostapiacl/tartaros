@@ -3,7 +3,7 @@ id = "read-deny-given-via-symlink"
 source = "anthropics/sandbox-runtime test/sandbox/read-list-precedence.test.ts, test/sandbox/read-deny-glob.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The POLICY names the secret through a symlinked spelling (a chain of two links:
 # alias -> a/b, a/b/l2 -> ../../vault). The deny must bind to the real target,

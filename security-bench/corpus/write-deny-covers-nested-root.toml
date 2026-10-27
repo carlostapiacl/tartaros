@@ -3,7 +3,7 @@ id = "write-deny-covers-nested-root"
 source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # "Write-protect the checkout, let the build write to checkout/out": a write
 # deny on proj and a writable root NESTED inside it (proj/out). srt's rule is

@@ -3,7 +3,7 @@ id = "read-allow-symlink-into-deny"
 source = "anthropics/sandbox-runtime test/sandbox/linux-mount-plan-record.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A read_allow entry names a path in the project that is actually a symlink
 # planted (by the repo or an earlier run) into the read-denied ~/.ssh. If the

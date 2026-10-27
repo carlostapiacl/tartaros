@@ -4,7 +4,7 @@ id = "trust-handoff-shell-rc"
 source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
 category = "trust-handoff"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Shell startup files are run by the host user's next shell whenever the
 # workspace is (or becomes) HOME, or a tool sources them from the project.

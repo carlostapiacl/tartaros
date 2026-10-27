@@ -8,13 +8,18 @@ use tartaros_macos::SeatbeltBackend;
 use std::fs;
 
 fn mk_work() -> std::path::PathBuf {
+    // The clock on macOS has microsecond resolution: two tests on parallel threads
+    // got the same directory, and one's cleanup removed the other's files. The
+    // counter keeps each test's directory its own.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let work = std::env::temp_dir().join(format!(
-        "sbx-it-{}-{}",
+        "sbx-it-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     fs::create_dir_all(work.join(".git/hooks")).unwrap();
     let nested = work.join("a/nested");

@@ -3,7 +3,7 @@ id = "fs-symlink-file-out-agent-made"
 source = "anthropics/sandbox-runtime test/sandbox/write-through-links.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Variant of fs-symlink-escape. Here the link points at a FILE (not a dir) outside
 # the root, and the agent creates the link itself inside its writable root, in the

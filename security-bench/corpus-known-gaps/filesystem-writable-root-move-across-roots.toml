@@ -1,4 +1,4 @@
-# STATUS 2026-10-15 (known gap): macos=violation, linux=pass
+# STATUS 2026-10-26 (known gap): macos=violation, linux=violation
 # derived from openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_renaming_protected_workspace_into_another_writable_root (Apache-2.0)
 id = "filesystem-writable-root-move-across-roots"
 source = "openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_renaming_protected_workspace_into_another_writable_root (Apache-2.0)"

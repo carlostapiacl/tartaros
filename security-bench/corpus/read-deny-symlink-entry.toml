@@ -3,7 +3,7 @@ id = "read-deny-symlink-entry"
 source = "anthropics/sandbox-runtime test/sandbox/linux-mount-plan-record.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The read-deny entry is itself a symlink (home/sec -> work/secrets) whose
 # target lies INSIDE a writable root. The deny applies to where it resolves:

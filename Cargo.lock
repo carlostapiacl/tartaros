@@ -452,9 +452,9 @@ dependencies = [
 
 [[package]]
 name = "seccompiler"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "345a3e4dddf721a478089d4697b83c6c0a8f5bf16086f6c13397e4534eb6e2e5"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
 dependencies = [
  "libc",
 ]
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-bench"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "serde",
  "tartaros-broker",
@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-broker"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "rcgen",
  "ring",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-cli"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "libc",
  "serde",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-collect"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "tartaros-core",
  "tartaros-linux",
@@ -614,14 +614,14 @@ dependencies = [
 
 [[package]]
 name = "tartaros-core"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "tartaros-linux"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "landlock",
  "libc",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-macos"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "libc",
  "tartaros-core",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "tartaros-microvm"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "serde",
  "serde_json",
@@ -649,10 +649,10 @@ dependencies = [
 
 [[package]]
 name = "tartaros-windows"
-version = "0.1.0-alpha.16"
+version = "0.1.0-alpha.17"
 dependencies = [
  "tartaros-core",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -807,6 +807,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-link"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
 name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -817,11 +823,11 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
-version = "0.59.0"
+version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
- "windows-targets",
+ "windows-link",
 ]
 
 [[package]]

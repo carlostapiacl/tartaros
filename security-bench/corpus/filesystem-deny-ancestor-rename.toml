@@ -1,4 +1,3 @@
-# STATUS 2026-10-15 (known gap): macos=control-broke, linux=pass
 # derived from openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_renaming_ancestors_of_explicit_protected_files (Apache-2.0)
 id = "filesystem-deny-ancestor-rename"
 source = "openai/codex codex-rs/exec/tests/suite/seatbelt.rs::seatbelt_blocks_renaming_ancestors_of_explicit_protected_files (Apache-2.0)"

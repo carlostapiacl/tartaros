@@ -3,6 +3,61 @@
 All notable changes to TartarOS. This project is pre-1.0; the format is
 loosely [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.17] — 2026-10-26
+
+### Added
+- **Masked credentials on Windows, `sandbox-user` tier.** `--settings`
+  `credentials.envVars` with `mode: "mask"` now run there: the swap is the same
+  broker's, on the setup's broker port, and the agent is another user, who cannot
+  read tartaros's environment. Measured on Windows 10: the agent holds the
+  sentinel, no variable of its holds the value, httpbin.org receives the real
+  one. The `appcontainer` tier refuses them by name (exit 78): it has no broker
+  channel.
+- **Windows in the security bench's certified set.** 69 scenarios that passed on
+  both Windows tiers, their baselines included, now list `windows` in `os`: the
+  certified run is 87 scenarios on each tier, all passing (it was 18).
+
+### Changed
+- **`--settings` runs on Windows.** A settings-driven run is strict, and the
+  Windows backend refused `strict` together with `--seccomp-strict`. Its
+  validation already refuses every field it cannot enforce, none best-effort, so
+  `strict` is now accepted; the syscall hardening itself is still refused.
+- **seccompiler 0.5.0** (was 0.4.0), Linux. Its syscall tables move to kernel 6.12
+  and it adds riscv64; tartaros builds its filters from `libc` syscall numbers,
+  not those tables, so no filter changes. Measured on kernel 6.8: the workspace
+  tests and the security bench (137 scenarios, 0 violations, 0 broken controls).
+- **windows-sys 0.61.2** (was 0.59.0), for the Windows backend, which is not
+  wired to `tartaros run` yet.
+
+### Fixed
+- **macOS: a symlink can no longer take the name of a handoff directory.** An
+  agent could create `.claude` as a symlink to a decoy directory holding its own
+  `settings.json`: Seatbelt checks the resolved path, so the rules on
+  `.claude/settings.json` saw the decoy, and a trusted agent would later load it
+  (`trust-handoff-symlink-absent-parent`, critical). Creating a symlink named
+  after an ancestor of a handoff surface (`.claude`, `.git`, `.github`) is now
+  denied at any depth, a rename onto that name included; `mkdir .claude` and
+  `git init` still work.
+- **15 scenarios move from the known gaps to the security bench's corpus**: they
+  pass on every system they list, measured today (chmod, utime and ancestor
+  renames outside the territory, handoff hooks and `.claude` symlinks, request
+  smuggling through the broker, loader-injection variables under
+  `--inherit-env`, among others). The corpus is 156 scenarios: Linux 151 of 152
+  (the PID-namespace one is vacuous in a container), macOS 121 of 121. The 14
+  left keep their per-system status as of today.
+- **docs/limits.md, Windows:** it said `tartaros run` did not dispatch to the
+  backend and that there was no egress broker; both have been there since the
+  backend landed. It now also says what the `sandbox-user` tier breaks: Windows
+  refuses SSPI credentials to the restricted token the agent runs under, so a
+  client on the system TLS stack (`curl.exe`, PowerShell, .NET) fails every HTTPS
+  connection there; clients with their own TLS stack (Node, Python, Git, rustls)
+  work.
+- **A release run no longer fails on a version another run of the same tag just
+  published.** The registry can hold it staged, not yet visible to `npm view`,
+  and answer 409; that now counts as published. Seen on 0.1.0-alpha.16, whose
+  tag started two runs: the second failed although the first had published
+  everything.
+
 ## [0.1.0-alpha.16] — 2026-10-26
 
 ### Fixed

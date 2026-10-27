@@ -3,7 +3,7 @@ id = "read-deny-symlinked-dir"
 source = "anthropics/sandbox-runtime test/sandbox/symlinked-deny-paths.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The read-deny entry is itself a symlink (proj/.private -> ../dotfiles/private). The
 # deny must cover the real directory, so the secret is unreadable by its real name

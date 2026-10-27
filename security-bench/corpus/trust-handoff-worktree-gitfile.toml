@@ -3,7 +3,7 @@ id = "trust-handoff-worktree-gitfile"
 source = "anthropics/sandbox-runtime test/sandbox/mandatory-deny-paths.test.ts (Apache-2.0)"
 category = "trust-handoff"
 severity = "medium"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A git worktree: .git is a FILE ("gitdir: ..."), so .git/hooks cannot exist
 # under it. Protection must not make every command fail there (the control),

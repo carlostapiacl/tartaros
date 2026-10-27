@@ -218,7 +218,14 @@ fn mask_spec(
     if !creds_asked {
         return Err("TLS termination without masked credentials (tlsTerminate alone)".into());
     }
-    if cfg!(not(unix)) {
+    // Windows: only the sandbox-user tier has the broker channel (a WFP-permitted
+    // loopback port) the swap runs through, and its agent is another user, who
+    // cannot read this process's environment. The AppContainer has no channel.
+    #[cfg(target_os = "windows")]
+    if tartaros_windows::Tier::from_env() != tartaros_windows::Tier::SandboxUser {
+        return Err("masked credentials on the appcontainer tier (they need TARTAROS_WINDOWS_TIER=sandbox-user and its broker channel)".into());
+    }
+    if cfg!(not(any(unix, target_os = "windows"))) {
         return Err("masked credentials on this OS".into());
     }
     let strings = |v: &Value, what: &str| -> Result<Vec<String>, String> {
@@ -335,6 +342,7 @@ static SECRETS: std::sync::OnceLock<std::collections::HashMap<String, String>> =
 
 /// The internal variable naming the pipe's fd across the re-exec. Holds a
 /// number, never a secret; removed as soon as it is read.
+#[cfg(unix)]
 const SECRETS_FD_VAR: &str = "TARTAROS_INTERNAL_SECRETS_FD";
 
 /// A secret by variable name: from the pipe after a clean re-exec, otherwise
@@ -372,6 +380,7 @@ fn take_secrets_from_pipe() {
 
 /// The secrets a run will read from the environment: masked credentials' values
 /// and the `[broker]`'s `value_env` / `token_env`.
+#[cfg(unix)]
 fn secret_names() -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     if let Some(m) = MASKED.get() {
@@ -461,6 +470,7 @@ fn reexec_without_secrets() {
 static ALLOW_EXPOSED_SECRETS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Secrets shorter than this are not looked for: too many chance matches.
+#[cfg(unix)]
 const EXPOSED_MIN_LEN: usize = 8;
 
 /// The exec records (arguments and environment) of this user's processes, as the
@@ -877,7 +887,6 @@ type MaskedSetup = (
     std::sync::Arc<tartaros_broker::mitm::MitmCa>,
     Vec<String>,
 );
-#[cfg(unix)]
 fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
     use std::sync::Arc;
     let spec = MASKED.get()?.clone();
@@ -932,11 +941,6 @@ fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
     );
     Some((Arc::new(masks), Arc::new(ca), spec.exclude.clone()))
 }
-#[cfg(not(unix))]
-fn setup_masked_credentials(_p: &mut Policy) -> Option<MaskedSetup> {
-    None // refused while the policy is built (mask_spec)
-}
-
 /// If the policy names allowed egress domains, start the capability broker on
 /// host side as a CONNECT/forward proxy scoped to those hosts (with SSRF defense)
 /// and point the agent's HTTP(S)_PROXY at it. NET-01: a Landlock port grant alone
@@ -1072,7 +1076,7 @@ fn start_egress_broker(p: &mut Policy, log: Option<&LogSpec>) -> EgressGuard {
         set_proxy("127.0.0.1", port, false); // route everything (incl. loopback) via the broker
         eprintln!("tartaros: egress broker on 127.0.0.1:{port} — allowed: {} (HTTPS/443; {})", hosts.join(", "), tunnel_note(masked.is_some()));
         std::thread::spawn(move || {
-            let mut sink = tartaros_broker::RefusalReport::stderr();
+            let mut sink = Tee(tartaros_broker::RefusalReport::stderr(), open_sink());
             let _ = broker.serve(listener, &mut sink);
         });
         return Default::default();

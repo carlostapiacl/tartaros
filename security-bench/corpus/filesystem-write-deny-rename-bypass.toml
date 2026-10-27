@@ -3,7 +3,7 @@ id = "filesystem-write-deny-rename-bypass"
 source = "anthropics/sandbox-runtime test/sandbox/macos-seatbelt.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Rename-write-rename: move the write-denied dir to an undenied name, write into
 # it, move it back. The protected file must end up unchanged at its original path.

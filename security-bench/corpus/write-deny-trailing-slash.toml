@@ -3,7 +3,7 @@ id = "write-deny-trailing-slash"
 source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-stubs.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # A trailing slash on the writable root (and on the deny) must not defeat
 # prefix/containment checks and silently drop the deny inside the root.

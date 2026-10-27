@@ -1,8 +1,8 @@
-# STATUS 2026-10-15 (known gap): macos=pass, linux=violation
 # derived from nolabs-ai/nono tests/integration/test_commands.sh (destructive metadata ops) (Apache-2.0)
 # Same Landlock gap as chmod: utimensat is not a Landlock right. Forging mtimes
 # outside the territory defeats make/rsync/backup change detection and audit
-# timelines. EXPECTED: VIOLATION on Linux (Landlock-only); blocked on macOS.
+# timelines. Closed on Linux by the read-only remount outside the writable roots
+# (see filesystem-chmod-outside); blocked on macOS by Seatbelt.
 id = "filesystem-utime-outside"
 source = "nolabs-ai/nono tests/integration/test_commands.sh (destructive metadata ops) (Apache-2.0)"
 category = "filesystem"

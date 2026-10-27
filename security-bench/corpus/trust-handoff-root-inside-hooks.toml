@@ -4,7 +4,7 @@ id = "trust-handoff-root-inside-hooks"
 source = "anthropics/sandbox-runtime test/sandbox/readonly-deny-dir-binds.test.ts (Apache-2.0)"
 category = "trust-handoff"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # The writable root is placed INSIDE a protected directory (repo/.git/hooks/
 # inner). A walk that looks for .git markers downward from each writable root

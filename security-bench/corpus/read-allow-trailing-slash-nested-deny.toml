@@ -3,7 +3,7 @@ id = "read-allow-trailing-slash-nested-deny"
 source = "anthropics/sandbox-runtime test/sandbox/trailing-slash-deny-spellings.test.ts (Apache-2.0)"
 category = "secrets"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # read-allow-deny-nested, with the re-allow carve-out spelled with a trailing slash:
 # deny priv, re-allow priv/pub/, deny priv/pub/secret again. The deeper deny must

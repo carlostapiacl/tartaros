@@ -171,11 +171,12 @@ than you asked for.
   another writable root (`mv root otherRoot/x`) — the same move is already blocked on
   Linux. Until each is closed with a fix and a scenario, these are not claimed.
 
-## Windows (backend exercised by the corpus; `tartaros run` wiring is next)
+## Windows
 
-Measured on Windows 10 19045 (non-elevated session). The backend is driven
-through the conformance bench today; the `tartaros run` CLI does not yet dispatch
-to it on Windows, and `--log` has no Windows collectors.
+Measured on Windows 10 19045. `tartaros run`, `explain` and `version` dispatch to
+the backend (the tier from `TARTAROS_WINDOWS_TIER`); `--log` has no Windows
+collectors. The security bench certifies 87 scenarios on Windows, all passing on
+both tiers (2026-10-26, 0.1.0-alpha.17).
 
 - **Reads differ by tier.** The `appcontainer` tier is deny-by-default: only
   granted paths are readable, which is stricter than the neutral model and breaks
@@ -200,6 +201,19 @@ to it on Windows, and `--log` has no Windows collectors.
   fail-closed. Like the other backends this is a blind CONNECT tunnel (TLS
   end-to-end, no SNI/cert inspection). A fixed port is required because a WFP
   permit needs admin and is installed once at setup, not per run.
+- **Masked credentials (`--settings`) on the `sandbox-user` tier.** The swap runs
+  in the egress broker on the setup's broker port, as on the other backends, and
+  the agent is another user, who cannot read tartaros's environment (measured: the
+  agent holds the sentinel, no variable of its holds the value, the credential's
+  host receives the real one). On the `appcontainer` tier they are refused
+  (exit 78): it has no broker channel.
+- **No Schannel inside the `sandbox-user` tier.** Windows refuses SSPI credentials
+  to a restricted token, so a client on the system TLS stack fails every HTTPS
+  connection with `SEC_E_NO_CREDENTIALS` under the `WRITE_RESTRICTED` runner below:
+  `curl.exe`, PowerShell's `Invoke-WebRequest`, .NET. Clients with their own TLS
+  stack work (OpenSSL or rustls: Node, Python, Git for Windows by default; measured
+  with a rustls client). No restricting SID we tried changes it (`RESTRICTED`,
+  `Authenticated Users`, `LOCAL`, `INTERACTIVE`, `SYSTEM`).
 - **`WRITE_RESTRICTED` runner (sandbox-user).** The command runs under a
   write-restricted token whose restricting SIDs are the user and `Everyone`;
   `Everyone` is required or the loader cannot start a process. A path writable by
@@ -213,6 +227,6 @@ to it on Windows, and `--log` has no Windows collectors.
 - **Concurrent runs on the same writable root.** One run per invocation is the
   model. Two live runs over the same root can race their DACL save/restore; the
   ACL journal recovers only after a run has ended, not between two live ones.
-- **No egress broker, domain allowlist or local-port scoping yet** — the network
-  is all-or-nothing (denied), refused with a clear message when a policy asks for
-  more.
+- **No local-port scoping.** Only the broker's port is reachable on the
+  `sandbox-user` tier; a `--port` grant is refused. Full network (`--net`) is
+  refused on both tiers.

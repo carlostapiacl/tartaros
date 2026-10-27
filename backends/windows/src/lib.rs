@@ -397,8 +397,11 @@ impl Backend for AppContainerBackend {
         if policy.isolate_process_info {
             unsupported.push("process-info isolation (not yet measured)");
         }
-        if policy.harden_syscalls || policy.strict {
-            unsupported.push("--seccomp-strict / strict (mitigation policies not built yet)");
+        // `strict` (abort when a requested guarantee cannot be installed) is what this
+        // validation already does: every field it cannot enforce is refused here, none
+        // is applied best-effort. Only the syscall hardening itself is not built.
+        if policy.harden_syscalls {
+            unsupported.push("--seccomp-strict (mitigation policies not built yet)");
         }
         if policy.deny_unix_sockets || !policy.allow_unix_socket_paths.is_empty() || !policy.unix_socket_subpaths.is_empty() {
             unsupported.push("AF_UNIX socket rules");

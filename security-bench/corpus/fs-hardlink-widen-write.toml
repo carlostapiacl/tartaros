@@ -3,7 +3,7 @@ id = "fs-hardlink-widen-write"
 source = "anthropics/sandbox-runtime test/sandbox/integration.test.ts (Apache-2.0)"
 category = "filesystem"
 severity = "critical"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # fs-hardlink-escape covers READING a read-denied file through a hardlink. This is
 # the write side: hardlink a file that lives OUTSIDE the writable root into it and

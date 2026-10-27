@@ -3,7 +3,7 @@ id = "filesystem-command-cwd-not-writable"
 source = "openai/codex codex-rs/exec/tests/suite/sandbox.rs::sandbox_distinguishes_command_and_policy_cwds (Apache-2.0)"
 category = "filesystem"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux", "macos", "windows"]
 
 # Being the process's cwd confers no write right: cd into a non-writable dir and
 # write a relative path.
