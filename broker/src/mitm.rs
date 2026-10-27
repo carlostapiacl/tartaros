@@ -19,7 +19,7 @@
 
 use crate::limits::{read_line_capped, CONNECT_IDLE_TIMEOUT, MAX_HEADERS, MAX_LINE_BYTES, UPSTREAM_TIMEOUT};
 use crate::mask::{ChunkedWriter, SwapWriter};
-use crate::{body_framing, is_hop_by_hop, BodyFraming, Broker};
+use crate::{body_framing, is_hop_by_hop, sigv4, BodyFraming, Broker};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use std::collections::HashMap;
@@ -286,6 +286,24 @@ fn copy_decoded(framing: &BodyFraming, from: &mut impl BufRead, to: &mut impl Wr
     }
 }
 
+/// The largest body re-signed for a masked AWS key: it is read whole.
+const MAX_RESIGN_BODY: usize = 32 * 1024 * 1024;
+
+/// A Vec that refuses to grow past MAX_RESIGN_BODY.
+struct CappedVec(Vec<u8>);
+impl Write for CappedVec {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        if self.0.len() + b.len() > MAX_RESIGN_BODY {
+            return Err(io::Error::other("body too large to re-sign"));
+        }
+        self.0.extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 impl Broker {
     /// Should a CONNECT to `host` be terminated? Only when a masked credential
     /// injects into it and `tlsTerminate.excludeDomains` does not exclude it.
@@ -416,10 +434,62 @@ impl Broker {
         let expect_continue = headers
             .iter()
             .any(|(k, v)| k.eq_ignore_ascii_case("expect") && v.eq_ignore_ascii_case("100-continue"));
-        let mut head = format!("{method} {path} HTTP/1.1\r\n");
-        if hosts.is_empty() {
-            head.push_str(&format!("Host: {host}{}\r\n", if port == 443 { String::new() } else { format!(":{port}") }));
+
+        // A request signed with a masked AWS key id (sigv4.rs): its signature is an
+        // HMAC over the fake secret, so it is re-signed with the real pair, over a
+        // body read whole. Only the header-signed shape can be; a presigned URL,
+        // SigV4a and an aws-chunked body cannot, and are refused. Signed with the
+        // fake key for a host the pair does not inject into: it goes as it is and
+        // fails there, the real key never leaves.
+        let auth_header = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("authorization")).map(|(_, v)| v.clone());
+        let resign = sigv4::credential_access_key_id(auth_header.as_deref(), &path)
+            .filter(|akid| masks.is_aws_fake(akid))
+            .and_then(|akid| masks.aws_resign(host, &akid));
+        let mut resign_auth: Option<sigv4::Authorization> = None;
+        if resign.is_some() {
+            let Some(a) = auth_header.as_deref().and_then(sigv4::parse_authorization) else {
+                return refuse(r.get_mut(), "403 Forbidden", "a presigned or SigV4a request signed with a masked AWS key cannot be re-signed");
+            };
+            let hv = |n: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v.as_str());
+            if hv("x-amz-content-sha256").is_some_and(|v| v.starts_with("STREAMING-")) {
+                return refuse(r.get_mut(), "403 Forbidden", "a streaming (aws-chunked) body signed with a masked AWS key cannot be re-signed");
+            }
+            if hv("x-amz-date").is_none() {
+                return refuse(r.get_mut(), "403 Forbidden", "a SigV4 request with no x-amz-date cannot be re-signed");
+            }
+            resign_auth = Some(a);
         }
+        // The body, read whole and swapped, for a request being re-signed: the
+        // signature covers its hash.
+        let mut resigned_body: Option<Vec<u8>> = None;
+        if resign_auth.is_some() && !matches!(framing, BodyFraming::None) {
+            if let BodyFraming::Length(n) = framing {
+                if n > MAX_RESIGN_BODY as u64 {
+                    return refuse(r.get_mut(), "413 Content Too Large", "a body too large to re-sign");
+                }
+            }
+            if expect_continue {
+                r.get_mut().write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
+                r.get_mut().flush()?;
+            }
+            let mut buf = CappedVec(Vec::new());
+            let mut sw = SwapWriter::new(&pairs, &mut buf);
+            if copy_decoded(&framing, &mut r, &mut sw).is_err() {
+                return refuse(r.get_mut(), "413 Content Too Large", "a body too large to re-sign, or cut short");
+            }
+            let (_, used) = sw.finish()?;
+            swapped.extend(used.into_iter().filter(|u| !swapped.contains(u)).collect::<Vec<_>>());
+            resigned_body = Some(buf.0);
+        }
+        let mut head = format!("{method} {path} HTTP/1.1\r\n");
+        // The headers as they go upstream, lower-cased, for a re-signature.
+        let mut sent: Vec<(String, String)> = Vec::new();
+        if hosts.is_empty() {
+            let h = format!("{host}{}", if port == 443 { String::new() } else { format!(":{port}") });
+            head.push_str(&format!("Host: {h}\r\n"));
+            sent.push(("host".into(), h));
+        }
+        let body_hash = resigned_body.as_deref().map(sigv4::sha256_hex).unwrap_or_else(|| sigv4::sha256_hex(b""));
         for (k, v) in &headers {
             let lk = k.to_ascii_lowercase();
             if is_hop_by_hop(k)
@@ -427,6 +497,7 @@ impl Broker {
                 || lk == "expect"
                 || lk == "content-length"
                 || lk == "transfer-encoding"
+                || (resign_auth.is_some() && lk == "authorization")
             {
                 continue;
             }
@@ -436,11 +507,32 @@ impl Broker {
                     swapped.push(u);
                 }
             }
+            // The payload hash the client declared was over the body it sent; the
+            // body that goes may differ (a swapped sentinel), so it is recomputed.
+            let v = if resign_auth.is_some() && lk == "x-amz-content-sha256" && v != sigv4::UNSIGNED_PAYLOAD {
+                body_hash.clone()
+            } else {
+                v
+            };
             head.push_str(&format!("{k}: {v}\r\n"));
+            sent.push((lk, v));
+        }
+        if let (Some(a), Some((real_id, real_secret))) = (&resign_auth, &resign) {
+            let payload = sent.iter().find(|(k, _)| k == "x-amz-content-sha256").map(|(_, v)| v.clone()).unwrap_or(body_hash.clone());
+            let amz_date = sent.iter().find(|(k, _)| k == "x-amz-date").map(|(_, v)| v.clone()).unwrap_or_default();
+            let canonical = match sigv4::canonical_request(&method, &path, a, &sent, &payload) {
+                Ok(c) => c,
+                Err(why) => return refuse(r.get_mut(), "403 Forbidden", &why),
+            };
+            head.push_str(&format!("Authorization: {}\r\n", sigv4::sign(&canonical, &amz_date, a, real_id, real_secret)));
+            if !swapped.iter().any(|s| s == "AWS SigV4") {
+                swapped.push("AWS SigV4".into());
+            }
         }
         // A swap that can change the length re-frames the body as chunked.
         let out_framing = match framing {
             BodyFraming::None => BodyFraming::None,
+            _ if resigned_body.is_some() => BodyFraming::Length(resigned_body.as_ref().map_or(0, |b| b.len() as u64)),
             BodyFraming::Length(n) if pairs.is_empty() || pairs.length_matched() => BodyFraming::Length(n),
             _ => BodyFraming::Chunked,
         };
@@ -471,11 +563,13 @@ impl Broker {
             let why = format!("upstream TLS failed: {e}");
             return refuse(r.get_mut(), "502 Bad Gateway", &why);
         }
-        if expect_continue {
+        if let Some(body) = &resigned_body {
+            up.write_all(body)?;
+        } else if expect_continue {
             r.get_mut().write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
             r.get_mut().flush()?;
         }
-        match out_framing {
+        match if resigned_body.is_some() { BodyFraming::None } else { out_framing } {
             BodyFraming::None => {}
             BodyFraming::Length(_) => {
                 let mut sw = SwapWriter::new(&pairs, &mut up);
@@ -797,6 +891,80 @@ mod tests {
 
     fn req(method: &str, path: &str, host: &str, port: u16) -> Vec<Vec<u8>> {
         vec![format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Length: 0\r\n\r\n").into_bytes()]
+    }
+
+    /// A broker with an AWS pair (access key id + secret) masked for 127.0.0.1.
+    fn aws_broker(up_ca: &CertificateDer<'static>) -> (u16, Arc<MitmCa>, String) {
+        let id = MaskedCredential::new("AWS_ACCESS_KEY_ID", "AKIAREALREALREAL0000", vec!["127.0.0.1".into()]).unwrap();
+        let secret = MaskedCredential::new("AWS_SECRET_ACCESS_KEY", "real/secret/key/value/0000000000000000000", vec!["127.0.0.1".into()]).unwrap();
+        let fake_id = id.sentinel().to_string();
+        let masks = Masks::new(vec![id, secret])
+            .with_aws_pairs(vec![("AWS_ACCESS_KEY_ID".into(), "AWS_SECRET_ACCESS_KEY".into())])
+            .unwrap();
+        let ca = Arc::new(MitmCa::new().unwrap());
+        let b = Broker::new("qa", vec![])
+            .insecure_no_auth()
+            .with_allow_internal(true)
+            .with_allowed_hosts(vec!["127.0.0.1".into()])
+            .with_upstream_roots(std::slice::from_ref(up_ca))
+            .unwrap()
+            .with_masks(Arc::new(masks), ca.clone(), vec![])
+            .unwrap();
+        let (l, port) = b.bind(0).unwrap();
+        std::thread::spawn(move || {
+            let mut s = tartaros_core::VecSink::default();
+            let _ = b.serve(l, &mut s);
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        (port, ca, fake_id)
+    }
+
+    #[test]
+    fn a_request_signed_with_a_masked_aws_key_is_re_signed_with_the_real_one() {
+        let (up, up_ca) = tls_upstream(None);
+        let (b, ca, fake) = aws_broker(&up_ca);
+        let at = format!("127.0.0.1:{up}");
+        let body = "Action=ListUsers&Version=2010-05-08";
+        let fake_auth = format!(
+            "AWS4-HMAC-SHA256 Credential={fake}/20150830/us-east-1/iam/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=deadbeef"
+        );
+        let req = format!(
+            "POST / HTTP/1.1\r\nHost: 127.0.0.1:{up}\r\nContent-Type: application/x-www-form-urlencoded\r\nX-Amz-Date: 20150830T123600Z\r\n\
+             Authorization: {fake_auth}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let out = through(b, &at, "127.0.0.1", Some(ca.cert_der()), &[req.into_bytes()]);
+        assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        // What the upstream received, signed the way it was sent.
+        let auth = sigv4::parse_authorization(&fake_auth).unwrap();
+        let sent = vec![
+            ("content-type".to_string(), "application/x-www-form-urlencoded".to_string()),
+            ("host".to_string(), format!("127.0.0.1:{up}")),
+            ("x-amz-date".to_string(), "20150830T123600Z".to_string()),
+        ];
+        let canonical = sigv4::canonical_request("POST", "/", &auth, &sent, &sigv4::sha256_hex(body.as_bytes())).unwrap();
+        let expected = sigv4::sign(&canonical, "20150830T123600Z", &auth, "AKIAREALREALREAL0000", "real/secret/key/value/0000000000000000000");
+        assert!(out.contains(&format!("Authorization: {expected}")), "re-signed with the real pair: {out}");
+        assert!(!out.contains("deadbeef") && !out.contains(&fake), "nothing of the fake signature upstream: {out}");
+        assert!(out.contains(body), "the body went through: {out}");
+    }
+
+    #[test]
+    fn a_masked_aws_request_that_cannot_be_re_signed_is_refused() {
+        let (up, up_ca) = tls_upstream(None);
+        let (b, ca, fake) = aws_broker(&up_ca);
+        let at = format!("127.0.0.1:{up}");
+        let presigned = format!(
+            "GET /o?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={fake}%2F20150830%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=ab HTTP/1.1\r\nHost: 127.0.0.1:{up}\r\n\r\n"
+        );
+        let streaming = format!(
+            "PUT /o HTTP/1.1\r\nHost: 127.0.0.1:{up}\r\nX-Amz-Date: 20150830T123600Z\r\nX-Amz-Content-Sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD\r\n\
+             Authorization: AWS4-HMAC-SHA256 Credential={fake}/20150830/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=ab\r\nContent-Length: 0\r\n\r\n"
+        );
+        for req in [presigned, streaming] {
+            let out = through(b, &at, "127.0.0.1", Some(ca.cert_der()), &[req.clone().into_bytes()]);
+            assert!(out.starts_with("HTTP/1.1 403"), "{req}: {out}");
+        }
     }
 
     #[test]

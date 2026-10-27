@@ -46,6 +46,15 @@ Under `backends/macos/vendor/codex/`, taken from `codex-rs/sandboxing/src/`:
 - `containers/bubblewrap` (LGPL): used as an external binary if needed, not
   vendored.
 
+## Code ported from sandbox-runtime
+
+- `broker/src/sigv4.rs` — the SigV4 canonical request and signer, ported to Rust
+  from `anthropics/sandbox-runtime` `src/sandbox/aws-sigv4.ts` (Apache-2.0):
+  canonical URI (S3 as sent, other services normalized and encoded once more),
+  canonical query, trimmed header values, the signing-key chain. Modified: Rust,
+  ring for HMAC/SHA-256, and only the header-signed shape is re-signed (the
+  others are refused by the broker).
+
 ## Conformance contracts derived from other test suites
 
 Part of `security-bench/corpus/` re-expresses guarantees asserted in other

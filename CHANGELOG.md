@@ -6,6 +6,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Masked AWS keys are re-signed (SigV4).** `credentials.awsPairs`, or
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` both masked: the agent's SDK
+  signs with a fake pair, and on the pair's hosts the broker re-signs with the
+  real one (same scope, signed headers and date; the body read whole, up to
+  32 MiB, its hash recomputed). An `aws-chunked` body, a presigned URL and SigV4a
+  cannot be re-signed and are refused (403). The signer is ported from
+  sandbox-runtime (NOTICE) and checked against AWS's documented example; a
+  request to a host the pair does not inject into keeps its fake signature and
+  fails there. `credentials.awsPairs` was refused before.
 - **Request rules: `--allow-request "METHODS host[/path]"`** (`[[request_rule]]` in
   a policy file, `network.requestRules` in `--settings`): the methods and path
   prefixes an allowed domain gets. The broker terminates that host's TLS with the

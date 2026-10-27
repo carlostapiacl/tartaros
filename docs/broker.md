@@ -57,8 +57,8 @@ Limits:
   APIs.
 - HTTPS through `allowed_hosts` is a blind CONNECT tunnel: TLS is end to end, so no
   header can be added to it. Use a capability for an HTTPS API.
-- Masked credentials (below) cover environment variables only: no files, no AWS
-  SigV4 re-signing.
+- Masked credentials (below) cover environment variables, AWS pairs included
+  (re-signed); not credential files.
 
 ## Masked credentials (`--settings`)
 
@@ -116,7 +116,16 @@ What it costs and what it does not do:
 - **Missed swaps fail closed:** a sentinel inside a compressed or encoded body reaches
   the upstream as the fake, and authentication fails; the real value is never sent
   where it was not declared. A sentinel in the URL (a query string) is not swapped.
-- **Refused by name (exit 78):** `credentials.files`, `credentials.awsPairs`, a mode
+- **AWS keys are re-signed.** A masked AWS pair (`credentials.awsPairs`, or
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` both masked) gives the agent a
+  fake key id and secret, so the SigV4 signature its SDK computes is over the fake
+  secret. On the pair's hosts the broker re-signs the request with the real pair:
+  same scope, signed headers and `x-amz-date`, over the request as it goes up (the
+  body read whole, up to 32 MiB, its hash recomputed). What carries a signature
+  the broker cannot reproduce is refused (403): an `aws-chunked` streaming body, a
+  presigned URL and SigV4a. A session token is masked like any variable. Ported
+  from sandbox-runtime's signer and checked against AWS's documented example.
+- **Refused by name (exit 78):** `credentials.files`, a mode
   other than `mask`, a credential with no `injectHosts` or one `allowedDomains` does
   not cover, `tlsTerminate` without credentials, and a CA of the caller's
   (`tlsTerminate.caCertPath`).

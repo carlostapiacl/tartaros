@@ -198,6 +198,8 @@ struct MaskSpec {
     exclude: Vec<String>,
     /// `tlsTerminate.extraCaCertPaths`: appended to the agent's trust bundle.
     extra_ca: Vec<String>,
+    /// AWS pairs (access key id, secret access key) by variable name, re-signed.
+    aws: Vec<(String, String)>,
 }
 static MASKED: std::sync::OnceLock<MaskSpec> = std::sync::OnceLock::new();
 
@@ -318,7 +320,7 @@ fn mask_spec(
         match k.as_str() {
             "envVars" => {}
             "files" => return Err("masked credential files (credentials.files)".into()),
-            "awsPairs" => return Err("AWS SigV4 re-signing (credentials.awsPairs)".into()),
+            "awsPairs" => {}
             other => return Err(format!("credentials.{other}")),
         }
     }
@@ -363,6 +365,34 @@ fn mask_spec(
     }
     if spec.creds.is_empty() {
         return Err("credentials with nothing in envVars".into());
+    }
+    // AWS pairs: re-signed on egress (broker/src/sigv4.rs). Explicit
+    // `awsPairs` entries, and the conventional AWS_ACCESS_KEY_ID /
+    // AWS_SECRET_ACCESS_KEY when both are masked and no entry names them, as
+    // sandbox-runtime pairs them. A session token is masked like any variable.
+    let masked = |n: &str| spec.creds.iter().any(|(c, _)| c == n);
+    for p in obj.get("awsPairs").and_then(Value::as_array).into_iter().flatten() {
+        let Some(p) = p.as_object() else { return Err("credentials.awsPairs entry that is not an object".into()) };
+        let get = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        for k in p.keys() {
+            if !["accessKeyIdVar", "secretAccessKeyVar", "sessionTokenVar"].contains(&k.as_str()) {
+                return Err(format!("credentials.awsPairs: {k}"));
+            }
+        }
+        let (id, secret) = (get("accessKeyIdVar"), get("secretAccessKeyVar"));
+        for n in [&id, &secret] {
+            if !masked(n) {
+                return Err(format!("credentials.awsPairs names {n:?}, which is not a masked credential in envVars"));
+            }
+        }
+        let token = get("sessionTokenVar");
+        if !token.is_empty() && !masked(&token) {
+            return Err(format!("credentials.awsPairs names {token:?}, which is not a masked credential in envVars"));
+        }
+        spec.aws.push((id, secret));
+    }
+    if spec.aws.is_empty() && masked("AWS_ACCESS_KEY_ID") && masked("AWS_SECRET_ACCESS_KEY") {
+        spec.aws.push(("AWS_ACCESS_KEY_ID".into(), "AWS_SECRET_ACCESS_KEY".into()));
     }
     if let Some(t) = tls.filter(|t| asks_for_something(t)) {
         let Some(t) = t.as_object() else { return Err("tlsTerminate that is not an object".into()) };
@@ -981,7 +1011,7 @@ fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
     let ruled = !REQUEST_RULES.lock().unwrap().is_empty();
     let spec = match MASKED.get() {
         Some(s) => s.clone(),
-        None if ruled => MaskSpec { creds: Vec::new(), exclude: Vec::new(), extra_ca: Vec::new() },
+        None if ruled => MaskSpec::default(),
         None => return None,
     };
     let mut creds = Vec::new();
@@ -995,7 +1025,10 @@ fn setup_masked_credentials(p: &mut Policy) -> Option<MaskedSetup> {
             exit(1);
         }));
     }
-    let masks = tartaros_broker::mask::Masks::new(creds);
+    let masks = tartaros_broker::mask::Masks::new(creds).with_aws_pairs(spec.aws.clone()).unwrap_or_else(|e| {
+        eprintln!("tartaros: masked credentials: {e}");
+        exit(EXIT_POLICY_REFUSED);
+    });
     let ca = tartaros_broker::mitm::MitmCa::new().unwrap_or_else(|e| {
         eprintln!("tartaros: masked credentials: {e}");
         exit(1);

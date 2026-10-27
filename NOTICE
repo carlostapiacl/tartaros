@@ -5,5 +5,9 @@ This product includes software derived from OpenAI Codex
 (https://github.com/openai/codex), licensed under the Apache License 2.0.
 Copyright 2025 OpenAI.
 
+This product includes software derived from Anthropic sandbox-runtime
+(https://github.com/anthropics/sandbox-runtime), licensed under the Apache
+License 2.0: the AWS SigV4 signer in broker/src/sigv4.rs.
+
 See THIRD_PARTY_NOTICES.md for the specific files, their upstream origin, and
 the modifications made.
