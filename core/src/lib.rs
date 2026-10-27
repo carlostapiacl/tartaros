@@ -733,7 +733,9 @@ impl Policy {
     /// reports nothing before 6.15). `(allowed, the rule)`. It follows the
     /// backends' precedence; what it cannot see (a path created later through a
     /// symlink, a host's missing capability) `explain` and the run say.
-    pub fn why(&self, path: &Path, write: bool) -> (bool, String) {
+    /// `absent_held` is the backend's answer for a handoff path that does not
+    /// exist: whether the run puts something there to deny (a placeholder).
+    pub fn why(&self, path: &Path, write: bool, absent_held: &dyn Fn(&Path) -> bool) -> (bool, String) {
         let real = resolve_best_effort(path);
         if !write {
             let mut decision: Option<(usize, bool, String)> = None;
@@ -782,7 +784,10 @@ impl Policy {
             if let Some(name) = named {
                 return (false, format!("trust-handoff: {name} is protected at any depth under {}", root.display()));
             }
-        } else if let Some(rule) = self.trust_handoff_rules().into_iter().find(|r| r.access == Access::Deny && real.starts_with(resolve_best_effort(&r.path))) {
+        } else if let Some(rule) = self.trust_handoff_rules().into_iter().find(|r| {
+            let d = resolve_best_effort(&r.path);
+            r.access == Access::Deny && real.starts_with(&d) && (std::fs::symlink_metadata(&d).is_ok() || absent_held(&d))
+        }) {
             let name = named.copied().unwrap_or("a handoff path");
             return (false, format!("trust-handoff: {name}, denied at {}", resolve_best_effort(&rule.path).display()));
         } else if let Some(name) = named {

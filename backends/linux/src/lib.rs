@@ -335,6 +335,32 @@ fn carve_because(policy: &Policy) -> String {
     }
 }
 
+/// Does this run hold an absent trust-handoff path (`tartaros why`)? A repo's
+/// missing `.git/hooks` or `.git/config` always (a placeholder, bound read-only
+/// or carved); a top-level name with a mount namespace, or with `--materialize`.
+/// A new name in a nested directory is not held (docs/limits.md).
+#[cfg(target_os = "linux")]
+pub fn absent_handoff_held(policy: &Policy, p: &std::path::Path) -> bool {
+    use tartaros_core::resolve_best_effort;
+    let in_git_dir = p.parent().is_some_and(|g| g.file_name().is_some_and(|n| n == ".git") && g.is_dir());
+    if in_git_dir && matches!(p.file_name().and_then(|n| n.to_str()), Some("hooks" | "config")) {
+        return true;
+    }
+    let roots: Vec<PathBuf> = policy.writable_roots.iter().map(|r| resolve_best_effort(r)).collect();
+    let mut first = p.to_path_buf();
+    while let Some(parent) = first.parent() {
+        if std::fs::symlink_metadata(parent).is_ok() {
+            break;
+        }
+        first = parent.to_path_buf();
+    }
+    let at_top = first.parent().is_some_and(|d| roots.iter().any(|r| d == r.as_path()));
+    if namespace::mount_ns_capable() {
+        return at_top || p.components().any(|c| c.as_os_str() == ".git");
+    }
+    policy.materialize_absent_handoff && policy.handoff_placeholders().iter().any(|h| resolve_best_effort(h) == p)
+}
+
 /// A write the policy allows that this run's carve still denies, and why: the
 /// carve grants a withheld directory's existing children only, so a new entry
 /// in it is denied (`tartaros why` asks this after `Policy::why`). None when the
@@ -395,9 +421,53 @@ impl Drop for Placeholders {
         for p in &self.0 {
             if std::fs::symlink_metadata(p).map(|m| m.is_file() && m.len() == 0).unwrap_or(false) {
                 let _ = std::fs::remove_file(p);
+            } else if std::fs::symlink_metadata(p).map(|m| m.is_dir()).unwrap_or(false) {
+                let _ = std::fs::remove_dir(p); // only if still empty
             }
         }
     }
+}
+
+/// Without a mount namespace the carve protects only what exists (Landlock
+/// matches inodes), so a repository whose `.git` has no `hooks` directory, or no
+/// `config`, would let the agent create one: a checkout made by go-git or
+/// libgit2, or `git init --template=`, has none. Before the carve is built, put
+/// them there: an empty `hooks` directory (git's own layout) and an empty
+/// read-only `config`. The carve then denies them like any existing handoff
+/// path, and they are removed when the run ends if still empty. Measured before
+/// this: `mkdir .git/hooks && echo x > .git/hooks/h` succeeded, `--materialize`
+/// included. Never through a symlinked component; fails closed.
+#[cfg(target_os = "linux")]
+fn create_git_placeholders(policy: &Policy) -> Result<Placeholders, String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let roots: Vec<PathBuf> = policy.writable_roots.iter().map(|r| tartaros_core::resolve_best_effort(r)).collect();
+    let mut made = Placeholders::default();
+    for rule in policy.trust_handoff_rules() {
+        let p = tartaros_core::resolve_best_effort(&rule.path);
+        let Some(git) = p.parent() else { continue };
+        if git.file_name().is_none_or(|n| n != ".git") || !git.is_dir() || std::fs::symlink_metadata(&p).is_ok() {
+            continue;
+        }
+        if !roots.iter().any(|r| p.starts_with(r)) || has_symlink_component(&p) {
+            continue;
+        }
+        let made_it = match p.file_name().and_then(|n| n.to_str()) {
+            Some("hooks") => std::fs::create_dir(&p),
+            Some("config") => std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p).map(|_| ()),
+            _ => continue,
+        };
+        match made_it {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => continue,
+            Err(e) => return Err(format!("git placeholder {}: {e}; refusing to run with it unprotected", p.display())),
+        }
+        if p.is_file() {
+            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444));
+        }
+        made.0.push(p);
+    }
+    Ok(made)
 }
 
 /// Create the placeholder for every absent trust-handoff path under a writable
@@ -857,6 +927,9 @@ fn confined_command(
     let robind_paths = robind_targets(policy);
     let use_bind_mounts = !robind_paths.is_empty();
 
+    // The carve needs the git internals to exist to deny them (see
+    // create_git_placeholders); made before the carve reads the tree.
+    let git_placeholders = if use_bind_mounts || ns_capable { Placeholders::default() } else { create_git_placeholders(policy).map_err(err)? };
     // Write grant: whole roots when bind mounts protect the handoff; else the carve.
     let write_grants: Vec<PathBuf> = if use_bind_mounts {
         policy.writable_roots.clone()
@@ -869,7 +942,7 @@ fn confined_command(
     // neither create the path nor a symlink in its place. sandbox-runtime does the
     // same with /dev/null. The files are removed when the run ends. Created after
     // the carve above, which must not see them as existing denies.
-    let placeholders = if ns_capable { create_placeholders(policy).map_err(err)? } else { Placeholders::default() };
+    let placeholders = if ns_capable { create_placeholders(policy).map_err(err)? } else { git_placeholders };
     let plan = if ns_capable {
         let binds: Vec<PathBuf> = robind_paths.iter().chain(placeholders.paths()).cloned().collect();
         mount_plan(policy, &binds)
