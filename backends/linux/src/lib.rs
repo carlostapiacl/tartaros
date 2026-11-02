@@ -27,6 +27,8 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 mod seccomp;
 #[cfg(target_os = "linux")]
+mod metanotify;
+#[cfg(target_os = "linux")]
 mod namespace;
 #[cfg(target_os = "linux")]
 mod cgroup;
@@ -1007,7 +1009,17 @@ fn confined_command(
         && policy.local_ports.is_empty()
         && policy.allow_domains.is_empty()
         && policy.egress_netns.is_none();
-    let seccomp_progs = seccomp::compile_all(deny_unix, harden_syscalls, restrict_net, no_net_grant)
+    // Without a mount namespace nothing outside the roots is read-only, and
+    // Landlock does not mediate chmod/chown/utimes/xattrs: the supervisor does
+    // (metanotify.rs), against the same write grants Landlock gets.
+    let meta = if ns_capable {
+        None
+    } else {
+        let ch = metanotify::channel().map_err(|e| err(format!("metadata notifier: {e}")))?;
+        metanotify::serve(ch.parent, write_grants.iter().map(|g| tartaros_core::resolve_best_effort(g)).collect());
+        Some((metanotify::compile(), ch.child))
+    };
+    let seccomp_progs = seccomp::compile_all(deny_unix, harden_syscalls, restrict_net, no_net_grant, meta.is_some())
         .map_err(|e| err(format!("seccomp compile: {e}")))?;
     // Read-only bind-mount targets (built here in the parent; the pre_exec closure
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
@@ -1168,6 +1180,9 @@ fn confined_command(
             // pre_exec only applies, never compiles (no allocation after fork,
             // review #7). The filters stack; all were selected by compile_all.
             seccomp::apply_all(&seccomp_progs)?;
+            if let Some((filter, sock)) = &meta {
+                metanotify::install_in_child(filter, std::os::fd::AsRawFd::as_raw_fd(sock))?;
+            }
             // Drop all capabilities when running as real root (review #3), after the
             // privileged setup (cgroup join, namespaces, bind mounts) has run and
             // before the agent execs. A uid-0 agent otherwise keeps CAP_SYS_MODULE,

@@ -117,6 +117,20 @@ than you asked for.
     directory too, and would not let it write the file it just created. A
     consumer that needs a fresh path should make a subdirectory of the root, or
     allow the run a user namespace.
+  - what the read-only remount gives outside the roots, the supervisor gives
+    since 0.1.0-alpha.19: chmod, chown, utimes and xattr calls go to it over
+    seccomp user notification, and it makes the change only where Landlock lets
+    the run write (EACCES elsewhere), with its own capabilities dropped. That
+    needs ptrace access to the run's processes (Yama `ptrace_scope` 1 reaches the
+    supervisor's descendants; a process reparented outside the run gets EACCES).
+  - two attacks the namespace stops are not stopped here, because the carve
+    could only stop them by withholding the whole root (no new entries at its
+    top), which broke 12 legitimate scenarios of the corpus when it was tried:
+    renaming an ancestor of a read-denied path inside a root (`mv a b`, then the
+    secret's path re-created), and creating an absent `.mcp.json` at a root's
+    top. Keep secrets outside the writable roots, pass `--materialize` for the
+    absent top-level handoff names, or allow the
+    run a user namespace.
 
   The base sandbox — FS carve + trust-handoff, read-deny, per-port network,
   resource caps, the broker — needs **no** namespace and runs unprivileged on

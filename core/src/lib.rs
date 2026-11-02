@@ -478,7 +478,13 @@ impl Policy {
 
         let mut out = Vec::new();
         for root in &self.writable_roots {
-            carve(&resolve_best_effort(root), &denied, &mut out);
+            let root = resolve_best_effort(root);
+            // A root nested inside a deny (`--write proj/out --write-deny proj`):
+            // the deny wins, as on macOS and in sandbox-runtime.
+            if denied.iter().any(|d| root.starts_with(d) && *d != root) {
+                continue;
+            }
+            carve(&root, &denied, &mut out);
         }
         out
     }
@@ -1664,6 +1670,26 @@ mod tests {
         assert!(!allow.contains(&root.join("proj")), "proj must not be granted: {allow:?}");
         assert!(!allow.contains(&root.join("other")), "other must not be granted: {allow:?}");
         assert!(allow.contains(&root.join("proj/src")), "proj/src stays writable: {allow:?}");
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_writable_root_nested_inside_a_write_deny_is_not_granted() {
+        // `--write proj --write proj/out --write-deny proj`: the deny wins over
+        // the nested root, as on macOS; the outer root keeps its other entries.
+        let tmp = std::env::temp_dir().join(format!("sbx-nrd-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("work/proj/out")).unwrap();
+        fs::create_dir_all(tmp.join("work/docs")).unwrap();
+        let work = tmp.join("work").canonicalize().unwrap();
+        let policy = Policy {
+            writable_roots: vec![work.clone(), work.join("proj/out")],
+            fs_rules: vec![FsRule { path: work.join("proj"), access: Access::Deny, even_if_absent: false }],
+            ..Default::default()
+        };
+        let allow = policy.linux_write_allowlist();
+        assert!(!allow.iter().any(|g| g.starts_with(work.join("proj"))), "nothing under the deny: {allow:?}");
+        assert!(allow.contains(&work.join("docs")), "the rest of the outer root stays writable: {allow:?}");
         fs::remove_dir_all(&tmp).ok();
     }
 
