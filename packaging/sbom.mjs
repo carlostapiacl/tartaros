@@ -1,6 +1,9 @@
 // CycloneDX 1.5 SBOM for one release binary: the crates compiled into
-// tartaros-cli for that target, from `cargo metadata` and Cargo.lock (normal
-// dependencies only; build scripts and dev-dependencies do not ship).
+// tartaros-cli for that target. The graph comes from `cargo tree -p tartaros-cli`,
+// which resolves features the way the release build does (`cargo metadata`
+// resolves them for the whole workspace, test tools included); normal
+// dependencies only, build scripts and dev-dependencies do not ship. Licenses
+// and sources come from `cargo metadata`, checksums from Cargo.lock.
 // Usage: node packaging/sbom.mjs VERSION TARGET BINARY > tartaros-<platform>.cdx.json
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -13,20 +16,9 @@ if (!version || !target || !binary) {
   process.exit(2);
 }
 
-const meta = JSON.parse(
-  execFileSync(
-    "cargo",
-    ["metadata", "--format-version", "1", "--locked", "--filter-platform", target],
-    { encoding: "utf8", maxBuffer: 64 << 20 },
-  ),
-);
-const pkgs = new Map(meta.packages.map((p) => [p.id, p]));
-const nodes = new Map(meta.resolve.nodes.map((n) => [n.id, n]));
-const root = meta.packages.find((p) => p.name === "tartaros-cli");
-if (!root) {
-  console.error("tartaros-cli is not in the workspace");
-  process.exit(1);
-}
+const cargo = (args) => execFileSync("cargo", args, { encoding: "utf8", maxBuffer: 64 << 20 });
+const meta = JSON.parse(cargo(["metadata", "--format-version", "1", "--locked", "--filter-platform", target]));
+const byRef = new Map(meta.packages.map((p) => [`${p.name}@${p.version}`, p]));
 
 // Cargo.lock checksums, for the crates that come from crates.io.
 const checksum = new Map();
@@ -37,22 +29,39 @@ for (const block of readFileSync(new URL("../Cargo.lock", import.meta.url), "utf
   if (name && ver && sum) checksum.set(`${name}@${ver}`, sum);
 }
 
-// Walk the normal dependencies from tartaros-cli.
-const shipped = new Set();
-const todo = [root.id];
-while (todo.length) {
-  const id = todo.pop();
-  if (shipped.has(id)) continue;
-  shipped.add(id);
-  for (const d of nodes.get(id)?.deps ?? []) {
-    if (d.dep_kinds.some((k) => k.kind === null)) todo.push(d.pkg);
+// `cargo tree --prefix depth`: one crate per line, its depth first. A crate
+// already printed is marked (*) and its children are not repeated.
+const tree = cargo([
+  "tree", "--locked", "-p", "tartaros-cli", "--target", target,
+  "-e", "normal", "--prefix", "depth", "--format", "{p}",
+]);
+const edges = new Map();
+const stack = [];
+let rootRef;
+for (const line of tree.split("\n")) {
+  const m = line.match(/^(\d+)(\S+) v(\S+)/);
+  if (!m) continue;
+  const depth = Number(m[1]);
+  const r = `${m[2]}@${m[3]}`;
+  if (!byRef.has(r)) {
+    console.error(`cargo tree names ${r}, which cargo metadata does not have`);
+    process.exit(1);
   }
+  if (depth === 0) rootRef = r;
+  stack.length = depth;
+  if (depth > 0) edges.get(stack[depth - 1]).add(r);
+  if (!edges.has(r)) edges.set(r, new Set());
+  stack.push(r);
+}
+if (!rootRef || !rootRef.startsWith("tartaros-cli@")) {
+  console.error("cargo tree did not start at tartaros-cli");
+  process.exit(1);
 }
 
 const ref = (p) => `${p.name}@${p.version}`;
 const component = (p) => {
   const c = {
-    type: p.id === root.id ? "application" : "library",
+    type: ref(p) === rootRef ? "application" : "library",
     "bom-ref": ref(p),
     name: p.name,
     version: p.version,
@@ -66,7 +75,8 @@ const component = (p) => {
   return c;
 };
 
-const ids = [...shipped].sort();
+const refs = [...edges.keys()].sort();
+const binRef = `tartaros@${version}`;
 const bin = readFileSync(binary);
 const bom = {
   bomFormat: "CycloneDX",
@@ -77,20 +87,18 @@ const bom = {
     tools: { components: [{ type: "application", name: "packaging/sbom.mjs" }] },
     component: {
       type: "application",
-      "bom-ref": `tartaros@${version}`,
+      "bom-ref": binRef,
       name: basename(binary),
       version,
       hashes: [{ alg: "SHA-256", content: createHash("sha256").update(bin).digest("hex") }],
       properties: [{ name: "cargo:target", value: target }],
     },
   },
-  components: ids.map((id) => component(pkgs.get(id))),
-  dependencies: ids.map((id) => ({
-    ref: ref(pkgs.get(id)),
-    dependsOn: (nodes.get(id)?.deps ?? [])
-      .filter((d) => d.dep_kinds.some((k) => k.kind === null))
-      .map((d) => ref(pkgs.get(d.pkg)))
-      .sort(),
-  })),
+  components: refs.map((r) => component(byRef.get(r))),
+  // The binary is built from tartaros-cli, so the graph starts there.
+  dependencies: [
+    { ref: binRef, dependsOn: [rootRef] },
+    ...refs.map((r) => ({ ref: r, dependsOn: [...edges.get(r)].sort() })),
+  ],
 };
 process.stdout.write(JSON.stringify(bom, null, 2) + "\n");
