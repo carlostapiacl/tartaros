@@ -543,10 +543,11 @@ enum Mutation {
     RaiseProcLimit,
     RaiseMemLimit,
     DropEnvScrub,
+    DropTrustHandoff,
 }
 
 impl Mutation {
-    const ALL: [Mutation; 7] = [
+    const ALL: [Mutation; 8] = [
         Mutation::DropReadDenies,
         Mutation::GrantNetwork,
         Mutation::DropIsolateNet,
@@ -554,6 +555,7 @@ impl Mutation {
         Mutation::RaiseProcLimit,
         Mutation::RaiseMemLimit,
         Mutation::DropEnvScrub,
+        Mutation::DropTrustHandoff,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -564,6 +566,7 @@ impl Mutation {
             Mutation::RaiseProcLimit => "raise-proc-limit",
             Mutation::RaiseMemLimit => "raise-mem-limit",
             Mutation::DropEnvScrub => "drop-env-scrub",
+            Mutation::DropTrustHandoff => "drop-trust-handoff",
         }
     }
     /// Does the scenario rely on the protection this mutation removes?
@@ -576,6 +579,7 @@ impl Mutation {
             Mutation::RaiseProcLimit => c.policy.max_processes.is_some(),
             Mutation::RaiseMemLimit => c.policy.max_memory_bytes.is_some(),
             Mutation::DropEnvScrub => !c.launcher_env.is_empty(),
+            Mutation::DropTrustHandoff => c.category == "trust-handoff",
         }
     }
     fn weaken(self, p: &mut Policy) {
@@ -588,6 +592,8 @@ impl Mutation {
             Mutation::RaiseMemLimit => p.max_memory_bytes = None,
             // Opt into full env passthrough: the secret in launcher_env now leaks.
             Mutation::DropEnvScrub => p.inherit_env = true,
+            // The whole trust-handoff set, on every backend (feature mutation-testing).
+            Mutation::DropTrustHandoff => p.mutation_drop_trust_handoff = true,
         }
     }
 }
@@ -764,15 +770,29 @@ fn run_mutations(files: &[PathBuf]) {
             continue;
         }
         let mut flipped = Vec::new();
+        let mut missed = Vec::new();
         for f in &applicable {
             // re-parse fresh so each mutated run starts from the clean contract
             let c: Contract = toml::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
             let o = run_scenario_inner(c, Some(m));
             if o.violation {
                 flipped.push(o.id);
+            } else {
+                missed.push(o.id);
             }
         }
-        let tag = if flipped.is_empty() { "BLIND-SPOT" } else { "ok" };
+        // Every trust-handoff scenario tests that one protection, so removing it
+        // must flip each of them, not just one: a scenario that holds without it
+        // is held by something else and proves nothing about trust-handoff.
+        let must_flip_all = matches!(m, Mutation::DropTrustHandoff);
+        let blind = flipped.is_empty() || (must_flip_all && !missed.is_empty());
+        let tag = if flipped.is_empty() {
+            "BLIND-SPOT".to_string()
+        } else if blind {
+            format!("BLIND-SPOT: did not flip {}", missed.join(", "))
+        } else {
+            "ok".to_string()
+        };
         println!(
             "{:<20} {:<10} {} [{}]",
             m.name(),
@@ -780,7 +800,7 @@ fn run_mutations(files: &[PathBuf]) {
             flipped.join(", "),
             tag
         );
-        if flipped.is_empty() {
+        if blind {
             blind_spots += 1;
         }
     }
@@ -788,7 +808,7 @@ fn run_mutations(files: &[PathBuf]) {
     println!("\n== mutation scorecard ==");
     println!("  mutations with a blind spot: {blind_spots}  [target 0]");
     if blind_spots > 0 {
-        eprintln!("\nFAIL: {blind_spots} mutation(s) flipped no scenario — the corpus does not actually test that enforcement.");
+        eprintln!("\nFAIL: {blind_spots} mutation(s) with a blind spot: one flipped no scenario, or drop-trust-handoff left a trust-handoff scenario standing. The corpus does not actually test that enforcement.");
         std::process::exit(1);
     }
     println!("\nOK: every removable protection is caught by at least one scenario.");

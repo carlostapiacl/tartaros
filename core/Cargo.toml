@@ -7,6 +7,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Security bench only (`--mutate`): adds the switch that turns the trust-handoff
+# set off, to prove the corpus notices. The released binary is built with
+# `-p tartaros-cli`, which never enables it; without it the switch does not exist.
+mutation-testing = []
+
 [dependencies]
 
 [dev-dependencies]

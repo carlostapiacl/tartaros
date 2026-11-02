@@ -558,7 +558,9 @@ fn build_profile(policy: &Policy) -> String {
     // any-depth — defeats the ancestor-rename move (wherever the path lands under
     // the root it still matches; outside the root is not writable anyway).
     for root in &policy.writable_roots {
-        emit_handoff_regex(&mut p, root, policy.protect_home_handoff);
+        if policy.trust_handoff_on() {
+            emit_handoff_regex(&mut p, root, policy.protect_home_handoff);
+        }
     }
     // A `.git` pointer file (worktree/submodule) can repoint the repo at a gitdir
     // elsewhere under a writable root; its hooks/config have no `.git` ancestor, so

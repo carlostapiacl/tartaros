@@ -188,6 +188,11 @@ pub struct Policy {
     /// editing one's own dotfiles in the box; turn it on when the workspace is not
     /// a dotfiles repo and that surface is in scope.
     pub protect_home_handoff: bool,
+    /// Security bench only (`--mutate`, feature `mutation-testing`): drop the
+    /// whole trust-handoff set, to prove the corpus notices. Not in a normal build.
+    #[cfg(feature = "mutation-testing")]
+    #[doc(hidden)]
+    pub mutation_drop_trust_handoff: bool,
     /// Wall-clock limit; on expiry the whole process group is killed (exit 124).
     pub timeout: Option<Duration>,
     /// Address-space (memory) limit in bytes (`RLIMIT_AS`).
@@ -299,10 +304,26 @@ pub struct Policy {
 }
 
 impl Policy {
+    /// Whether the trust-handoff set applies. Always, except in a security-bench
+    /// build that turns it off for `--mutate` (feature `mutation-testing`).
+    pub fn trust_handoff_on(&self) -> bool {
+        #[cfg(feature = "mutation-testing")]
+        {
+            !self.mutation_drop_trust_handoff
+        }
+        #[cfg(not(feature = "mutation-testing"))]
+        {
+            true
+        }
+    }
+
     /// The absent top-level trust-handoff config paths that
     /// `materialize_absent_handoff` would create (files, and dirs for the ones
     /// ending without an extension like `.github/workflows`).
     pub fn handoff_placeholders(&self) -> Vec<PathBuf> {
+        if !self.trust_handoff_on() {
+            return Vec::new();
+        }
         let mut out = Vec::new();
         for root in &self.writable_roots {
             for name in HANDOFF_CONFIG_NAMES {
@@ -615,6 +636,9 @@ impl Policy {
     /// (a huge writable root like a cache) degrades only this symlink edge, with a
     /// warning — it never hangs and never refuses a large root.
     pub fn symlinked_handoff_denies(&self, cap: usize) -> (Vec<PathBuf>, bool) {
+        if !self.trust_handoff_on() {
+            return (Vec::new(), false);
+        }
         // Split each handoff name into (first segment, remainder) once.
         let splits: Vec<(&str, Option<&str>)> = HANDOFF_CONFIG_NAMES
             .iter()
@@ -688,6 +712,9 @@ impl Policy {
     /// workspace's gitdir — rather than walk the whole writable tree, which on a
     /// large root (a cache, `node_modules`) cost tens of seconds and a huge profile.
     pub fn gitdir_pointer_handoff(&self) -> Vec<PathBuf> {
+        if !self.trust_handoff_on() {
+            return Vec::new();
+        }
         let mut out: Vec<PathBuf> = Vec::new();
         for root in &self.writable_roots {
             let dotgit = root.join(".git");
@@ -717,6 +744,9 @@ impl Policy {
     /// not be able to create them); nested config handoff files are denied where
     /// they already exist.
     pub fn trust_handoff_rules(&self) -> Vec<FsRule> {
+        if !self.trust_handoff_on() {
+            return Vec::new();
+        }
         let mut out = Vec::new();
         for root in &self.writable_roots {
             expand_root(root, self.protect_home_handoff, &mut out);
@@ -846,6 +876,9 @@ impl Policy {
     /// surface. The macOS backend emits these as subpath denies; the Linux carve
     /// picks them up through [`trust_handoff_rules`]. Real (resolved) paths.
     pub fn ancestor_handoff_denies(&self) -> Vec<PathBuf> {
+        if !self.trust_handoff_on() {
+            return Vec::new();
+        }
         self.writable_roots
             .iter()
             .filter(|r| root_inside_handoff_surface(r))
