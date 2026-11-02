@@ -911,15 +911,19 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
     // as the control failing to connect; a busy port gets a few seconds first.
     let mut servers = Vec::new();
     let mut server_err: Option<String> = None;
-    for s in &c.server {
-        let mut bound = std::net::TcpListener::bind(("127.0.0.1", s.port));
+    let bind_retrying = |port: u16| {
+        let mut bound = std::net::TcpListener::bind(("127.0.0.1", port));
         for _ in 0..20 {
             if bound.is_ok() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
-            bound = std::net::TcpListener::bind(("127.0.0.1", s.port));
+            bound = std::net::TcpListener::bind(("127.0.0.1", port));
         }
+        bound
+    };
+    for s in &c.server {
+        let bound = bind_retrying(s.port);
         if let Err(e) = &bound {
             server_err.get_or_insert(format!("server port {}: {e}", s.port));
         }
@@ -953,11 +957,18 @@ fn run_scenario_inner(c: Contract, mutate: Option<Mutation>) -> Outcome {
             })
             .collect();
         let broker = Broker::new("bench", vec![]).with_auth(bs.token.clone()).with_capabilities(caps);
-        if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", bs.port)) {
-            std::thread::spawn(move || {
-                let mut sink = tartaros_core::VecSink::default();
-                let _ = broker.serve(l, &mut sink);
-            });
+        // Same as the servers: a broker port that cannot be bound is INFRA_ERROR,
+        // not a control that fails to connect (seen on macOS CI).
+        match bind_retrying(bs.port) {
+            Ok(l) => {
+                std::thread::spawn(move || {
+                    let mut sink = tartaros_core::VecSink::default();
+                    let _ = broker.serve(l, &mut sink);
+                });
+            }
+            Err(e) => {
+                server_err.get_or_insert(format!("broker port {}: {e}", bs.port));
+            }
         }
     }
     std::thread::sleep(std::time::Duration::from_millis(200));
