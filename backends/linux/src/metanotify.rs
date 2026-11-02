@@ -268,7 +268,7 @@ impl Server {
             n if n == libc::SYS_fchown => (Target::Fd(a[0] as i32 as i64), Op::Owner(a[1] as u32, a[2] as u32)),
             n if n == libc::SYS_utimensat => {
                 let times = if a[2] == 0 { None } else { Some(mem.timespecs(a[2])?) };
-                let t = if a[1] == 0 { Target::Fd(a[0] as i32 as i64) } else { path(a[0] as i32 as i64, a[1], !nofollow(a[3]), false) };
+                let t = if a[1] == 0 { Target::Fd(a[0] as i32 as i64) } else { path(a[0] as i32 as i64, a[1], !nofollow(a[3]), empty(a[3])) };
                 (t, Op::Times(times))
             }
             n if n == libc::SYS_setxattr || n == libc::SYS_lsetxattr => {
@@ -300,7 +300,9 @@ impl Server {
             n if n == libc::SYS_utimes || n == libc::SYS_futimesat => {
                 let (dirfd, p, t) = if n == libc::SYS_utimes { (AT_FDCWD, a[0], a[1]) } else { (a[0] as i32 as i64, a[1], a[2]) };
                 let times = if t == 0 { None } else { Some(mem.timevals(t)?) };
-                (path(dirfd, p, true, false), Op::Times(times))
+                // futimesat(fd, NULL, times) changes the fd's own file.
+                let target = if p == 0 && n == libc::SYS_futimesat { Target::Fd(dirfd) } else { path(dirfd, p, true, false) };
+                (target, Op::Times(times))
             }
             _ => (Target::Fd(-1), Op::NotServed),
         };
@@ -324,13 +326,16 @@ impl Server {
     /// which every run is granted). An object with no path (a pipe, a socket)
     /// has no metadata the territory protects.
     fn writable(&self, real: &Path) -> bool {
-        let s = real.to_string_lossy();
-        if !s.starts_with('/') {
+        use std::os::unix::ffi::OsStrExt;
+        // On the path's bytes, never a lossy string: two names that differ only
+        // in bytes that are not UTF-8 must not compare equal.
+        let b = real.as_os_str().as_bytes();
+        if !b.starts_with(b"/") {
             return true; // pipe:[…], socket:[…], anon_inode:…
         }
         // An unlinked file (an O_TMPFILE, or one removed while open) is judged by its directory.
-        let real = match s.strip_suffix(" (deleted)") {
-            Some(p) => Path::new(p).parent().map(Path::to_path_buf).unwrap_or_default(),
+        let real = match b.strip_suffix(b" (deleted)") {
+            Some(p) => Path::new(std::ffi::OsStr::from_bytes(p)).parent().map(Path::to_path_buf).unwrap_or_default(),
             None => real.to_path_buf(),
         };
         real.starts_with("/dev") || self.grants.iter().any(|g| real.starts_with(g))
@@ -462,6 +467,11 @@ impl Mem {
     #[cfg(target_arch = "x86_64")]
     fn timevals(&self, addr: u64) -> Result<[libc::timespec; 2], i32> {
         let w = self.words(addr)?;
+        // The kernel refuses tv_usec outside 0..1_000_000 (EINVAL); checked
+        // before the multiplication, so an agent's value cannot overflow it.
+        if !(0..1_000_000).contains(&w[1]) || !(0..1_000_000).contains(&w[3]) {
+            return Err(libc::EINVAL);
+        }
         Ok([libc::timespec { tv_sec: w[0], tv_nsec: w[1] * 1000 }, libc::timespec { tv_sec: w[2], tv_nsec: w[3] * 1000 }])
     }
 
@@ -470,5 +480,59 @@ impl Mem {
         let b = self.bytes(addr, 16)?;
         let w = |i: usize| i64::from_ne_bytes(b[i * 8..i * 8 + 8].try_into().unwrap());
         Ok([libc::timespec { tv_sec: w(0), tv_nsec: 0 }, libc::timespec { tv_sec: w(1), tv_nsec: 0 }])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    fn server(grants: &[&[u8]]) -> Server {
+        Server { grants: grants.iter().map(|g| PathBuf::from(OsStr::from_bytes(g))).collect() }
+    }
+
+    #[test]
+    fn writable_compares_bytes_not_a_lossy_string() {
+        // A grant whose name has a real U+FFFD, and a directory outside it whose
+        // name has an invalid byte in the same place: lossily they are the same.
+        let s = server(&["/box/permit\u{FFFD}".as_bytes()]);
+        let outside = Path::new(OsStr::from_bytes(b"/box/permit\xff/f (deleted)"));
+        assert!(!s.writable(outside), "an invalid byte must not match U+FFFD");
+        let inside = Path::new(OsStr::from_bytes("/box/permit\u{FFFD}/f (deleted)".as_bytes()));
+        assert!(s.writable(inside), "an unlinked file in the grant is judged by its directory");
+    }
+
+    #[test]
+    fn writable_judges_grants_dev_and_pathless_objects() {
+        let s = server(&[b"/work"]);
+        assert!(s.writable(Path::new("/work/a/b")));
+        assert!(!s.writable(Path::new("/workshop/a")), "a shared prefix is not the grant");
+        assert!(!s.writable(Path::new("/etc/passwd")));
+        assert!(!s.writable(Path::new("/etc/x (deleted)")), "an unlinked file outside stays outside");
+        assert!(s.writable(Path::new("/dev/null")));
+        assert!(s.writable(Path::new("pipe:[1234]")));
+    }
+
+    #[test]
+    fn timevals_refuse_out_of_range_microseconds_without_overflow() {
+        let dir = std::env::temp_dir().join(format!("tt-meta-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, w: [i64; 4]| {
+            let p = dir.join(name);
+            std::fs::write(&p, w.iter().flat_map(|x| x.to_ne_bytes()).collect::<Vec<u8>>()).unwrap();
+            Mem(std::fs::File::open(&p).unwrap())
+        };
+        #[cfg(target_arch = "x86_64")]
+        {
+            let ok = write("ok", [10, 999_999, 20, 0]).timevals(0).unwrap();
+            assert_eq!((ok[0].tv_sec, ok[0].tv_nsec, ok[1].tv_sec, ok[1].tv_nsec), (10, 999_999_000, 20, 0));
+            assert_eq!(write("big", [0, i64::MAX, 0, 0]).timevals(0).unwrap_err(), libc::EINVAL);
+            assert_eq!(write("neg", [0, 0, 0, -1]).timevals(0).unwrap_err(), libc::EINVAL);
+        }
+        let t = write("ts", [1, 2, 3, 4]).timespecs(0).unwrap();
+        assert_eq!((t[0].tv_sec, t[0].tv_nsec, t[1].tv_sec, t[1].tv_nsec), (1, 2, 3, 4));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

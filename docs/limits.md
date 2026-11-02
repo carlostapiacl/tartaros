@@ -123,6 +123,11 @@ than you asked for.
     the run write (EACCES elsewhere), with its own capabilities dropped. That
     needs ptrace access to the run's processes (Yama `ptrace_scope` 1 reaches the
     supervisor's descendants; a process reparented outside the run gets EACCES).
+    Two things it does not do: set the times of a symlink itself (`touch -h`,
+    `lutimes`) answers EOPNOTSUPP even inside the roots, and inode flags set by
+    ioctl (`chattr`, `FS_IOC_SETFLAGS`) on a file outside the roots are not
+    mediated; the ones that matter (immutable, append-only) need
+    CAP_LINUX_IMMUTABLE, which a non-root run does not have.
   - two attacks the namespace stops are not stopped here, because the carve
     could only stop them by withholding the whole root (no new entries at its
     top), which broke 12 legitimate scenarios of the corpus when it was tried:
