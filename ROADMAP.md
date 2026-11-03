@@ -75,10 +75,10 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
 ## Shipped
 
 Signed releases, workspace snapshots with rollback (`run --snapshot`,
-`tartaros rollback`) and `tartaros why` shipped in 0.1.0-alpha.18. Done for the
-next release: an SBOM with each binary, `--mutate` coverage for trust-handoff,
-and chmod/chown/utimes/xattrs held outside the roots on Linux without
-namespaces. The details are in the [changelog](CHANGELOG.md).
+`tartaros rollback`) and `tartaros why` shipped in 0.1.0-alpha.18. An SBOM
+with each binary, `--mutate` coverage for trust-handoff, and
+chmod/chown/utimes/xattrs held outside the roots on Linux without namespaces
+shipped in 0.1.0-alpha.19. The details are in the [changelog](CHANGELOG.md).
 
 ## How to help
 
