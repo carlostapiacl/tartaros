@@ -12,6 +12,12 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   It is in SHA256SUMS and carries the same build-provenance attestation.
   `packaging/sbom.mjs` builds it from `cargo tree -p tartaros-cli` (features as
   the release build resolves them) and `cargo metadata`; no new tool in CI.
+- **`--mutate` covers trust-handoff.** `drop-trust-handoff` removes the whole
+  trust-handoff set and must flip every `trust-handoff` scenario, not just one
+  (21 of 21 on macOS, 23 of 23 on Linux with and without namespaces). The
+  switch exists only in a build of `tartaros-core` with the `mutation-testing`
+  feature, which the security bench enables and the released binary
+  (`-p tartaros-cli`) never does.
 
 ### Fixed
 - **Linux without namespaces: chmod, chown, utimes and xattrs outside the

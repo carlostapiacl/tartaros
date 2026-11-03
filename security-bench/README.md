@@ -33,12 +33,18 @@ cargo run -p tartaros-bench -- corpus --mutate
 Passing scenarios prove attacks are blocked — but not that the *suite* would
 notice if a protection were removed. `--mutate` deliberately weakens the policy
 one protection at a time (`drop-read-denies`, `grant-network`,
-`drop-isolate-net`, `drop-isolate-pids`, `raise-proc-limit`, `raise-mem-limit`)
-and re-runs every scenario that relies on it. Removing a protection **must** make
-at least one attack succeed (flip to VIOLATION); a mutation that flips nothing is
-a blind spot — the corpus never actually tested that enforcement — and the run
-exits non-zero. The mutations weaken the policy the runner passes, never the
-backend, so the real enforcement is exercised. Measured on a Linux host: 0 blind spots.
+`drop-isolate-net`, `drop-isolate-pids`, `raise-proc-limit`, `raise-mem-limit`,
+`drop-env-scrub`, `drop-trust-handoff`) and re-runs every scenario that relies on
+it. Removing a protection **must** make at least one attack succeed (flip to
+VIOLATION); a mutation that flips nothing is a blind spot — the corpus never
+actually tested that enforcement — and the run exits non-zero.
+`drop-trust-handoff` is stricter: it must flip **every** `trust-handoff`
+scenario, since each of them tests that one protection. The mutations weaken the
+policy the runner passes, never the backend, so the real enforcement is
+exercised. The trust-handoff set has no policy option that turns it off, so the
+bench builds `tartaros-core` with the `mutation-testing` feature, which adds that
+switch; the released binary is built without it (`-p tartaros-cli`), where the
+switch does not exist. Measured on a Linux host: 0 blind spots.
 
 ## Scorecard (measured 2026-10-26)
 

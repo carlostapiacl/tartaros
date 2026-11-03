@@ -8,7 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-tartaros-core = { path = "../core" }
+tartaros-core = { path = "../core", features = ["mutation-testing"] }
 tartaros-broker = { path = "../broker" }
 toml = "1.1.8"
 serde = { version = "1.0.210", features = ["derive"] }
