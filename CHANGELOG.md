@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.19] — 2026-11-03
+
 ### Added
 - **An SBOM with each release binary.** `tartaros-<platform>.cdx.json`
   (CycloneDX 1.5) lists the crates compiled into that binary for its target,
