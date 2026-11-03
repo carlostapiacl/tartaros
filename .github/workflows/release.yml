@@ -152,6 +152,20 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" != "v$v" ]; then
             echo "::error::tag $GITHUB_REF_NAME is not v$v (Cargo.toml)"; exit 1
           fi
+      # One CycloneDX SBOM per binary: the crates compiled into it for its target.
+      # Named tartaros-*, so the checksums and the attestation below cover them.
+      - name: SBOMs
+        run: |
+          while read -r platform target; do
+            bin=dist/bin/tartaros-$platform; [ "$platform" = win32-x64 ] && bin=$bin.exe
+            node packaging/sbom.mjs ${{ steps.v.outputs.version }} "$target" "$bin" > "dist/bin/tartaros-$platform.cdx.json"
+          done <<'EOF'
+          darwin-arm64 aarch64-apple-darwin
+          darwin-x64 x86_64-apple-darwin
+          linux-x64 x86_64-unknown-linux-musl
+          linux-arm64 aarch64-unknown-linux-musl
+          win32-x64 x86_64-pc-windows-msvc
+          EOF
       - name: checksums
         run: cd dist/bin && sha256sum tartaros-* | tee SHA256SUMS
       # Signed provenance for each binary: `gh attestation verify tartaros-<platform>

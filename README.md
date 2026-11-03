@@ -185,6 +185,8 @@ npm i -g @carlostapiacl/tartaros
 
 Each release binary carries signed build provenance:
 `gh attestation verify tartaros-darwin-arm64 --repo carlostapiacl/tartaros`.
+Next to each binary is its SBOM (`tartaros-<platform>.cdx.json`, CycloneDX):
+the crates compiled into it, with versions, licenses and Cargo.lock checksums.
 From source:
 
 ```

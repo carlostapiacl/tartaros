@@ -5,6 +5,14 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **An SBOM with each release binary.** `tartaros-<platform>.cdx.json`
+  (CycloneDX 1.5) lists the crates compiled into that binary for its target,
+  with version, license and Cargo.lock checksum, and the binary's own SHA-256.
+  It is in SHA256SUMS and carries the same build-provenance attestation.
+  `packaging/sbom.mjs` builds it from `cargo tree -p tartaros-cli` (features as
+  the release build resolves them) and `cargo metadata`; no new tool in CI.
+
 ## [0.1.0-alpha.18] — 2026-10-27
 
 ### Added
