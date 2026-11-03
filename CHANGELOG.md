@@ -13,6 +13,23 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   `packaging/sbom.mjs` builds it from `cargo tree -p tartaros-cli` (features as
   the release build resolves them) and `cargo metadata`; no new tool in CI.
 
+### Fixed
+- **Linux without namespaces: chmod, chown, utimes and xattrs outside the
+  roots.** Landlock does not mediate them and there is no read-only remount
+  without a mount namespace, so an agent could `chmod 0777` a file outside its
+  territory or forge an mtime. Those calls now go to the supervisor (seccomp user
+  notification), which makes the change on the object it opened only where the
+  run may write, with its capabilities dropped; EACCES elsewhere. Corpus:
+  `filesystem-chmod-outside`, `filesystem-utime-outside`.
+- **A writable root nested inside a write deny** (`--write proj/out --write-deny
+  proj`) was writable under the Linux carve; the deny wins, as on macOS
+  (`write-deny-covers-nested-root`).
+- Measured as a non-root user on a host that restricts user namespaces (the
+  Ubuntu 23.10+ default): corpus violations from 5 to 2, broken controls
+  unchanged at 8. The two left (an ancestor rename around a read deny inside a
+  root, an absent top-level `.mcp.json`) are in docs/limits.md with their
+  workarounds.
+
 ## [0.1.0-alpha.18] — 2026-10-27
 
 ### Added
