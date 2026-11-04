@@ -324,12 +324,21 @@ pub(crate) fn userns_blocker_hint() -> String {
 /// fork, and runs that share a scratch root come and go in between: failing the
 /// whole spawn on it (`spawn: No such file or directory`) stopped parallel runs at
 /// random. A path that is not there has nothing to hide or pin, the same as one
-/// absent when the plan was made; any other error still fails closed. ENOTDIR
-/// is the same race one level up: a component of the path is a file now (another
-/// run's placeholder where a directory was), measured once in a parallel suite.
+/// absent when the plan was made; any other error still fails closed. ENOTDIR is
+/// the same race one level up: a component of the path is a file now.
+///
+/// A read-only bind is not skipped: the path would then be creatable under the
+/// whole-root grant. `setup_ro_binds` fails with `BIND_TARGET_VANISHED` and the
+/// parent plans the run again (`spawn_confined`), which holds the now-absent
+/// path with a placeholder.
 fn vanished() -> bool {
     matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ENOENT) | Some(libc::ENOTDIR))
 }
+
+/// The errno a child reports when a read-only bind target was gone at mount
+/// time (see `vanished`). ESTALE, because nothing else in the child's setup
+/// returns it, so the parent can tell this race from any other spawn failure.
+pub(crate) const BIND_TARGET_VANISHED: i32 = libc::ESTALE;
 
 /// Protect the trust-handoff set with READ-ONLY bind mounts instead of carving
 /// it out of the Landlock write grant. This lets the whole workspace be granted
@@ -344,20 +353,20 @@ fn vanished() -> bool {
 ///
 /// `need_unshare` is true when no mount namespace exists yet (no `--isolate-pids`);
 /// we create a private one here. Fails closed: any mount error aborts the launch,
-/// so the workspace is never left writable with the handoff unprotected.
+/// so the workspace is never left writable with the handoff unprotected. A target
+/// that vanished is reported as `BIND_TARGET_VANISHED` so the run is planned again.
 ///
 /// The caller must already hold CAP_SYS_ADMIN — real root, or a user namespace
 /// entered up front (see `enter_user_namespace`). Entering the user namespace is
 /// done once by the caller, not here, so it is shared with `--isolate-pids`.
 pub(crate) unsafe fn setup_ro_binds(
     paths: &[std::ffi::CString],
-    skippable: &[bool],
     need_unshare: bool,
 ) -> std::io::Result<()> {
     if need_unshare {
         enter_private_mount_ns()?;
     }
-    for (i, p) in paths.iter().enumerate() {
+    for p in paths {
         // Bind the path onto itself (one recursive mount).
         if libc::mount(
             p.as_ptr(),
@@ -367,9 +376,8 @@ pub(crate) unsafe fn setup_ro_binds(
             std::ptr::null(),
         ) != 0
         {
-            // Only another run's placeholder may be gone (see the caller).
-            if vanished() && skippable.get(i).copied().unwrap_or(false) {
-                continue;
+            if vanished() {
+                return Err(std::io::Error::from_raw_os_error(BIND_TARGET_VANISHED));
             }
             return Err(std::io::Error::last_os_error());
         }

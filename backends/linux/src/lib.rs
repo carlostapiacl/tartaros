@@ -113,12 +113,12 @@ impl LandlockBackend {
         if command.is_empty() {
             return Err(RunError { reason: "empty command".into() });
         }
-        let (mut cmd, placeholders) = confined_command(policy, command, None)?;
+        let (child, placeholders) = spawn_confined(policy, command, None)?;
         // The caller owns the child, so nothing here knows when the run ends: the
         // absent-handoff placeholders stay (empty, read-only). Removing them now
         // would detach the read-only binds the agent relies on.
         std::mem::forget(placeholders);
-        spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })
+        Ok(child)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -160,8 +160,7 @@ impl LandlockBackend {
         let procs = cg.as_ref().map(|c| c.procs_path());
         // If confined_command or spawn fails here, `cg` drops and tears down the
         // cgroup — no explicit cleanup, no leak on the error paths.
-        let (mut cmd, placeholders) = confined_command(policy, command, procs)?;
-        let child = spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+        let (child, placeholders) = spawn_confined(policy, command, procs)?;
         let mut cols = make_collectors(child.id());
         let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut cols, sink);
         drop(placeholders);
@@ -200,11 +199,64 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
     }
     let procs = cg.as_ref().map(|c| c.procs_path());
     // `cg` drops on every exit path (incl. the `?` below) -> cgroup torn down.
-    let (mut cmd, placeholders) = confined_command(policy, command, procs)?;
-    let child = spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+    let (child, placeholders) = spawn_confined(policy, command, procs)?;
     let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut [], &mut VecSink::default());
     drop(placeholders); // the run is over: remove the absent-handoff placeholders
     Ok(RunOutcome { exit_code: code })
+}
+
+/// How many times a run is planned again when a protected path vanished between
+/// its plan and its mount (`namespace::BIND_TARGET_VANISHED`).
+#[cfg(target_os = "linux")]
+const VANISHED_ATTEMPTS: usize = 3;
+
+// What a test does between a plan and its spawn: removes a protected path, as
+// another run sharing the scratch root would.
+#[cfg(all(target_os = "linux", test))]
+thread_local! {
+    static BETWEEN_PLAN_AND_SPAWN: std::cell::RefCell<Option<Box<dyn FnMut(usize)>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Plan the run and spawn it. A protected path that is gone by the time the
+/// child binds it read-only fails that attempt closed (skipping it would let the
+/// agent create it under the whole-root grant), and the run is planned again: the
+/// new plan sees the path absent and holds it with a placeholder, as it does for
+/// any path missing at plan time. Runs that share a scratch root remove each
+/// other's repos while one is being set up; this is that race, measured in a
+/// parallel seisin suite. The failed attempt's placeholders are removed with it.
+#[cfg(target_os = "linux")]
+fn spawn_confined(
+    policy: &Policy,
+    command: &[String],
+    cgroup_procs: Option<String>,
+) -> Result<(std::process::Child, Placeholders), RunError> {
+    let mut attempt = 1;
+    loop {
+        let (mut cmd, placeholders) = confined_command(policy, command, cgroup_procs.clone())?;
+        #[cfg(test)]
+        BETWEEN_PLAN_AND_SPAWN.with(|h| {
+            if let Some(f) = h.borrow_mut().as_mut() {
+                f(attempt)
+            }
+        });
+        match spawn_forwarding(&mut cmd) {
+            Ok(child) => return Ok((child, placeholders)),
+            Err(e) if e.raw_os_error() == Some(namespace::BIND_TARGET_VANISHED) => {
+                drop(placeholders);
+                if attempt == VANISHED_ATTEMPTS {
+                    return Err(RunError {
+                        reason: format!(
+                            "spawn: a protected path kept vanishing while the run was set up \
+                             ({VANISHED_ATTEMPTS} attempts); refusing to run without it"
+                        ),
+                    });
+                }
+                attempt += 1;
+            }
+            Err(e) => return Err(RunError { reason: format!("spawn: {e}") }),
+        }
+    }
 }
 
 /// Build a `Command` that applies the Landlock ruleset in the child just before
@@ -230,18 +282,7 @@ fn robind_targets(policy: &Policy) -> Option<BindPlan> {
     let mut paths: Vec<PathBuf> = paths.iter().map(|p| tartaros_core::resolve_best_effort(p)).collect();
     paths.sort();
     paths.dedup();
-    // What exists, and whether it looks like another run's placeholder, in one
-    // look: one that is gone by bind time may be skipped only if it was one, and
-    // a second look later could find it already gone.
-    let looked: Vec<(PathBuf, bool)> = paths
-        .into_iter()
-        .filter_map(|p| {
-            let m = std::fs::metadata(&p).ok()?;
-            let like = placeholder_meta(&std::fs::symlink_metadata(&p).unwrap_or(m));
-            Some((p, like))
-        })
-        .collect();
-    let (paths, placeholder_like): (Vec<PathBuf>, Vec<bool>) = looked.into_iter().unzip();
+    paths.retain(|p| p.exists());
     // An explicit deny on a path that does not exist yet can't be bound
     // read-only (there is nothing to bind) and the whole-root grant would let it
     // be created. With a mount namespace it is held by a placeholder at its first
@@ -264,7 +305,7 @@ fn robind_targets(policy: &Policy) -> Option<BindPlan> {
     if (paths.is_empty() && absent.is_empty()) || !namespace::mount_ns_capable() {
         return None;
     }
-    Some(BindPlan { existing: paths, placeholder_like, absent })
+    Some(BindPlan { existing: paths, absent })
 }
 
 /// The bind-mount strategy for one run: the protected paths that exist, bound
@@ -272,7 +313,6 @@ fn robind_targets(policy: &Policy) -> Option<BindPlan> {
 #[cfg(target_os = "linux")]
 struct BindPlan {
     existing: Vec<PathBuf>,
-    placeholder_like: Vec<bool>,
     absent: Vec<PathBuf>,
 }
 
@@ -606,13 +646,6 @@ fn create_placeholders(policy: &Policy, absent_denies: &[PathBuf]) -> Result<(Pl
         made.0.push(p);
     }
     Ok((made, appeared))
-}
-
-/// An empty, read-only regular file: what a placeholder looks like.
-#[cfg(target_os = "linux")]
-fn placeholder_meta(m: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    m.is_file() && m.len() == 0 && m.permissions().mode() & 0o777 == 0o444
 }
 
 /// Mount-level hardening for a run with its own mount namespace, built in the
@@ -1031,9 +1064,9 @@ fn confined_command(
     // decision and the placeholder is bound as it then is (create_placeholders).
     let bind_plan = robind_targets(policy);
     let use_bind_mounts = bind_plan.is_some();
-    let (robind_paths, mut skippable_of, absent_denies) = match bind_plan {
-        Some(BindPlan { existing, placeholder_like, absent }) => (existing, placeholder_like, absent),
-        None => (Vec::new(), Vec::new(), Vec::new()),
+    let (robind_paths, absent_denies) = match bind_plan {
+        Some(BindPlan { existing, absent }) => (existing, absent),
+        None => (Vec::new(), Vec::new()),
     };
 
     // The carve needs the git internals to exist to deny them (see
@@ -1052,8 +1085,7 @@ fn confined_command(
     // same with /dev/null. The files are removed when the run ends. Created after
     // the carve above, which must not see them as existing denies.
     let (placeholders, appeared) = if ns_capable { create_placeholders(policy, &absent_denies).map_err(err)? } else { (Placeholders::default(), Vec::new()) };
-    // A deny that appeared meanwhile is bound as it is, and is not skippable.
-    skippable_of.extend(appeared.iter().map(|_| false));
+    // A deny that appeared meanwhile is bound as it is.
     let robind_paths: Vec<PathBuf> = robind_paths.into_iter().chain(appeared).collect();
     let plan = if ns_capable {
         let binds: Vec<PathBuf> = robind_paths.iter().chain(placeholders.paths()).cloned().collect();
@@ -1135,17 +1167,6 @@ fn confined_command(
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
     let robind_cstrings: Vec<std::ffi::CString> =
         robind_paths.iter().chain(placeholders.paths()).filter_map(|p| cstring(p)).collect();
-    // Which binds may be skipped if gone at mount time: only an empty read-only
-    // file this run did not make (another run's placeholder, taken back when that
-    // run ended). A protected path that vanishes otherwise fails the run closed:
-    // skipping it would let the agent create it again under the whole-root grant.
-    let robind_skippable: Vec<bool> = robind_paths
-        .iter()
-        .zip(skippable_of.iter().copied())
-        .filter(|(p, _)| cstring(p).is_some())
-        .map(|(_, like)| like)
-        .chain(placeholders.paths().filter(|p| cstring(p).is_some()).map(|_| false))
-        .collect();
     // The carve's git placeholders are denied by Landlock, never bound: they go
     // back with the others only to be removed when the run ends.
     let mut placeholders = placeholders;
@@ -1254,7 +1275,7 @@ fn confined_command(
             // placeholders of the absent handoff paths. Fails closed — a mount
             // error aborts before the workspace is ever exposed writable.
             if !robind_cstrings.is_empty() {
-                namespace::setup_ro_binds(&robind_cstrings, &robind_skippable, false)?;
+                namespace::setup_ro_binds(&robind_cstrings, false)?;
             }
             // Hide the read-denied directories (unix sockets there stop resolving).
             namespace::hide_dirs(&hide)?;
@@ -1658,6 +1679,86 @@ mod tests {
             assert_eq!(got[0].denies, vec![root.join("not-yet")]);
         }
         assert!(!policy.linux_write_allowlist_except(&on_readonly_mount).contains(&root));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn with_between_plan_and_spawn<T>(f: impl FnMut(usize) + 'static, body: impl FnOnce() -> T) -> T {
+        BETWEEN_PLAN_AND_SPAWN.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+        let out = body();
+        BETWEEN_PLAN_AND_SPAWN.with(|h| *h.borrow_mut() = None);
+        out
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_protected_file_removed_between_plan_and_mount_is_planned_again_not_skipped() {
+        // Skipping its bind would let the agent create it under the whole-root
+        // grant; the second plan sees it absent and holds it with a placeholder.
+        let root = scratch("vanish-once");
+        let deny = root.join("hook.sh");
+        std::fs::write(&deny, "original").unwrap();
+        let policy = Policy {
+            writable_roots: vec![root.clone()],
+            fs_rules: vec![write_deny(deny.clone())],
+            ..Default::default()
+        };
+        if !uses_bind_mounts(&policy) {
+            eprintln!("skipped: no mount namespace on this host");
+            return;
+        }
+        let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = attempts.clone();
+        let gone = deny.clone();
+        let cmd = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            format!("echo planted > '{}'; echo ok > '{}'", deny.display(), root.join("new").display()),
+        ];
+        let (mut child, placeholders) = with_between_plan_and_spawn(
+            move |attempt| {
+                seen.set(attempt);
+                if attempt == 1 {
+                    std::fs::remove_file(&gone).unwrap();
+                }
+            },
+            || spawn_confined(&policy, &cmd, None).expect("planned again and spawned"),
+        );
+        child.wait().unwrap();
+        assert_eq!(attempts.get(), 2, "one more plan, not more");
+        assert_ne!(std::fs::read_to_string(&deny).unwrap_or_default(), "planted\n", "the agent recreated the protected file");
+        assert_eq!(std::fs::read_to_string(root.join("new")).unwrap(), "ok\n", "the root still takes new entries");
+        drop(placeholders);
+        assert!(!deny.exists(), "the placeholder goes with the run");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_protected_file_that_keeps_vanishing_fails_the_run_closed() {
+        let root = scratch("vanish-always");
+        let deny = root.join("hook.sh");
+        std::fs::write(&deny, "original").unwrap();
+        let policy = Policy {
+            writable_roots: vec![root.clone()],
+            fs_rules: vec![write_deny(deny.clone())],
+            ..Default::default()
+        };
+        if !uses_bind_mounts(&policy) {
+            eprintln!("skipped: no mount namespace on this host");
+            return;
+        }
+        let gone = deny.clone();
+        let cmd = vec!["/bin/true".to_string()];
+        let got = with_between_plan_and_spawn(
+            move |_| {
+                let _ = std::fs::remove_file(&gone);
+            },
+            || spawn_confined(&policy, &cmd, None),
+        );
+        let reason = match got {
+            Ok(_) => panic!("ran without its protected file"),
+            Err(e) => e.reason,
+        };
+        assert!(reason.contains("kept vanishing"), "{reason}");
     }
 
     #[cfg(target_os = "linux")]

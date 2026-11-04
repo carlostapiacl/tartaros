@@ -6,11 +6,16 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
-- **Parallel runs on Linux: a mount target whose parent became a file.** The
-  race 0.1.0-alpha.21 closed for a target that vanished (ENOENT) also comes as
-  ENOTDIR, when a component of the path is now another run's placeholder file.
-  It failed the spawn (`spawn: Not a directory`) and the agent printed nothing:
-  1 run in a parallel seisin suite. It is now taken as the same race.
+- **Parallel runs on Linux: a protected path removed while a run was being set
+  up failed it.** 0.1.0-alpha.21 skipped a vanished hide or pin, and a vanished
+  bind only if it was another run's placeholder. Measured in a parallel seisin
+  suite: another test's repo in a shared `/tmp` (`.git/config`,
+  `.claude/settings.json`), removed between plan and fork, and a path whose
+  directory had become a file (ENOTDIR), still failed the spawn and the agent
+  printed nothing. Such a run is now planned again: the new plan sees the path
+  absent and holds it with a placeholder, as for any path missing at plan time.
+  A protected path is never skipped (the agent could then create it); one that
+  vanishes three times in a row fails the run closed and says so.
 
 ## [0.1.0-alpha.22] — 2026-11-04
 
