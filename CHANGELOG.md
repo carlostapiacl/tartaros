@@ -31,6 +31,11 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   read-only seal covers, so `echo x > a/f` from inside the root failed with
   EROFS while the same write by absolute path went through. The run enters its
   working directory again once the mounts are in place.
+- **`--egress-log` could miss a refusal at the end of a run.** The broker's
+  decisions are written by one thread, and the launcher exited as soon as the
+  agent did: a refusal in the run's last milliseconds (a `curl` that gets its 403
+  and quits) was sometimes never written. The launcher now waits, at most two
+  seconds, for the broker's log before it exits.
 - **A linked worktree's `config.worktree` and `commondir`, and `.git/config.worktree`,
   are trust-handoff.** Either one points a trusted `git` in that worktree at
   planted hooks (`core.hooksPath`, or another gitdir). Corpus:

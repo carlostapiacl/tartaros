@@ -21,7 +21,7 @@
 use tartaros_core::{Axis, Direction, EffectEvent, EffectSink, Outcome};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
@@ -145,6 +145,28 @@ impl<W: Write> EffectSink for RefusalReport<W> {
             let _ = writeln!(self.out, "tartaros: egress broker refused {dest} ({why})");
             let _ = self.out.flush();
         }
+    }
+}
+
+/// Events sent by a worker and not yet written by the drain loop. A run that ends
+/// right after a refusal (curl gets its 403 in milliseconds) exited before the
+/// drain wrote it, and `--egress-log` came back empty: the launcher `flush`es
+/// before it exits.
+static UNDRAINED: AtomicUsize = AtomicUsize::new(0);
+
+fn send_event(tx: &Sender<EffectEvent>, ev: EffectEvent) {
+    UNDRAINED.fetch_add(1, Ordering::SeqCst);
+    if tx.send(ev).is_err() {
+        UNDRAINED.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Wait, at most `limit`, until every event the broker has sent is written to
+/// its sink. For the launcher, before it exits.
+pub fn flush(limit: std::time::Duration) {
+    let end = std::time::Instant::now() + limit;
+    while UNDRAINED.load(Ordering::SeqCst) > 0 && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
@@ -447,6 +469,7 @@ impl Broker {
             // Drain events into the sink on this single thread (sole sink owner).
             while let Ok(ev) = rx.recv() {
                 sink.emit(&ev);
+                UNDRAINED.fetch_sub(1, Ordering::SeqCst);
             }
         });
         Ok(())
@@ -557,7 +580,7 @@ impl Broker {
         // Egress allow-list (host-based mediation): a host off the list is
         // refused here, before any connection or secret injection.
         if !loopback_ok && !self.host_allowed(&host) {
-            let _ = tx.send(EffectEvent::now(
+            send_event(tx, EffectEvent::now(
                 self.role.clone(),
                 Axis::Network,
                 "broker-egress-denied",
@@ -591,7 +614,7 @@ impl Broker {
             }
         }
 
-        let _ = tx.send(EffectEvent::now(
+        send_event(tx, EffectEvent::now(
             self.role.clone(),
             Axis::Secret,
             if injected { "broker-inject" } else { "broker-forward" },
@@ -623,7 +646,7 @@ impl Broker {
         let target = match target {
             Some(a) => a,
             None => {
-                let _ = tx.send(EffectEvent::now(
+                send_event(tx, EffectEvent::now(
                     self.role.clone(),
                     Axis::Network,
                     "broker-internal-destination-denied",
@@ -761,7 +784,7 @@ impl Broker {
 
         // Egress allow-list — refuse before any DNS or connection.
         if !loopback_ok && !self.host_allowed(&host) {
-            let _ = tx.send(EffectEvent::now(
+            send_event(tx, EffectEvent::now(
                 self.role.clone(),
                 Axis::Network,
                 "broker-connect-denied",
@@ -780,7 +803,7 @@ impl Broker {
         // the certificate — the tunnel is end-to-end by design — so this is a
         // host:port capability, not a semantic "HTTPS to domain X" guarantee.
         if !loopback_ok && !self.connect_port_allowed(port) {
-            let _ = tx.send(EffectEvent::now(
+            send_event(tx, EffectEvent::now(
                 self.role.clone(),
                 Axis::Network,
                 "broker-connect-port-denied",
@@ -803,7 +826,7 @@ impl Broker {
             match self.resolve_external(&host, port) {
             Some(a) => a,
             None => {
-                let _ = tx.send(EffectEvent::now(
+                send_event(tx, EffectEvent::now(
                     self.role.clone(),
                     Axis::Network,
                     "broker-connect-internal-denied",
@@ -830,7 +853,7 @@ impl Broker {
             Err(_) => return refuse(&mut client, "502 Bad Gateway", b"upstream connect failed"),
         };
 
-        let _ = tx.send(EffectEvent::now(
+        send_event(tx, EffectEvent::now(
             self.role.clone(),
             Axis::Network,
             "broker-connect",
@@ -906,7 +929,7 @@ impl Broker {
         }
         let url = format!("{}{}", cap.upstream_base.trim_end_matches('/'), rest);
 
-        let _ = tx.send(EffectEvent::now(
+        send_event(tx, EffectEvent::now(
             self.role.clone(),
             Axis::Secret,
             "broker-inject",

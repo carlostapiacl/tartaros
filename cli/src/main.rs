@@ -883,6 +883,9 @@ fn cmd_run(rest: &[String]) -> ! {
     let private_tmp = setup_private_tmp(&mut p);
     warn_reachable_host_sockets(&p);
     let code = run(&p, &cmd, log.as_ref());
+    // What the broker decided is in its log before the launcher exits: a refusal
+    // in the run's last milliseconds was lost (`--egress-log` came back empty).
+    tartaros_broker::flush(std::time::Duration::from_secs(2));
     if let Some(m) = &snap {
         match snapshot::diff(m) {
             Ok(d) => eprintln!(
