@@ -324,9 +324,11 @@ pub(crate) fn userns_blocker_hint() -> String {
 /// fork, and runs that share a scratch root come and go in between: failing the
 /// whole spawn on it (`spawn: No such file or directory`) stopped parallel runs at
 /// random. A path that is not there has nothing to hide or pin, the same as one
-/// absent when the plan was made; any other error still fails closed.
+/// absent when the plan was made; any other error still fails closed. ENOTDIR
+/// is the same race one level up: a component of the path is a file now (another
+/// run's placeholder where a directory was), measured once in a parallel suite.
 fn vanished() -> bool {
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT)
+    matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ENOENT) | Some(libc::ENOTDIR))
 }
 
 /// Protect the trust-handoff set with READ-ONLY bind mounts instead of carving

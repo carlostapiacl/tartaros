@@ -5,6 +5,13 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **Parallel runs on Linux: a mount target whose parent became a file.** The
+  race 0.1.0-alpha.21 closed for a target that vanished (ENOENT) also comes as
+  ENOTDIR, when a component of the path is now another run's placeholder file.
+  It failed the spawn (`spawn: Not a directory`) and the agent printed nothing:
+  1 run in a parallel seisin suite. It is now taken as the same race.
+
 ## [0.1.0-alpha.22] — 2026-11-04
 
 ### Fixed
