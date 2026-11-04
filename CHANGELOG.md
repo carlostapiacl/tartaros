@@ -5,6 +5,27 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.24] — 2026-11-04
+
+### Fixed
+- **macOS: a program that reads preferences could not start.** The profile denied
+  the shared memory CoreFoundation reads to tell whether its cached preferences
+  are current, so `CFPreferencesAppSynchronize` failed once a value had been read,
+  and Codex CLI stopped with "Failed to synchronize managed preferences". Three
+  segments are now readable, by exact name and read only: `apple.cfprefs.daemonv1`,
+  the user's `apple.cfprefs.<uid>v1` and `apple.shm.notification_center`. Writing,
+  creating and unlinking segments stay denied. It also lets `cfprefsd` answer the
+  program: `defaults read` now returns values wherever the profile allows reading
+  the plist. A plist denied by the profile stays unanswered and writes to a domain
+  still fail.
+- **macOS: the scan for symlinked handoff dirs said the wrong thing and could spend
+  itself on a cache.** The warning said one writable root had more than 10000
+  directories; the limit is over all of them together, and it stopped at the first
+  root that used it up. Its 10000 directories now go first to the roots inside the
+  working directory and then to the others in turn, so a small root is read whatever
+  is listed before it, and the warning names the roots it did not finish. A run
+  costs what it did.
+
 ## [0.1.0-alpha.23] — 2026-11-04
 
 ### Fixed

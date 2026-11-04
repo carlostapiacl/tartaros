@@ -505,6 +505,20 @@ fn build_profile(policy: &Policy) -> String {
         p.push_str("(allow sysctl-write (sysctl-name \"kern.tcsm_enable\"))\n");
     }
 
+    // What CoreFoundation reads to tell whether its cached preferences are current.
+    // Denied, CFPreferencesAppSynchronize fails once a value has been read, and a
+    // program that treats that as fatal does not start (Codex CLI: "Failed to
+    // synchronize managed preferences"). Exact names and read only: opening the
+    // segments also lets cfprefsd answer the program, but it still refuses what the
+    // profile denies on the plist itself and writes to a domain (measured, 2026-11-04).
+    let uid = unsafe { libc::getuid() };
+    p.push_str(&format!(
+        "(allow ipc-posix-shm-read-data \
+         (ipc-posix-name \"apple.cfprefs.daemonv1\") \
+         (ipc-posix-name \"apple.cfprefs.{uid}v1\") \
+         (ipc-posix-name \"apple.shm.notification_center\"))\n"
+    ));
+
     // Network.
     match policy.network.unwrap_or(Network::Denied) {
         Network::Denied => {}
@@ -601,7 +615,8 @@ fn build_profile(policy: &Policy) -> String {
     // never hangs — if it caps out we warn and keep the pattern protection, rather
     // than refuse the root.
     const SYMLINK_SCAN_CAP: usize = 10_000;
-    let (symlinked, capped) = policy.symlinked_handoff_denies(SYMLINK_SCAN_CAP);
+    let project = std::env::current_dir().ok();
+    let (symlinked, unfinished) = policy.symlinked_handoff_denies(SYMLINK_SCAN_CAP, project.as_deref());
     for surface in symlinked {
         emit_deny(&mut p, &surface, &policy.writable_roots);
     }
@@ -619,13 +634,14 @@ fn build_profile(policy: &Policy) -> String {
             }
         }
     }
-    if capped {
+    if !unfinished.is_empty() {
+        let names: Vec<String> = unfinished.iter().map(|r| r.display().to_string()).collect();
         eprintln!(
-            "tartaros: warning: a writable root has more than {SYMLINK_SCAN_CAP} directories; \
-             the scan for symlinked handoff dirs (e.g. a `.claude` symlink into a dotfiles tree) \
-             stopped early. Named handoff surfaces (.git/.claude/.vscode/…) are still fully \
-             protected by pattern; a symlinked handoff below the cap may not be. Narrow the \
-             writable root to pin it."
+            "tartaros: warning: the scan for symlinked handoff dirs (e.g. a `.claude` symlink \
+             into a dotfiles tree) reads {SYMLINK_SCAN_CAP} directories a run and did not finish: {}. \
+             Named handoff surfaces (.git/.claude/.vscode/…) are still fully protected by pattern; \
+             a symlinked handoff left unread there may not be. Narrow those writable roots to pin it.",
+            names.join(", ")
         );
     }
 
@@ -1191,6 +1207,19 @@ mod tests {
         assert!(prof.contains("(allow network-outbound (remote ip \"localhost:8081\"))"));
         assert!(!prof.contains("localhost:8787"));
         assert!(!prof.contains("(allow network*)"));
+    }
+
+    #[test]
+    fn preference_segments_are_named_and_read_only() {
+        let prof = compile_profile(&Policy { writable_roots: vec![PathBuf::from("/work")], ..Default::default() });
+        let uid = unsafe { libc::getuid() };
+        assert!(prof.contains("(ipc-posix-name \"apple.cfprefs.daemonv1\")"));
+        assert!(prof.contains(&format!("(ipc-posix-name \"apple.cfprefs.{uid}v1\")")));
+        assert!(prof.contains("(ipc-posix-name \"apple.shm.notification_center\")"));
+        // Only the browser opts into more.
+        assert!(!prof.contains("ipc-posix-shm*"));
+        assert!(!prof.contains("ipc-posix-shm-write"));
+        assert!(!prof.contains("ipc-posix-name-prefix"));
     }
 
     #[test]
