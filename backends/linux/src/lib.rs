@@ -205,10 +205,14 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
     Ok(RunOutcome { exit_code: code })
 }
 
-/// How many times a run is planned again when a protected path vanished between
-/// its plan and its mount (`namespace::BIND_TARGET_VANISHED`).
+/// The pauses before each new plan when a protected path vanished between the
+/// plan and its mount (`namespace::BIND_TARGET_VANISHED`): one attempt more than
+/// pauses. Growing, because what removes it is usually a whole tree going
+/// (`rm -rf` of another run's repo), and each plan made while it goes picks a
+/// file it has not reached yet: three plans back to back fell inside one removal
+/// in a parallel seisin suite. Half a second in all, at most.
 #[cfg(target_os = "linux")]
-const VANISHED_ATTEMPTS: usize = 3;
+const VANISHED_PAUSES_MS: [u64; 3] = [20, 100, 400];
 
 // What a test does between a plan and its spawn: removes a protected path, as
 // another run sharing the scratch root would.
@@ -233,7 +237,7 @@ fn spawn_confined(
 ) -> Result<(std::process::Child, Placeholders), RunError> {
     let mut attempt = 1;
     loop {
-        let (mut cmd, placeholders) = confined_command(policy, command, cgroup_procs.clone())?;
+        let (mut cmd, placeholders, bind_targets) = confined_command(policy, command, cgroup_procs.clone())?;
         #[cfg(test)]
         BETWEEN_PLAN_AND_SPAWN.with(|h| {
             if let Some(f) = h.borrow_mut().as_mut() {
@@ -243,15 +247,19 @@ fn spawn_confined(
         match spawn_forwarding(&mut cmd) {
             Ok(child) => return Ok((child, placeholders)),
             Err(e) if e.raw_os_error() == Some(namespace::BIND_TARGET_VANISHED) => {
+                // Looked at before the placeholders go, which are bind targets too.
+                let gone = bind_targets.iter().find(|p| std::fs::symlink_metadata(p).is_err()).cloned();
                 drop(placeholders);
-                if attempt == VANISHED_ATTEMPTS {
+                let Some(pause) = VANISHED_PAUSES_MS.get(attempt - 1) else {
+                    let what = gone.map_or_else(|| "a protected path".to_string(), |p| p.display().to_string());
                     return Err(RunError {
                         reason: format!(
-                            "spawn: a protected path kept vanishing while the run was set up \
-                             ({VANISHED_ATTEMPTS} attempts); refusing to run without it"
+                            "spawn: {what} kept vanishing while the run was set up ({attempt} attempts); \
+                             refusing to run without it"
                         ),
                     });
-                }
+                };
+                std::thread::sleep(std::time::Duration::from_millis(*pause));
                 attempt += 1;
             }
             Err(e) => return Err(RunError { reason: format!("spawn: {e}") }),
@@ -869,7 +877,7 @@ fn confined_command(
     policy: &Policy,
     command: &[String],
     cgroup_procs: Option<String>,
-) -> Result<(std::process::Command, Placeholders), RunError> {
+) -> Result<(std::process::Command, Placeholders, Vec<PathBuf>), RunError> {
     use landlock::{
         ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, PathBeneath,
         Ruleset, RulesetAttr, RulesetCreatedAttr,
@@ -1167,6 +1175,9 @@ fn confined_command(
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
     let robind_cstrings: Vec<std::ffi::CString> =
         robind_paths.iter().chain(placeholders.paths()).filter_map(|p| cstring(p)).collect();
+    // The same targets, for the parent to name one that vanished (spawn_confined).
+    let bind_targets: Vec<PathBuf> =
+        robind_paths.iter().chain(placeholders.paths()).filter(|p| cstring(p).is_some()).cloned().collect();
     // The carve's git placeholders are denied by Landlock, never bound: they go
     // back with the others only to be removed when the run ends.
     let mut placeholders = placeholders;
@@ -1354,7 +1365,7 @@ fn confined_command(
             Ok(())
         });
     }
-    Ok((cmd, placeholders))
+    Ok((cmd, placeholders, bind_targets))
 }
 
 /// Apply one `setrlimit` (cur=max=limit) when a limit is set. Returns an io error
@@ -1758,7 +1769,8 @@ mod tests {
             Ok(_) => panic!("ran without its protected file"),
             Err(e) => e.reason,
         };
-        assert!(reason.contains("kept vanishing"), "{reason}");
+        assert!(reason.contains("kept vanishing") && reason.contains("4 attempts"), "{reason}");
+        assert!(reason.contains(&deny.display().to_string()), "names the path: {reason}");
     }
 
     #[cfg(target_os = "linux")]

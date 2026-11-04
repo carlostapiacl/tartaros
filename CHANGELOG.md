@@ -14,8 +14,9 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   directory had become a file (ENOTDIR), still failed the spawn and the agent
   printed nothing. Such a run is now planned again: the new plan sees the path
   absent and holds it with a placeholder, as for any path missing at plan time.
-  A protected path is never skipped (the agent could then create it); one that
-  vanishes three times in a row fails the run closed and says so.
+  A protected path is never skipped (the agent could then create it). The plans
+  are 20, 100 and 400 ms apart, since what removes it is usually a whole tree
+  going; a path still vanishing after four fails the run closed, named.
 
 ## [0.1.0-alpha.22] — 2026-11-04
 
