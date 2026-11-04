@@ -228,9 +228,20 @@ fn robind_targets(policy: &Policy) -> Option<BindPlan> {
         paths.push(r.path.clone());
     }
     let mut paths: Vec<PathBuf> = paths.iter().map(|p| tartaros_core::resolve_best_effort(p)).collect();
-    paths.retain(|p| p.exists());
     paths.sort();
     paths.dedup();
+    // What exists, and whether it looks like another run's placeholder, in one
+    // look: one that is gone by bind time may be skipped only if it was one, and
+    // a second look later could find it already gone.
+    let looked: Vec<(PathBuf, bool)> = paths
+        .into_iter()
+        .filter_map(|p| {
+            let m = std::fs::metadata(&p).ok()?;
+            let like = placeholder_meta(&std::fs::symlink_metadata(&p).unwrap_or(m));
+            Some((p, like))
+        })
+        .collect();
+    let (paths, placeholder_like): (Vec<PathBuf>, Vec<bool>) = looked.into_iter().unzip();
     // An explicit deny on a path that does not exist yet can't be bound
     // read-only (there is nothing to bind) and the whole-root grant would let it
     // be created. With a mount namespace it is held by a placeholder at its first
@@ -253,7 +264,7 @@ fn robind_targets(policy: &Policy) -> Option<BindPlan> {
     if (paths.is_empty() && absent.is_empty()) || !namespace::mount_ns_capable() {
         return None;
     }
-    Some(BindPlan { existing: paths, absent })
+    Some(BindPlan { existing: paths, placeholder_like, absent })
 }
 
 /// The bind-mount strategy for one run: the protected paths that exist, bound
@@ -261,6 +272,7 @@ fn robind_targets(policy: &Policy) -> Option<BindPlan> {
 #[cfg(target_os = "linux")]
 struct BindPlan {
     existing: Vec<PathBuf>,
+    placeholder_like: Vec<bool>,
     absent: Vec<PathBuf>,
 }
 
@@ -598,9 +610,9 @@ fn create_placeholders(policy: &Policy, absent_denies: &[PathBuf]) -> Result<(Pl
 
 /// An empty, read-only regular file: what a placeholder looks like.
 #[cfg(target_os = "linux")]
-fn is_placeholder_like(p: &std::path::Path) -> bool {
+fn placeholder_meta(m: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file() && m.len() == 0 && m.permissions().mode() & 0o777 == 0o444)
+    m.is_file() && m.len() == 0 && m.permissions().mode() & 0o777 == 0o444
 }
 
 /// Mount-level hardening for a run with its own mount namespace, built in the
@@ -1012,9 +1024,9 @@ fn confined_command(
     // decision and the placeholder is bound as it then is (create_placeholders).
     let bind_plan = robind_targets(policy);
     let use_bind_mounts = bind_plan.is_some();
-    let (robind_paths, absent_denies) = match bind_plan {
-        Some(BindPlan { existing, absent }) => (existing, absent),
-        None => (Vec::new(), Vec::new()),
+    let (robind_paths, mut skippable_of, absent_denies) = match bind_plan {
+        Some(BindPlan { existing, placeholder_like, absent }) => (existing, placeholder_like, absent),
+        None => (Vec::new(), Vec::new(), Vec::new()),
     };
 
     // The carve needs the git internals to exist to deny them (see
@@ -1033,6 +1045,8 @@ fn confined_command(
     // same with /dev/null. The files are removed when the run ends. Created after
     // the carve above, which must not see them as existing denies.
     let (placeholders, appeared) = if ns_capable { create_placeholders(policy, &absent_denies).map_err(err)? } else { (Placeholders::default(), Vec::new()) };
+    // A deny that appeared meanwhile is bound as it is, and is not skippable.
+    skippable_of.extend(appeared.iter().map(|_| false));
     let robind_paths: Vec<PathBuf> = robind_paths.into_iter().chain(appeared).collect();
     let plan = if ns_capable {
         let binds: Vec<PathBuf> = robind_paths.iter().chain(placeholders.paths()).cloned().collect();
@@ -1120,8 +1134,9 @@ fn confined_command(
     // skipping it would let the agent create it again under the whole-root grant.
     let robind_skippable: Vec<bool> = robind_paths
         .iter()
-        .filter(|p| cstring(p).is_some())
-        .map(|p| is_placeholder_like(p))
+        .zip(skippable_of.iter().copied())
+        .filter(|(p, _)| cstring(p).is_some())
+        .map(|(_, like)| like)
         .chain(placeholders.paths().filter(|p| cstring(p).is_some()).map(|_| false))
         .collect();
     // The carve's git placeholders are denied by Landlock, never bound: they go
