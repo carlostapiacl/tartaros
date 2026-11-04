@@ -15,8 +15,10 @@ fn has_mount_namespace() -> bool {
     if cfg!(target_os = "macos") {
         return true; // Seatbelt: no carve, nothing to place
     }
-    Command::new("unshare").args(["-Urm", "true"]).status().is_ok_and(|s| s.success())
-        || Command::new("id").arg("-u").output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+    // As tartaros decides it: a mount namespace this process can make, as root
+    // with CAP_SYS_ADMIN or through a user namespace (not root in an
+    // unprivileged container, which falls back to the carve).
+    ["-m", "-Urm"].iter().any(|f| Command::new("unshare").args([*f, "true"]).status().is_ok_and(|s| s.success()))
 }
 
 #[test]

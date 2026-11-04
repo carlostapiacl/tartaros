@@ -349,12 +349,13 @@ fn vanished() -> bool {
 /// done once by the caller, not here, so it is shared with `--isolate-pids`.
 pub(crate) unsafe fn setup_ro_binds(
     paths: &[std::ffi::CString],
+    skippable: &[bool],
     need_unshare: bool,
 ) -> std::io::Result<()> {
     if need_unshare {
         enter_private_mount_ns()?;
     }
-    for p in paths {
+    for (i, p) in paths.iter().enumerate() {
         // Bind the path onto itself (one recursive mount).
         if libc::mount(
             p.as_ptr(),
@@ -364,7 +365,8 @@ pub(crate) unsafe fn setup_ro_binds(
             std::ptr::null(),
         ) != 0
         {
-            if vanished() {
+            // Only another run's placeholder may be gone (see the caller).
+            if vanished() && skippable.get(i).copied().unwrap_or(false) {
                 continue;
             }
             return Err(std::io::Error::last_os_error());
