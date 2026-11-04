@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.20] — 2026-11-03
+
 ### Fixed
 - **An any-depth `denyWrite` in a settings file was accepted and not held.** A
   pattern was taken as covered by the trust-handoff set whenever it mentioned a

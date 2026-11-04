@@ -78,7 +78,9 @@ Signed releases, workspace snapshots with rollback (`run --snapshot`,
 `tartaros rollback`) and `tartaros why` shipped in 0.1.0-alpha.18. An SBOM
 with each binary, `--mutate` coverage for trust-handoff, and
 chmod/chown/utimes/xattrs held outside the roots on Linux without namespaces
-shipped in 0.1.0-alpha.19. The details are in the [changelog](CHANGELOG.md).
+shipped in 0.1.0-alpha.19. Any-depth `denyWrite` patterns held rather than taken
+as covered by name, linked worktrees in the trust-handoff set, and Ctrl-C passed
+on to the agent shipped in 0.1.0-alpha.20. The details are in the [changelog](CHANGELOG.md).
 
 ## How to help
 
