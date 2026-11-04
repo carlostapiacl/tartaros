@@ -341,6 +341,10 @@ fn main() {
         "landlock-net" => env.landlock_net || OS == "macos" || OS == "windows",
         "cgroup" => env.cgroup_v2,
         "userns" => env.userns,
+        // A mount namespace tartaros can make, as it decides it: root with
+        // CAP_SYS_ADMIN, or a user namespace the host lets it mount in. `userns`
+        // alone is not that (AppArmor allows the namespace and refuses the mount).
+        "mount-ns" => mount_ns(),
         "root" => is_root(),
         "nonroot" => !is_root(),
         "admin" => is_root(),
@@ -349,7 +353,7 @@ fn main() {
         _ => false,
     };
     let known_cap = |name: &str| {
-        matches!(name, "landlock" | "landlock-net" | "cgroup" | "userns" | "root" | "nonroot" | "admin" | "windows-symlink" | "network")
+        matches!(name, "landlock" | "landlock-net" | "cgroup" | "userns" | "mount-ns" | "root" | "nonroot" | "admin" | "windows-symlink" | "network")
     };
     // --ignore-os: exploration only. Runs every contract regardless of its `os`
     // list, to discover which ones hold on a new backend. Never a certification.
@@ -608,6 +612,17 @@ struct Env {
     landlock_net: bool,
     cgroup_v2: bool,
     userns: bool,
+}
+
+fn mount_ns() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        tartaros_linux::namespaces_by_default()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
 }
 
 fn environment() -> Env {

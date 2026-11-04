@@ -12,7 +12,7 @@ os = ["linux"]
 # `secret.md`). Fixed in 0.1.0-alpha.22 by hiding it, as a read-denied directory
 # outside the roots is. It needs a mount namespace; without one the carve cannot
 # withhold a listing (docs/limits.md).
-requires = ["userns"]
+requires = ["mount-ns"]
 [policy]
 writable_roots = ["{root}/work"]
 read_denies = ["{root}/work/vault", "{root}/absent"]

@@ -10,7 +10,7 @@ os = ["linux"]
 # `app/ok.txt` in its own territory. With a mount namespace it is held by a
 # placeholder, removed after the run. Without one the carve's limit stays
 # (docs/limits.md), hence the requirement.
-requires = ["userns"]
+requires = ["mount-ns"]
 
 [policy]
 writable_roots = ["{root}/work"]
