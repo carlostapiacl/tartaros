@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.24] — 2026-11-04
+
 ### Fixed
 - **macOS: a program that reads preferences could not start.** The profile denied
   the shared memory CoreFoundation reads to tell whether its cached preferences
