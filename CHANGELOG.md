@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.22] — 2026-11-04
+
 ### Fixed
 - **A read-denied directory inside a writable root could be listed on Linux.**
   Its files stayed unreadable, but once the read carve was on (a read-deny on an
