@@ -18,14 +18,20 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   (docs/limits.md). The plans are 20, 100 and 400 ms apart, since what removes
   it is usually a whole tree going; a path still vanishing after four fails the
   run closed, named.
-- **A vanished mount target is no longer skipped.** 0.1.0-alpha.21 skipped a
-  hide or pin whose target was gone, and a read-only bind if it looked like
-  another run's placeholder. A skipped bind left the path creatable by the
-  agent; a skipped pin, the directory around a protected path renameable once
-  it came back; and a read-denied directory replaced by a unix socket fails its
-  hide with ENOTDIR, so skipping it let the agent connect. Each now takes the
-  new plan above. The child reports the race with a value of its own, so a real
-  spawn error (an ESTALE from NFS, say) keeps its message.
+- **A vanished mount target is skipped only when a new plan would not protect
+  it better.** 0.1.0-alpha.21 skipped any vanished hide or pin, and a read-only
+  bind if it looked like another run's placeholder. Now a bind is planned again
+  when its path, absent, would be held by a placeholder (an explicit write deny
+  in a root, a handoff path at a root's top level or in git internals): skipping
+  it left that path creatable by the agent. A read-denied directory replaced by
+  a unix socket fails its hide with ENOTDIR and is planned again, so the socket
+  is covered; skipping it let the agent connect. A read deny that is itself a
+  socket or fifo is now covered with /dev/null. Everything else that vanished
+  is skipped, as a new plan would leave it: parallel seisin runs hide each
+  other's temp directories, which come and go many times a second, and
+  planning again on each never converged. The child reports the race with a
+  value of its own, so a real spawn error (an ESTALE from NFS, say) keeps its
+  message.
 
 ## [0.1.0-alpha.22] — 2026-11-04
 

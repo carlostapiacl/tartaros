@@ -224,16 +224,14 @@ thread_local! {
         std::cell::RefCell::new(None);
 }
 
-/// Plan the run and spawn it. A mount target that is gone by the time the child
-/// mounts it (a read-only bind, a pin, a hidden read-denied path) fails that
-/// attempt closed, and the run is planned again from the tree as it is then: a
-/// protected path now absent is held with a placeholder, as any path missing at
-/// plan time is, and one whose whole repo went is what any repo created during a
-/// run is (docs/limits.md). Skipping it instead would let the agent create a
-/// protected path under the whole-root grant, or reach a socket that replaced a
-/// hidden directory. Runs that share a scratch root remove each other's repos
-/// while one is being set up; this is that race, measured in parallel seisin
-/// suites. A failed attempt's placeholders are removed with it.
+/// Plan the run and spawn it. A mount target gone by the time the child mounts it
+/// fails that attempt when a new plan would protect it better (namespace::
+/// vanished): a protected path a placeholder would hold, a hidden directory that
+/// is a socket now. The run is then planned again from the tree as it is: the
+/// path is held with a placeholder, the socket covered. Runs that share a
+/// scratch root remove each other's repos while one is being set up; this is
+/// that race, measured in parallel seisin suites. A failed attempt's
+/// placeholders are removed with it.
 #[cfg(target_os = "linux")]
 fn spawn_confined(
     policy: &Policy,
@@ -552,16 +550,6 @@ impl Drop for Placeholders {
     }
 }
 
-/// Without a mount namespace the carve protects only what exists (Landlock
-/// matches inodes), so a repository whose `.git` has no `hooks` directory, or no
-/// `config`, would let the agent create one: a checkout made by go-git or
-/// libgit2, or `git init --template=`, has none. Before the carve is built, put
-/// them there: an empty `hooks` directory (git's own layout), an empty
-/// read-only `config` and `config.worktree`, and in a linked worktree's gitdir
-/// an empty read-only `config.worktree` and `commondir`. The carve then denies them like any existing handoff
-/// path, and they are removed when the run ends if still empty. Measured before
-/// this: `mkdir .git/hooks && echo x > .git/hooks/h` succeeded, `--materialize`
-/// included. Never through a symlinked component; fails closed.
 /// Marks a plan that failed because a path it was holding vanished meanwhile
 /// (its directory gone, or a file now), so `spawn_confined` plans again rather
 /// than fail the run: the race of `namespace::MOUNT_TARGET_VANISHED`, met one
@@ -581,6 +569,37 @@ fn placeholder_failed(what: &str, p: &std::path::Path, e: &std::io::Error, unhel
     }
 }
 
+/// Whether a protected path that exists now would be held by a placeholder if it
+/// were gone, as `create_placeholders` and `absent_write_denies_in_roots` decide:
+/// an explicit write deny inside a writable root, or a handoff path inside one at
+/// its top level or in a repository's git internals. Anything else, absent, is
+/// what any absent nested handoff path is. True when unsure.
+#[cfg(target_os = "linux")]
+fn held_if_absent(policy: &Policy, p: &std::path::Path) -> bool {
+    use tartaros_core::resolve_best_effort;
+    let roots: Vec<PathBuf> = policy.writable_roots.iter().map(|r| resolve_best_effort(r)).collect();
+    if !roots.iter().any(|r| p.starts_with(r)) {
+        return false;
+    }
+    let explicit = policy
+        .fs_rules
+        .iter()
+        .filter(|r| r.access == tartaros_core::Access::Deny)
+        .any(|r| resolve_best_effort(&r.path) == p);
+    let at_top = p.parent().is_some_and(|d| roots.iter().any(|r| d == r.as_path()));
+    explicit || at_top || p.components().any(|c| c.as_os_str() == ".git")
+}
+
+/// Without a mount namespace the carve protects only what exists (Landlock
+/// matches inodes), so a repository whose `.git` has no `hooks` directory, or no
+/// `config`, would let the agent create one: a checkout made by go-git or
+/// libgit2, or `git init --template=`, has none. Before the carve is built, put
+/// them there: an empty `hooks` directory (git's own layout), an empty
+/// read-only `config` and `config.worktree`, and in a linked worktree's gitdir
+/// an empty read-only `config.worktree` and `commondir`. The carve then denies them like any existing handoff
+/// path, and they are removed when the run ends if still empty. Measured before
+/// this: `mkdir .git/hooks && echo x > .git/hooks/h` succeeded, `--materialize`
+/// included. Never through a symlinked component; fails closed.
 #[cfg(target_os = "linux")]
 fn create_git_placeholders(policy: &Policy) -> Result<Placeholders, String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -1224,8 +1243,15 @@ fn confined_command(
         .map_err(|e| err(format!("seccomp compile: {e}")))?;
     // Read-only bind-mount targets (built here in the parent; the pre_exec closure
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
-    let robind_cstrings: Vec<std::ffi::CString> =
-        robind_paths.iter().chain(placeholders.paths()).filter_map(|p| cstring(p)).collect();
+    // With each, whether it is planned again if gone at mount time (namespace::
+    // vanished): this run's placeholders always, a protected path when a new plan
+    // would hold it with one.
+    let (robind_cstrings, robind_replan): (Vec<std::ffi::CString>, Vec<bool>) = robind_paths
+        .iter()
+        .map(|p| (p, held_if_absent(policy, p)))
+        .chain(placeholders.paths().map(|p| (p, true)))
+        .filter_map(|(p, replan)| cstring(p).map(|c| (c, replan)))
+        .unzip();
     // Every mount target, for the parent to name one that vanished (spawn_confined).
     let mount_targets: Vec<PathBuf> = {
         use std::os::unix::ffi::OsStrExt;
@@ -1345,7 +1371,7 @@ fn confined_command(
             // placeholders of the absent handoff paths. Fails closed — a mount
             // error aborts before the workspace is ever exposed writable.
             if !robind_cstrings.is_empty() {
-                namespace::setup_ro_binds(&robind_cstrings, false)?;
+                namespace::setup_ro_binds(&robind_cstrings, &robind_replan, false)?;
             }
             // Hide the read-denied directories (unix sockets there stop resolving).
             namespace::hide_dirs(&hide)?;
@@ -1762,7 +1788,9 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_read_denied_dir_removed_before_its_hide_is_planned_again() {
+    fn a_read_denied_dir_removed_before_its_hide_is_skipped() {
+        // A new plan would not hide what is not there: no second plan, which
+        // parallel runs hiding each other's temp directories would never get past.
         let root = scratch("vanish-hide");
         let home = scratch("vanish-hide-home");
         let vault = home.join("vault");
@@ -1785,7 +1813,55 @@ mod tests {
             || spawn_confined(&policy, &["/bin/true".to_string()], None).expect("planned again and spawned"),
         );
         assert!(reap(&mut child).success());
-        assert_eq!(attempts.get(), 2, "the vanished hide took a new plan");
+        assert_eq!(attempts.get(), 1, "a vanished hide takes no new plan");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_nested_handoff_file_removed_before_its_bind_is_skipped() {
+        // Absent, `a/.claude/settings.json` gets no placeholder (docs/limits.md),
+        // so a new plan would leave it as skipping does: one plan, not four.
+        let root = scratch("vanish-nested");
+        let settings = root.join("a").join(".claude").join("settings.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(&settings, "{}").unwrap();
+        let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
+        if !uses_bind_mounts(&policy) {
+            eprintln!("skipped: no mount namespace on this host");
+            return;
+        }
+        assert!(!held_if_absent(&policy, &tartaros_core::resolve_best_effort(&settings)));
+        let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = attempts.clone();
+        let gone = settings.clone();
+        let (mut child, _placeholders) = with_between_plan_and_spawn(
+            move |attempt| {
+                seen.set(attempt);
+                if attempt == 1 {
+                    std::fs::remove_file(&gone).unwrap();
+                }
+            },
+            || spawn_confined(&policy, &["/bin/true".to_string()], None).expect("spawned"),
+        );
+        assert!(reap(&mut child).success());
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_a_new_plan_would_hold_is_what_create_placeholders_holds() {
+        let root = scratch("held");
+        let r = tartaros_core::resolve_best_effort(&root);
+        let policy = Policy {
+            writable_roots: vec![root.clone()],
+            fs_rules: vec![write_deny(root.join("deep").join("secret"))],
+            ..Default::default()
+        };
+        assert!(held_if_absent(&policy, &r.join(".mcp.json")), "top level of a root");
+        assert!(held_if_absent(&policy, &r.join("x").join(".git").join("config")), "git internals");
+        assert!(held_if_absent(&policy, &r.join("deep").join("secret")), "an explicit deny");
+        assert!(!held_if_absent(&policy, &r.join("x").join(".claude").join("settings.json")), "nested");
+        assert!(!held_if_absent(&policy, std::path::Path::new("/elsewhere/.mcp.json")), "outside the roots");
     }
 
     #[cfg(target_os = "linux")]
