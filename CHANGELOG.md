@@ -5,6 +5,36 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.23] — 2026-11-04
+
+### Fixed
+- **Parallel runs on Linux: a protected path removed while a run was being set
+  up failed it.** Measured in parallel seisin suites: another test's repo in a
+  shared `/tmp` (`.git/config`, `.claude/settings.json`) removed between plan
+  and fork, a path whose directory had become a file (ENOTDIR), and a directory
+  that went while a placeholder was made in it (`handoff placeholder ...: No
+  such file or directory`) failed the spawn, and the agent printed nothing.
+  Such a run is now planned again from the tree as it then is: a protected
+  path now absent is held with a placeholder, as any path missing at plan time;
+  one whose whole repo went is what a repo created during the run is
+  (docs/limits.md). The plans are 20, 100 and 400 ms apart, since what removes
+  it is usually a whole tree going; a path still vanishing after four fails the
+  run closed, named.
+- **A vanished mount target is skipped only when a new plan would not protect
+  it better.** 0.1.0-alpha.21 skipped any vanished hide or pin, and a read-only
+  bind if it looked like another run's placeholder. Now a bind is planned again
+  when its path, absent, would be held by a placeholder (an explicit write deny
+  in a root, a handoff path at a root's top level or in git internals): skipping
+  it left that path creatable by the agent. A read-denied directory replaced by
+  a unix socket fails its hide with ENOTDIR and is planned again, so the socket
+  is covered; skipping it let the agent connect. A read deny that is itself a
+  socket or fifo is now covered with /dev/null. Everything else that vanished
+  is skipped, as a new plan would leave it: parallel seisin runs hide each
+  other's temp directories, which come and go many times a second, and
+  planning again on each never converged. The child reports the race with a
+  value of its own, so a real spawn error (an ESTALE from NFS, say) keeps its
+  message.
+
 ## [0.1.0-alpha.22] — 2026-11-04
 
 ### Fixed

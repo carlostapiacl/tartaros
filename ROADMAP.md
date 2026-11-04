@@ -83,7 +83,9 @@ as covered by name, linked worktrees in the trust-handoff set, and Ctrl-C passed
 on to the agent shipped in 0.1.0-alpha.20. Parallel runs on Linux that no
 longer stop each other, and an absent write deny held by a placeholder instead of
 the carve, shipped in 0.1.0-alpha.21. A read-denied directory inside a writable
-root hidden rather than left listable shipped in 0.1.0-alpha.22. The details are in the [changelog](CHANGELOG.md).
+root hidden rather than left listable shipped in 0.1.0-alpha.22. Runs set up while
+another removes the paths they protect, planned again instead of failing, shipped
+in 0.1.0-alpha.23. The details are in the [changelog](CHANGELOG.md).
 
 ## How to help
 

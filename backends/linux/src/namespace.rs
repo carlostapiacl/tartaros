@@ -323,11 +323,38 @@ pub(crate) fn userns_blocker_hint() -> String {
 /// placeholder another run took back. The plan is made in the parent before the
 /// fork, and runs that share a scratch root come and go in between: failing the
 /// whole spawn on it (`spawn: No such file or directory`) stopped parallel runs at
-/// random. A path that is not there has nothing to hide or pin, the same as one
-/// absent when the plan was made; any other error still fails closed.
+/// random. A vanished target is skipped exactly when a new plan, made from the
+/// tree as it then is, would protect it no better; otherwise the attempt fails
+/// with `MOUNT_TARGET_VANISHED` and the parent plans the run again
+/// (`spawn_confined`). ENOTDIR is the same race one level up (a component of
+/// the path is a file now) or, for a hidden directory, the target itself is no
+/// longer one.
+///
+/// - A read-only bind is planned again when its path would be held by a
+///   placeholder if absent (`replan`, decided by the parent); skipping it would
+///   leave the path creatable under the whole-root grant. Any other is skipped:
+///   absent, it is what any absent nested handoff path is (docs/limits.md).
+/// - A pin, a hidden directory or a covered file that is gone is skipped: a new
+///   plan would not pin or hide what is not there, the same as a path created
+///   after the run starts.
+/// - A hidden directory that is now something else (ENOTDIR: a unix socket put
+///   in its place, say) is planned again, and covered as a file then.
+///
+/// Measured: parallel seisin runs remove each other's repos and temp
+/// directories, which every run hides, many times a second.
 fn vanished() -> bool {
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT)
+    matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ENOENT) | Some(libc::ENOTDIR))
 }
+
+fn replan() -> std::io::Error {
+    std::io::Error::from_raw_os_error(MOUNT_TARGET_VANISHED)
+}
+
+/// What a child reports when a mount target was gone at mount time (see
+/// `vanished`). Not an errno the kernel has: std hands the child's raw value to
+/// the parent unchanged, so the parent can tell this race from any real spawn
+/// failure (an ESTALE from NFS, say), which keeps its own error.
+pub(crate) const MOUNT_TARGET_VANISHED: i32 = 0x5441_5254;
 
 /// Protect the trust-handoff set with READ-ONLY bind mounts instead of carving
 /// it out of the Landlock write grant. This lets the whole workspace be granted
@@ -342,14 +369,15 @@ fn vanished() -> bool {
 ///
 /// `need_unshare` is true when no mount namespace exists yet (no `--isolate-pids`);
 /// we create a private one here. Fails closed: any mount error aborts the launch,
-/// so the workspace is never left writable with the handoff unprotected.
+/// so the workspace is never left writable with the handoff unprotected. A target
+/// that vanished is skipped or planned again as `vanished` says.
 ///
 /// The caller must already hold CAP_SYS_ADMIN — real root, or a user namespace
 /// entered up front (see `enter_user_namespace`). Entering the user namespace is
 /// done once by the caller, not here, so it is shared with `--isolate-pids`.
 pub(crate) unsafe fn setup_ro_binds(
     paths: &[std::ffi::CString],
-    skippable: &[bool],
+    replan_if_gone: &[bool],
     need_unshare: bool,
 ) -> std::io::Result<()> {
     if need_unshare {
@@ -365,8 +393,10 @@ pub(crate) unsafe fn setup_ro_binds(
             std::ptr::null(),
         ) != 0
         {
-            // Only another run's placeholder may be gone (see the caller).
-            if vanished() && skippable.get(i).copied().unwrap_or(false) {
+            if vanished() {
+                if replan_if_gone.get(i).copied().unwrap_or(true) {
+                    return Err(replan());
+                }
                 continue;
             }
             return Err(std::io::Error::last_os_error());
@@ -464,6 +494,9 @@ pub(crate) unsafe fn hide_dirs(dirs: &[std::ffi::CString]) -> std::io::Result<()
         ) != 0
         {
             if vanished() {
+                if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOTDIR) {
+                    return Err(replan());
+                }
                 continue;
             }
             return Err(std::io::Error::last_os_error());
