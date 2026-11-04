@@ -87,12 +87,18 @@ fn the_warning_is_said_exactly_when_the_run_cannot_create_at_the_root() {
 }
 
 #[test]
-fn an_absent_deny_inside_the_root_always_costs_new_entries_there() {
+fn an_absent_deny_inside_the_root_costs_new_entries_only_without_a_mount_namespace() {
     if !landlock() {
         eprintln!("skipped: no Landlock on this kernel");
         return;
     }
-    // On every host: a bind mount cannot cover a path that is not there.
-    let (warned, created) = measure("absent-always", |r| vec![r.join("not-yet")]);
-    assert!(warned && !created, "warned={warned} created={created}");
+    // With a mount namespace it is held by a placeholder and the root keeps its
+    // new entries (0.1.0-alpha.21); without one, the carve withholds the root.
+    let ns = ["-m", "-Urm"].iter().any(|f| Command::new("unshare").args([*f, "true"]).status().is_ok_and(|s| s.success()));
+    let (warned, created) = measure("absent-inside-only", |r| vec![r.join("not-yet")]);
+    if ns {
+        assert!(!warned && created, "with a mount namespace: warned={warned} created={created}");
+    } else {
+        assert!(warned && !created, "without one: warned={warned} created={created}");
+    }
 }
