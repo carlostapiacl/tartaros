@@ -82,14 +82,36 @@ fn applied_literal_deny_read() {
 // ---- REFUSED (exit 78): a non-translatable field must refuse, never widen ----
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn refused_anydepth_not_covered() {
-    // An any-depth glob NOT covered by the handoff set has no inode to match on
-    // Linux and no general engine — taken literally it would protect nothing, so
-    // it must be refused rather than silently become a no-op.
+    // An any-depth glob with no base and NOT a handoff name has no inode to match
+    // on Linux and no general engine — taken literally it would protect nothing,
+    // so it must be refused rather than silently become a no-op.
     let p = ws();
     let p = p.display().to_string();
     let json = format!(r#"{{"filesystem":{{"allowWrite":["{p}"],"denyWrite":["**/node_modules"]}}}}"#);
     assert_eq!(explain_settings("anydepth", &json), 78, "an uncovered **/ glob must refuse, not no-op");
+}
+
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn refused_anydepth_with_a_glob_the_handoff_does_not_hold() {
+    // A `**` inside the suffix is accepted only for the git surfaces the handoff
+    // set holds exactly; a pattern that merely mentions `.git` is not one of them.
+    let p = ws();
+    let p = p.display().to_string();
+    let json = format!(r#"{{"filesystem":{{"allowWrite":["{p}"],"denyWrite":["{p}/**/.git/worktrees/**/HEAD"]}}}}"#);
+    assert_eq!(explain_settings("anydepth-git", &json), 78, "a .git pattern the handoff does not hold must refuse");
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn applied_anydepth_on_macos() {
+    // macOS compiles any `**` pattern to an anchored regex: applied, not refused.
+    let p = ws();
+    let p = p.display().to_string();
+    let json = format!(r#"{{"filesystem":{{"allowWrite":["{p}"],"denyWrite":["**/node_modules","{p}/**/.git/worktrees/**/HEAD"]}}}}"#);
+    assert_eq!(explain_settings("anydepth", &json), 0, "an any-depth glob is enforced as a pattern on macOS");
 }
 
 #[test]

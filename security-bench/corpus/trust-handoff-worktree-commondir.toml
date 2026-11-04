@@ -1,0 +1,23 @@
+id = "trust-handoff-worktree-commondir"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos", "windows"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/repo/.git/worktrees/w"
+dir = true
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "printf '/tmp/elsewhere/.git' > {root}/work/repo/.git/worktrees/w/commondir"
+
+[control]
+cmd = "echo ok > {root}/work/repo/.git/worktrees/w/HEAD"
+
+[assert]
+absent = "{root}/work/repo/.git/worktrees/w/commondir"

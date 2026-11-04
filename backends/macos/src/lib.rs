@@ -11,7 +11,7 @@
 
 use tartaros_core::{
     Access, Backend, Collector, EffectSink, FsRule, Network, Policy, PolicyError, RunError,
-    RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES, HANDOFF_HOME_NAMES,
+    RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES, HANDOFF_HOME_NAMES, HANDOFF_WORKTREE_NAMES,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -708,22 +708,30 @@ fn build_profile(policy: &Policy) -> String {
     p
 }
 
-/// Translate a single-segment glob (absolute path with `*`/`?`, no `**`) into an
-/// anchored Seatbelt regex. `*` → `[^/]*`, `?` → `[^/]`; every other character is
-/// escaped as a literal. (The CLI unwraps single-char classes `[x]` before this,
-/// so brackets arriving here are treated literally.)
+/// Translate a glob (absolute path) into an anchored Seatbelt regex, component
+/// by component: `**` is any number of components (none included), `*` → `[^/]*`
+/// and `?` → `[^/]` within one; every other character is a literal. The same
+/// meaning as `tartaros_core::glob_matches`, which `why` uses. (The CLI unwraps
+/// single-char classes `[x]` before this, so brackets here are literal.)
 fn glob_to_anchored_regex(pattern: &str) -> String {
     let mut out = String::from("^");
-    for c in pattern.chars() {
-        match c {
-            '*' => out.push_str("[^/]*"),
-            '?' => out.push_str("[^/]"),
-            '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '\\' => {
-                out.push('\\');
-                out.push(c);
+    for comp in pattern.split('/').filter(|c| !c.is_empty()) {
+        if comp == "**" {
+            out.push_str("(/.*)?");
+            continue;
+        }
+        out.push('/');
+        for c in comp.chars() {
+            match c {
+                '*' => out.push_str("[^/]*"),
+                '?' => out.push_str("[^/]"),
+                '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '\\' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '"' => out.push_str("\\\""),
+                _ => out.push(c),
             }
-            '"' => out.push_str("\\\""),
-            _ => out.push(c),
         }
     }
     out.push('$');
@@ -822,6 +830,14 @@ fn emit_handoff_regex(p: &mut String, root: &Path, home: bool) {
     p.push_str(&format!(
         "(deny file-write* (regex #\"^{root_re}(/.*)?/\\.git/modules/.*/config$\"))\n"
     ));
+    // Linked worktrees: what git reads from `.git/worktrees/<name>/` (config and
+    // the pointer to the common gitdir), at any depth, present or not.
+    for name in HANDOFF_WORKTREE_NAMES {
+        let name_re = regex_escape(name);
+        p.push_str(&format!(
+            "(deny file-write* (regex #\"^{root_re}(/.*)?/\\.git/worktrees/[^/]+/{name_re}$\"))\n"
+        ));
+    }
     // The `.git` DIRECTORY itself: deny unlink/rename (but NOT writes inside it —
     // objects/refs stay writable for git). Without this, moving the whole `.git`
     // aside and creating a fresh one at the same path re-points the host's git at

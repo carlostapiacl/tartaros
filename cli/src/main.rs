@@ -1696,21 +1696,27 @@ fn classify(pattern: &str) -> (String, PatKind) {
     (s, kind)
 }
 
-/// Is this any-depth pattern already covered by the built-in trust-handoff set
-/// (which protects these surfaces at ANY depth under every writable root)? Match
-/// on the config/git handoff names and on the config DIRECTORIES they live in, so
-/// a `**/.claude` or `**/.codex` pattern is accepted — the dangerous surfaces
-/// inside are already denied at any depth.
-fn handoff_covers(pattern: &str) -> bool {
+/// An any-depth pattern the trust-handoff set holds exactly, as a whole: a
+/// submodule's hooks and config, a linked worktree's `config.worktree` and
+/// `commondir`, or `**/<name>` for a handoff name. Matched on the whole suffix,
+/// not on a name it contains: `**/.git/worktrees/**/HEAD` is not held, and refused.
+#[cfg(not(target_os = "macos"))]
+fn git_handoff_pattern(pattern: &str) -> bool {
     use tartaros_core::{HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES};
-    HANDOFF_CONFIG_NAMES
-        .iter()
-        .chain(HANDOFF_GIT_NAMES.iter())
-        .any(|name| pattern.contains(name))
-        || [".claude", ".codex", ".vscode", ".github", ".git"].iter().any(|d| pattern.contains(d))
+    let suffix = match pattern.strip_prefix("**/") {
+        Some(rest) => rest,
+        None => match pattern.split_once("/**/") { Some((_, rest)) => rest, None => return false },
+    };
+    let suffix = suffix.strip_suffix("/**").unwrap_or(suffix);
+    [".git/modules/**/config", ".git/modules/**/hooks", ".git/worktrees/**/config.worktree", ".git/worktrees/**/commondir"]
+        .contains(&suffix)
+        // `**/<name>` with no base: a handoff name, held under every writable root.
+        || (pattern.starts_with("**/") && HANDOFF_CONFIG_NAMES.iter().chain(HANDOFF_GIT_NAMES).any(|n| *n == suffix))
 }
 
 fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
+    #[cfg(target_os = "macos")]
+    let _ = verbose; // only the Linux any-depth path reports
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| { eprintln!("read {path}: {e}"); exit(2); });
     let s: SandboxSettings = serde_json::from_str(&text).unwrap_or_else(|e| { eprintln!("parse {path}: {e}"); exit(2); });
     let refuse = |what: &str| -> ! {
@@ -1742,26 +1748,31 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
                 if read { p.read_denies.push(path); }
             }
             PatKind::AnyDepth => {
-                // The built-in trust-handoff set provides any-depth WRITE protection,
-                // so it can satisfy a denyWrite. It does NOT provide read-deny, and
-                // TartarOS has no any-depth read engine — so a denyRead (or a combined
-                // read+write deny) with a `**` pattern cannot be fully enforced here.
-                // Accepting it by equivalence with the handoff (write) set would leave
-                // the path READABLE while the settings file asked to deny reads: a
-                // silent under-enforcement (POL-01). Refuse instead (apply-fully-or-refuse).
-                if read {
-                    refuse(&format!(
-                        "an any-depth read-deny pattern '{x}' (the trust-handoff set \
-                         protects writes, not reads, and there is no any-depth read \
-                         rule); use a concrete path under denyRead"
-                    ));
-                }
-                if handoff_covers(&n) {
-                    if verbose {
-                        eprintln!("tartaros: --settings: '{x}' is covered by the built-in trust-handoff set (write protection) at any depth; applying that.");
+                // macOS: the pattern itself, as an anchored regex, read or write:
+                // exactly what it names, at any depth, present or not.
+                #[cfg(target_os = "macos")]
+                { p.glob_denies.push(tartaros_core::GlobDeny { pattern: expand(&n), read, write }); }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // No any-depth read rule without a pattern engine (POL-01):
+                    // accepting it as a write deny would leave the path readable.
+                    if read {
+                        refuse(&format!(
+                            "an any-depth read-deny pattern '{x}' (no any-depth read rule \
+                             on this backend); use a concrete path under denyRead"
+                        ));
                     }
-                } else {
-                    refuse_glob(x);
+                    let e = expand(&n);
+                    if let Some((base, suffix)) = tartaros_core::any_depth_split(&e) {
+                        // Held on every existing match (any_depth_rules, once the
+                        // writable roots are known); a new one where the
+                        // trust-handoff set holds that name.
+                        p.any_depth_denies.push((base, suffix));
+                    } else if !git_handoff_pattern(&n) {
+                        refuse_glob(x);
+                    } else if verbose {
+                        eprintln!("tartaros: --settings: '{x}' is held by the trust-handoff set's git surfaces at any depth.");
+                    }
                 }
             }
             PatKind::SingleGlob => {
@@ -2098,6 +2109,10 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             other => { eprintln!("unknown option: {other}"); exit(2); }
         }
     }
+    // Any-depth denies, now that every writable root is known (a backend that
+    // matches by inode takes them as concrete paths).
+    let any_depth = p.any_depth_rules();
+    p.fs_rules.extend(any_depth);
     if log_format.is_some() && log.is_none() {
         eprintln!("error: --log-format needs --log FILE");
         exit(2);

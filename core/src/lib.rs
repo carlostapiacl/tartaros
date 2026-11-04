@@ -35,10 +35,12 @@ pub struct FsRule {
     pub even_if_absent: bool,
 }
 
-/// A single-segment glob deny (e.g. `~/.codex/*.config.toml`): `*`/`?` within
-/// ONE path segment, no `**`. Only the macOS Seatbelt backend can enforce this
-/// (as an anchored regex); the Linux/seccomp+Landlock backend matches by inode
-/// and cannot, so a non-empty list is a policy error there (surfaced by the CLI).
+/// A glob deny (e.g. `~/.codex/*.config.toml`, `<repo>/**/.claude`): `*`/`?`
+/// within one path segment, `**` for any number of segments. Only the macOS
+/// Seatbelt backend can enforce a pattern as such (an anchored regex); the
+/// Linux/seccomp+Landlock backend matches by inode, so a non-empty list is a
+/// policy error there (surfaced by the CLI). On Linux an any-depth pattern with a
+/// literal suffix is expanded to concrete paths instead (`any_depth_denies`).
 #[derive(Debug, Clone)]
 pub struct GlobDeny {
     /// The expanded pattern (absolute path with glob metacharacters).
@@ -95,7 +97,13 @@ pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
 
 /// Within any git repository, the files a later `git` invocation executes or
 /// reads from the host, outside the box.
-pub const HANDOFF_GIT_NAMES: &[&str] = &[".git/hooks", ".git/config"];
+pub const HANDOFF_GIT_NAMES: &[&str] = &[".git/hooks", ".git/config", ".git/config.worktree"];
+
+/// What git reads, per linked worktree, from `.git/worktrees/<name>/`:
+/// `config.worktree` is config (`core.hooksPath`), and `commondir` names the
+/// gitdir whose hooks and config the worktree uses. Either one, written, points
+/// a trusted `git` in that worktree at hooks the agent planted.
+pub const HANDOFF_WORKTREE_NAMES: &[&str] = &["config.worktree", "commondir"];
 
 /// Directory handoff surfaces, as path SUFFIXES. If a writable root is named
 /// *inside* one of these (e.g. a root under `<repo>/.git/hooks/`), the downward
@@ -211,6 +219,12 @@ pub struct Policy {
     /// non-empty list. Kept apart from `fs_rules` because they are patterns, not
     /// concrete inode paths.
     pub glob_denies: Vec<GlobDeny>,
+    /// Any-depth write denies `<base>/**/<suffix>` (the suffix has no glob), for a
+    /// backend that matches by inode. `any_depth_rules` turns them into concrete
+    /// denies on what exists; an absent one is held where the trust-handoff set
+    /// holds that name (the CLI accepts no other), with the same limit for a new
+    /// one in a subdirectory (docs/limits.md).
+    pub any_depth_denies: Vec<(PathBuf, String)>,
     /// Specific AF_UNIX socket paths the agent MAY connect to. On macOS Seatbelt
     /// this is enforced per path (`remote unix-socket (path-literal …)`), so a
     /// single audit/IPC socket can be allowed while everything else stays denied.
@@ -724,6 +738,7 @@ impl Policy {
             if let Some(gitdir) = read_gitdir_pointer(&dotgit, root) {
                 out.push(gitdir.join("hooks"));
                 out.push(gitdir.join("config"));
+                out.extend(HANDOFF_WORKTREE_NAMES.iter().map(|n| gitdir.join(n)));
                 let mut modules = Vec::new();
                 deny_git_modules_handoff(&gitdir.join("modules"), 0, &mut modules);
                 out.extend(modules.into_iter().map(|r| r.path));
@@ -773,6 +788,9 @@ impl Policy {
     /// exist: whether the run puts something there to deny (a placeholder).
     pub fn why(&self, path: &Path, write: bool, absent_held: &dyn Fn(&Path) -> bool) -> (bool, String) {
         let real = resolve_best_effort(path);
+        if let Some(g) = self.glob_denies.iter().find(|g| (if write { g.write } else { g.read }) && glob_matches(&g.pattern, &real)) {
+            return (false, format!("{}-denied by the pattern {}", if write { "write" } else { "read" }, g.pattern));
+        }
         if !write {
             let mut decision: Option<(usize, bool, String)> = None;
             for d in &self.read_denies {
@@ -799,6 +817,12 @@ impl Policy {
             let d = resolve_best_effort(&r.path);
             if real.starts_with(&d) {
                 return (false, format!("write-denied by {}", d.display()));
+            }
+        }
+        for r in self.any_depth_rules() {
+            let d = resolve_best_effort(&r.path);
+            if real.starts_with(&d) {
+                return (false, format!("write-denied by {} (an any-depth deny)", d.display()));
             }
         }
         if root_inside_handoff_surface(&root) {
@@ -830,6 +854,35 @@ impl Policy {
             return (true, format!("writable root {}; a new {name} in a subdirectory is not held on this platform (docs/limits.md)", root.display()));
         }
         (true, format!("writable root {}", root.display()))
+    }
+
+    /// `any_depth_denies` as concrete deny rules: every existing `<dir>/<suffix>`
+    /// under `base` inside a writable root, and a writable root that is itself
+    /// inside one, whole.
+    pub fn any_depth_rules(&self) -> Vec<FsRule> {
+        let mut out = Vec::new();
+        for (base, suffix) in &self.any_depth_denies {
+            let base = resolve_best_effort(base);
+            let want: Vec<&str> = suffix.split('/').filter(|c| !c.is_empty()).collect();
+            for root in &self.writable_roots {
+                let root = resolve_best_effort(root);
+                let start = if let Ok(rel) = root.strip_prefix(&base) {
+                    let rel: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+                    if rel.windows(want.len()).any(|w| w.iter().zip(&want).all(|(a, b)| a == b)) {
+                        out.push(deny(root.clone(), false));
+                        continue;
+                    }
+                    root
+                } else if base.starts_with(&root) {
+                    base.clone()
+                } else {
+                    continue;
+                };
+                any_depth_walk(&start, suffix, 0, &mut out);
+            }
+        }
+        dedup(&mut out);
+        out
     }
 
     /// Whether `path` lies in a `handoff_exempt` directory (resolved).
@@ -1248,6 +1301,10 @@ fn walk(dir: &Path, depth: usize, is_root: bool, home: bool, out: &mut Vec<FsRul
             if let Some(gitdir) = read_gitdir_pointer(&dotgit, dir) {
                 out.push(deny(gitdir.join("hooks"), true));
                 out.push(deny(gitdir.join("config"), true));
+                // A linked worktree's gitdir is `<main>/.git/worktrees/<name>`.
+                for name in HANDOFF_WORKTREE_NAMES {
+                    out.push(deny(gitdir.join(name), true));
+                }
                 deny_git_modules_handoff(&gitdir.join("modules"), 0, out);
             }
         } else {
@@ -1258,6 +1315,7 @@ fn walk(dir: &Path, depth: usize, is_root: bool, home: bool, out: &mut Vec<FsRul
             // config are the same handoff surface. Deny those (leaving objects/refs
             // writable so submodule operations still work).
             deny_git_modules_handoff(&dotgit.join("modules"), 0, out);
+            deny_git_worktrees_handoff(&dotgit.join("worktrees"), out);
         }
     }
     // A handoff name whose first component is a symlink that resolves nowhere (a
@@ -1362,6 +1420,84 @@ fn deny_git_modules_handoff(modules_dir: &Path, depth: usize, out: &mut Vec<FsRu
     }
 }
 
+/// Deny what git reads per linked worktree (`HANDOFF_WORKTREE_NAMES`) under a
+/// repo's `.git/worktrees/<name>/`, present or not. The rest of a worktree's
+/// gitdir (`HEAD`, `index`, `logs`) stays writable, so work in it goes on.
+fn deny_git_worktrees_handoff(worktrees_dir: &Path, out: &mut Vec<FsRule>) {
+    let Ok(entries) = std::fs::read_dir(worktrees_dir) else { return };
+    for entry in entries.flatten() {
+        let gitdir = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&gitdir) else { continue };
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            continue;
+        }
+        for name in HANDOFF_WORKTREE_NAMES {
+            out.push(deny(gitdir.join(name), true));
+        }
+    }
+}
+
+/// Every existing `<dir>/<suffix>` at or under `dir`, walked like the
+/// trust-handoff set: no symlink followed, `.git` not entered, and past the depth
+/// bound the whole subtree denied rather than left unchecked.
+fn any_depth_walk(dir: &Path, suffix: &str, depth: usize, out: &mut Vec<FsRule>) {
+    if depth > MAX_WALK_DEPTH {
+        out.push(deny(dir.to_path_buf(), true));
+        return;
+    }
+    let hit = dir.join(suffix);
+    if std::fs::symlink_metadata(&hit).is_ok() {
+        out.push(deny(hit, false));
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+        if !meta.is_dir() || meta.file_type().is_symlink() || path.file_name().is_some_and(|n| n == ".git") {
+            continue;
+        }
+        any_depth_walk(&path, suffix, depth + 1, out);
+    }
+}
+
+/// Whether `path` matches a glob pattern, component by component: `**` is any
+/// number of components (none included), `*` and `?` stay within one. The same
+/// meaning the macOS backend compiles to a regex, so `why` agrees with a run.
+pub fn glob_matches(pattern: &str, path: &Path) -> bool {
+    fn seg(p: &[u8], s: &[u8]) -> bool {
+        match (p.first(), s.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => seg(&p[1..], s) || (!s.is_empty() && seg(p, &s[1..])),
+            (Some(b'?'), Some(_)) => seg(&p[1..], &s[1..]),
+            (Some(a), Some(b)) if a == b => seg(&p[1..], &s[1..]),
+            _ => false,
+        }
+    }
+    fn comps(p: &[&str], s: &[&str]) -> bool {
+        match p.first() {
+            None => s.is_empty(),
+            Some(&"**") => comps(&p[1..], s) || (!s.is_empty() && comps(p, &s[1..])),
+            Some(c) => !s.is_empty() && seg(c.as_bytes(), s[0].as_bytes()) && comps(&p[1..], &s[1..]),
+        }
+    }
+    let p: Vec<&str> = pattern.split('/').filter(|c| !c.is_empty()).collect();
+    let text = path.to_string_lossy();
+    let s: Vec<&str> = text.split('/').filter(|c| !c.is_empty()).collect();
+    comps(&p, &s)
+}
+
+/// `<base>/**/<suffix>` with no other glob, split, or None. A trailing `/**` on
+/// the suffix is dropped: a deny on a directory already holds everything in it.
+pub fn any_depth_split(pattern: &str) -> Option<(PathBuf, String)> {
+    let (base, suffix) = pattern.split_once("/**/")?;
+    let suffix = suffix.strip_suffix("/**").unwrap_or(suffix);
+    let glob = |t: &str| t.contains('*') || t.contains('?') || t.contains('[');
+    if base.is_empty() || suffix.is_empty() || glob(base) || glob(suffix) {
+        return None;
+    }
+    Some((PathBuf::from(base), suffix.to_string()))
+}
+
 fn dedup(rules: &mut Vec<FsRule>) {
     rules.sort_by(|a, b| a.path.cmp(&b.path).then((a.access as u8).cmp(&(b.access as u8))));
     rules.dedup();
@@ -1399,6 +1535,65 @@ pub struct RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glob_matches_any_depth_and_one_segment() {
+        let m = |p: &str, s: &str| glob_matches(p, Path::new(s));
+        assert!(m("/r/**/.claude", "/r/.claude"));
+        assert!(m("/r/**/.claude", "/r/a/b/.claude"));
+        assert!(!m("/r/**/.claude", "/r/a/.claude/x"));
+        assert!(m("/r/**/.claude/**", "/r/a/.claude/x/y"));
+        assert!(m("/r/**/.git/worktrees/**/commondir", "/r/.git/worktrees/w/commondir"));
+        assert!(!m("/r/**/.git/worktrees/**/commondir", "/r/.git/worktrees/w/HEAD"));
+        assert!(m("/h/.codex/*.config.toml", "/h/.codex/a.config.toml"));
+        assert!(!m("/h/.codex/*.config.toml", "/h/.codex/x/a.config.toml"));
+        assert!(!m("/r/**/.claude", "/other/.claude"));
+    }
+
+    #[test]
+    fn any_depth_split_takes_only_a_literal_suffix() {
+        assert_eq!(any_depth_split("/r/**/.claude/**"), Some((PathBuf::from("/r"), ".claude".into())));
+        assert_eq!(any_depth_split("/r/**/.git/config"), Some((PathBuf::from("/r"), ".git/config".into())));
+        assert_eq!(any_depth_split("/r/**/.git/modules/**/config"), None);
+        assert_eq!(any_depth_split("**/node_modules"), None);
+        assert_eq!(any_depth_split("/r/*/x/**/y"), None);
+    }
+
+    #[test]
+    fn any_depth_rules_deny_what_exists_and_a_root_inside_one() {
+        let t = std::env::temp_dir().join(format!("tt-anydepth-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        for d in ["ws/.claude", "ws/a/b/.claude", "ws/c", "agents/.claude/sub"] {
+            std::fs::create_dir_all(t.join(d)).unwrap();
+        }
+        let t = std::fs::canonicalize(&t).unwrap();
+        let p = Policy {
+            writable_roots: vec![t.join("ws"), t.join("agents/.claude/sub")],
+            any_depth_denies: vec![(t.clone(), ".claude".into())],
+            ..Default::default()
+        };
+        let got: Vec<PathBuf> = p.any_depth_rules().into_iter().map(|r| r.path).collect();
+        assert!(got.contains(&t.join("ws/.claude")), "{got:?}");
+        assert!(got.contains(&t.join("ws/a/b/.claude")), "{got:?}");
+        assert!(got.contains(&t.join("agents/.claude/sub")), "a root inside a match is denied whole: {got:?}");
+        assert!(!got.iter().any(|g| g.ends_with("c/.claude")), "only what exists: {got:?}");
+        let _ = std::fs::remove_dir_all(t);
+    }
+
+    #[test]
+    fn a_linked_worktree_config_and_commondir_are_handoff() {
+        let t = std::env::temp_dir().join(format!("tt-worktree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        std::fs::create_dir_all(t.join("repo/.git/worktrees/w")).unwrap();
+        let t = std::fs::canonicalize(&t).unwrap();
+        let p = Policy { writable_roots: vec![t.join("repo")], ..Default::default() };
+        let rules: Vec<PathBuf> = p.trust_handoff_rules().into_iter().map(|r| r.path).collect();
+        for want in [".git/config.worktree", ".git/worktrees/w/config.worktree", ".git/worktrees/w/commondir"] {
+            assert!(rules.contains(&t.join("repo").join(want)), "{want} not denied: {rules:?}");
+        }
+        assert!(!rules.contains(&t.join("repo/.git/worktrees/w/HEAD")));
+        let _ = std::fs::remove_dir_all(t);
+    }
 
     #[test]
     fn handoff_exemption_drops_the_rules_inside_it_and_keeps_the_repos() {
