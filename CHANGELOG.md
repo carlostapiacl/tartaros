@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.23] — 2026-11-04
+
 ### Fixed
 - **Parallel runs on Linux: a protected path removed while a run was being set
   up failed it.** Measured in parallel seisin suites: another test's repo in a
