@@ -118,7 +118,7 @@ impl LandlockBackend {
         // absent-handoff placeholders stay (empty, read-only). Removing them now
         // would detach the read-only binds the agent relies on.
         std::mem::forget(placeholders);
-        cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })
+        spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -161,7 +161,7 @@ impl LandlockBackend {
         // If confined_command or spawn fails here, `cg` drops and tears down the
         // cgroup — no explicit cleanup, no leak on the error paths.
         let (mut cmd, placeholders) = confined_command(policy, command, procs)?;
-        let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+        let child = spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })?;
         let mut cols = make_collectors(child.id());
         let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut cols, sink);
         drop(placeholders);
@@ -201,7 +201,7 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
     let procs = cg.as_ref().map(|c| c.procs_path());
     // `cg` drops on every exit path (incl. the `?` below) -> cgroup torn down.
     let (mut cmd, placeholders) = confined_command(policy, command, procs)?;
-    let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+    let child = spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })?;
     let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut [], &mut VecSink::default());
     drop(placeholders); // the run is over: remove the absent-handoff placeholders
     Ok(RunOutcome { exit_code: code })
@@ -434,8 +434,9 @@ impl Drop for Placeholders {
 /// matches inodes), so a repository whose `.git` has no `hooks` directory, or no
 /// `config`, would let the agent create one: a checkout made by go-git or
 /// libgit2, or `git init --template=`, has none. Before the carve is built, put
-/// them there: an empty `hooks` directory (git's own layout) and an empty
-/// read-only `config`. The carve then denies them like any existing handoff
+/// them there: an empty `hooks` directory (git's own layout), an empty
+/// read-only `config` and `config.worktree`, and in a linked worktree's gitdir
+/// an empty read-only `config.worktree` and `commondir`. The carve then denies them like any existing handoff
 /// path, and they are removed when the run ends if still empty. Measured before
 /// this: `mkdir .git/hooks && echo x > .git/hooks/h` succeeded, `--materialize`
 /// included. Never through a symlinked component; fails closed.
@@ -446,16 +447,23 @@ fn create_git_placeholders(policy: &Policy) -> Result<Placeholders, String> {
     let mut made = Placeholders::default();
     for rule in policy.trust_handoff_rules() {
         let p = tartaros_core::resolve_best_effort(&rule.path);
-        let Some(git) = p.parent() else { continue };
-        if git.file_name().is_none_or(|n| n != ".git") || !git.is_dir() || std::fs::symlink_metadata(&p).is_ok() {
+        let Some(dir) = p.parent() else { continue };
+        // In `.git` itself, or in a linked worktree's `.git/worktrees/<name>/`.
+        let in_worktree = dir.parent().is_some_and(|w| w.file_name().is_some_and(|n| n == "worktrees") && w.parent().is_some_and(|g| g.file_name().is_some_and(|n| n == ".git")));
+        if !(dir.file_name().is_some_and(|n| n == ".git") || in_worktree) || !dir.is_dir() || std::fs::symlink_metadata(&p).is_ok() {
             continue;
         }
         if !roots.iter().any(|r| p.starts_with(r)) || has_symlink_component(&p) {
             continue;
         }
-        let made_it = match p.file_name().and_then(|n| n.to_str()) {
-            Some("hooks") => std::fs::create_dir(&p),
-            Some("config") => std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p).map(|_| ()),
+        let file = || std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p).map(|_| ());
+        // Empty and read-only: git reads an empty `config` or `config.worktree` as
+        // no settings, and a real linked worktree always has its `commondir`, so
+        // one put there stands in for a gitdir that was already incomplete.
+        let made_it = match (p.file_name().and_then(|n| n.to_str()), in_worktree) {
+            (Some("hooks"), false) => std::fs::create_dir(&p),
+            (Some("config" | "config.worktree"), false) => file(),
+            (Some("config.worktree" | "commondir"), true) => file(),
             _ => continue,
         };
         match made_it {
@@ -1031,6 +1039,12 @@ fn confined_command(
     placeholders.0.append(&mut git_placeholders.0);
     let MountPlan { pins, seal, hide, hide_files } = plan;
     let mount_ns = ns_capable || isolate_pids || isolate_network;
+    // The working directory, entered again once the mounts are in place: the
+    // inherited cwd still points into the mount that was there before, which the
+    // pins cover and the seal makes read-only, so every relative write failed with
+    // EROFS (`echo x > a/f` from the root itself; absolute paths, and a `cd` back
+    // in, worked). Built here; the pre_exec closure must not allocate.
+    let cwd_c: Option<std::ffi::CString> = std::env::current_dir().ok().and_then(|p| cstring(&p));
     // Pre-build (in the parent) everything pre_exec would otherwise allocate after
     // the fork (review #7): the cgroup.procs path as a CString, and the user-ns
     // uid/gid maps (euid/egid are preserved across fork).
@@ -1139,6 +1153,11 @@ fn confined_command(
             // POSIX shm dir is not a side channel.
             if mount_ns {
                 namespace::mount_private_shm()?;
+                // Into the working directory again, through the new mounts. A cwd
+                // the run cannot reach (hidden, gone) keeps the old one, as before.
+                if let Some(c) = &cwd_c {
+                    libc::chdir(c.as_ptr());
+                }
             }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
             // SIGKILL of the supervisor that never runs destroy_cgroup.
@@ -1220,10 +1239,33 @@ fn set_rlimit(resource: libc::c_int, limit: Option<u64>) -> std::io::Result<()> 
     Ok(())
 }
 
+
+#[cfg(target_os = "linux")]
+/// Spawn with the launcher counting the signals it passes on (core::signals),
+/// installed before the child exists so none is missed or kills the launcher.
+fn spawn_forwarding(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    tartaros_core::signals::install();
+    cmd.spawn().inspect_err(|_| tartaros_core::signals::restore())
+}
+
+/// `supervise_run`, then the default signal dispositions back (core::signals).
+#[cfg(target_os = "linux")]
+fn supervise(
+    child: std::process::Child,
+    timeout: Option<std::time::Duration>,
+    cgroup_dir: Option<&str>,
+    collectors: &mut [Box<dyn Collector>],
+    sink: &mut dyn EffectSink,
+) -> i32 {
+    let code = supervise_run(child, timeout, cgroup_dir, collectors, sink);
+    tartaros_core::signals::restore();
+    code
+}
+
 /// Supervise a confined child (P1-B): enforce the wall-clock timeout, then reap
 /// the whole process group so no descendant is left behind.
 #[cfg(target_os = "linux")]
-fn supervise(
+fn supervise_run(
     mut child: std::process::Child,
     timeout: Option<std::time::Duration>,
     cgroup_dir: Option<&str>,
@@ -1267,6 +1309,9 @@ fn supervise(
                 return exit_code_of(status);
             }
             Ok(None) => {
+                for sig in tartaros_core::signals::take() {
+                    kill_group(sig);
+                }
                 if let Some(t) = timeout {
                     if start.elapsed() >= t {
                         kill_all(libc::SIGTERM);

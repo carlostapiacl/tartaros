@@ -1,0 +1,26 @@
+id = "trust-handoff-worktree-config"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos", "windows"]
+
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/repo/.git/worktrees/w"
+dir = true
+[[fixture]]
+path = "{root}/work/repo/.git/worktrees/w/HEAD"
+content = "ref: refs/heads/w\n"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "printf '[core]\n\thooksPath = /tmp/planted' > {root}/work/repo/.git/worktrees/w/config.worktree"
+
+[control]
+cmd = "echo 'ref: refs/heads/x' > {root}/work/repo/.git/worktrees/w/HEAD"
+
+[assert]
+absent = "{root}/work/repo/.git/worktrees/w/config.worktree"

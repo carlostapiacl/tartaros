@@ -5,6 +5,43 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.20] — 2026-11-03
+
+### Fixed
+- **An any-depth `denyWrite` in a settings file was accepted and not held.** A
+  pattern was taken as covered by the trust-handoff set whenever it mentioned a
+  handoff name, so `<root>/**/.git/worktrees/**/commondir` and `<root>/**/.claude/**`
+  passed `explain` and the run wrote `.git/worktrees/w/commondir` and
+  `.claude/notes.md` anyway. macOS now compiles any `**` pattern to a Seatbelt
+  regex (read or write); Linux denies every existing match, `.git` included, and
+  refuses a pattern it cannot hold (docs/limits.md). A relative base is taken from
+  the working directory and a symlinked prefix resolved (on macOS `/tmp/x/**/y`
+  matched nothing under `/private/tmp`); a class of several characters is refused.
+  `tartaros why` answers from the pattern.
+- **Ctrl-C reaches the agent.** The run has a process group of its own, so a
+  SIGINT to the launcher's group (a terminal's Ctrl-C) killed the launcher and
+  the run with it, even an agent that catches SIGINT to interrupt rather than quit.
+  SIGINT, SIGTERM, SIGHUP and SIGQUIT are now passed on to the run, once per
+  delivery, and the launcher exits with the run's status. The handlers are in
+  place before the agent starts (so `--isolate-pids`'s init does not die of a
+  Ctrl-C meant for the agent) and gone when the run ends.
+- **A relative write from the working directory failed on Linux with
+  namespaces.** Under the bind-mount strategy (root, or a user namespace) the
+  inherited cwd pointed into the mount below the writable root's own, which the
+  read-only seal covers, so `echo x > a/f` from inside the root failed with
+  EROFS while the same write by absolute path went through. The run enters its
+  working directory again once the mounts are in place.
+- **`--egress-log` could miss a refusal at the end of a run.** The broker's
+  decisions are written by one thread, and the launcher exited as soon as the
+  agent did: a refusal in the run's last milliseconds (a `curl` that gets its 403
+  and quits) was sometimes never written. The launcher now waits, at most two
+  seconds, for the broker's log before it exits.
+- **A linked worktree's `config.worktree` and `commondir`, and `.git/config.worktree`,
+  are trust-handoff.** Either one points a trusted `git` in that worktree at
+  planted hooks (`core.hooksPath`, or another gitdir). Corpus:
+  `trust-handoff-worktree-commondir`, `trust-handoff-worktree-config`,
+  `trust-handoff-worktree-main-config`.
+
 ## [0.1.0-alpha.19] — 2026-11-03
 
 ### Added

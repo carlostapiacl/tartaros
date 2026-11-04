@@ -35,6 +35,21 @@ than you asked for.
   read-only `config` are put in place before the carve and removed after the run). The home-handoff surface (shell rc, `.gitconfig`,
   `.ripgreprc`) is protected **by default** since 0.1.0-alpha.7, as
   sandbox-runtime does; `--allow-home-handoff` lifts it for a dotfiles repo.
+- **An any-depth `denyWrite` in a settings file (`<root>/**/.claude/**`).** macOS
+  compiles the pattern to a Seatbelt regex and holds exactly what it names, present
+  or not. Linux matches by inode: it holds every match that exists when the run
+  starts (`.git` included), and a new one only where the trust-handoff set holds
+  that name (a top-level one, a repository's git internals); a new match in a
+  nested directory is not held. A pattern with no base (`**/node_modules`) or with
+  a `**` inside the suffix is refused on Linux (exit 78), except a handoff name and
+  the git surfaces the trust-handoff set holds (`.git/modules/**/{config,hooks}`,
+  `.git/worktrees/**/{config.worktree,commondir}`). A relative base is taken from
+  the working directory and a symlinked prefix is resolved, on both. A class of
+  more than one character (`secret[12].txt`) is refused on both: no engine here
+  matches it.
+- **A linked worktree made during the run (Linux).** Its `config.worktree` and
+  `commondir` are held on macOS by pattern; on Linux only for worktrees that exist
+  when the run starts, like a repository the agent creates during the run.
 - **Moving the whole `.git` dir aside: blocked on both OS.** `mv .git .git-moved
   && mkdir .git` would plant a fresh `.git/config`/hooks at the original path (the
   protected inodes travel with the moved dir). macOS denies `file-write-unlink` on

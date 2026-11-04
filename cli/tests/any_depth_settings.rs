@@ -1,0 +1,116 @@
+//! An any-depth `denyWrite` in a settings file (`<root>/**/.claude/**`) is held,
+//! not just accepted. Before 0.1.0-alpha.20 a pattern was taken as covered by the
+//! trust-handoff set whenever it mentioned a handoff name, so
+//! `**/.git/worktrees/**/commondir` and `**/.claude/**` passed `explain` and the
+//! run wrote `.git/worktrees/w/commondir` and `.claude/notes.md` anyway.
+//!
+//! Both backends hold what exists when the run starts; macOS also holds a new
+//! one (the pattern is a Seatbelt regex), Linux where the trust-handoff set holds
+//! that name (docs/limits.md).
+#![cfg(unix)]
+
+use std::path::Path;
+use std::process::Command;
+
+const BIN: &str = env!("CARGO_BIN_EXE_tartaros");
+
+fn writes(settings: &Path, files: &[&Path]) -> Vec<bool> {
+    let script: String = files
+        .iter()
+        .map(|f| format!("if (echo y > '{}') 2>/dev/null; then echo W; else echo D; fi;", f.display()))
+        .collect();
+    let out = Command::new(BIN).args(["run", "--settings"]).arg(settings).args(["--", "sh", "-c", &script]).output().unwrap();
+    assert!(out.status.success(), "run failed: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).lines().map(|l| l == "W").collect()
+}
+
+#[test]
+fn an_any_depth_write_deny_holds_what_it_names_and_nothing_else() {
+    let dir = std::env::temp_dir().join(format!("tartaros-any-depth-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let ws = dir.join("ws");
+    for d in [".claude", "sub/.claude", "repo/.git/worktrees/w", "src"] {
+        std::fs::create_dir_all(ws.join(d)).unwrap();
+    }
+    let ws = std::fs::canonicalize(&ws).unwrap();
+    // `sub/notes.md` exists: on Linux without a mount namespace a directory that
+    // holds a denied entry takes no new ones (docs/limits.md), so the control
+    // beside the denied `.claude` edits a file rather than creating one.
+    for f in [".claude/notes.md", "sub/.claude/x", "sub/notes.md", "repo/.git/worktrees/w/commondir", "repo/.git/worktrees/w/HEAD"] {
+        std::fs::write(ws.join(f), "before\n").unwrap();
+    }
+    let w = ws.display();
+    let settings = dir.join("settings.json");
+    std::fs::write(
+        &settings,
+        format!(
+            r#"{{"filesystem":{{"allowWrite":["{w}"],"denyWrite":["{w}/**/.claude","{w}/**/.claude/**","{w}/**/.git/worktrees/**/commondir"]}},"network":{{"allowedDomains":[]}}}}"#
+        ),
+    )
+    .unwrap();
+
+    let denied = [ws.join(".claude/notes.md"), ws.join("sub/.claude/x"), ws.join("repo/.git/worktrees/w/commondir")];
+    let allowed = [ws.join("src/f"), ws.join("repo/.git/worktrees/w/HEAD"), ws.join("sub/notes.md")];
+    let files: Vec<&Path> = denied.iter().chain(&allowed).map(|p| p.as_path()).collect();
+    let got = writes(&settings, &files);
+    for (f, wrote) in files.iter().zip(&got).take(denied.len()) {
+        assert!(!wrote, "{} was written", f.display());
+    }
+    for (f, wrote) in files.iter().zip(&got).skip(denied.len()) {
+        assert!(wrote, "{} was not written", f.display());
+    }
+    for f in &denied {
+        assert_eq!(std::fs::read_to_string(f).unwrap(), "before\n", "{} changed", f.display());
+    }
+
+    // macOS: a new one, in a directory made during the run, is held too.
+    #[cfg(target_os = "macos")]
+    {
+        let out = Command::new(BIN)
+            .args(["run", "--settings"])
+            .arg(&settings)
+            .args(["--", "sh", "-c", &format!("mkdir -p '{w}/new' && mkdir '{w}/new/.claude'")])
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "a new .claude was created");
+        assert!(!ws.join("new/.claude").exists());
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The pattern names what the kernel will see: a relative base is taken from the
+/// working directory, and a symlinked prefix (`/tmp` on macOS, any link) is
+/// resolved. Before, macOS anchored `sub/**/x` at `/` and kept `/tmp/...` as
+/// written while the run's root was `/private/tmp/...`, so neither held.
+#[test]
+fn a_relative_or_symlinked_base_is_held() {
+    let dir = std::env::temp_dir().join(format!("tartaros-any-depth-base-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("real/sub/a")).unwrap();
+    std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+    for f in ["secret.txt", "rel.txt", "other.txt"] {
+        std::fs::write(dir.join("real/sub/a").join(f), "before\n").unwrap();
+    }
+    let real = dir.join("real");
+    let settings = dir.join("settings.json");
+    std::fs::write(
+        &settings,
+        format!(
+            r#"{{"filesystem":{{"allowWrite":["{r}"],"denyWrite":["{l}/sub/**/secret.txt","sub/**/rel.txt"]}},"network":{{"allowedDomains":[]}}}}"#,
+            r = real.display(),
+            l = dir.join("link").display()
+        ),
+    )
+    .unwrap();
+    let probe = |f: &str| format!("(echo y > sub/a/{f}) 2>/dev/null && echo W || echo D;");
+    let out = Command::new(BIN)
+        .current_dir(&real)
+        .args(["run", "--settings"])
+        .arg(&settings)
+        .args(["--", "sh", "-c", &format!("{}{}{}", probe("secret.txt"), probe("rel.txt"), probe("other.txt"))])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "D\nD\nW\n", "secret (by link), rel (relative), other");
+    let _ = std::fs::remove_dir_all(dir);
+}

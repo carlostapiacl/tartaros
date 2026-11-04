@@ -11,7 +11,7 @@
 
 use tartaros_core::{
     Access, Backend, Collector, EffectSink, FsRule, Network, Policy, PolicyError, RunError,
-    RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES, HANDOFF_HOME_NAMES,
+    RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES, HANDOFF_HOME_NAMES, HANDOFF_WORKTREE_NAMES,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -166,7 +166,7 @@ impl SeatbeltBackend {
                 Ok(())
             });
         }
-        let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })?;
+        let child = spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })?;
         Ok((child, prof))
     }
 
@@ -218,10 +218,32 @@ fn set_rlimit(resource: libc::c_int, limit: Option<u64>) -> std::io::Result<()> 
     Ok(())
 }
 
+
+#[cfg(unix)]
+/// Spawn with the launcher counting the signals it passes on (core::signals),
+/// installed before the child exists so none is missed or kills the launcher.
+fn spawn_forwarding(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    tartaros_core::signals::install();
+    cmd.spawn().inspect_err(|_| tartaros_core::signals::restore())
+}
+
+/// `supervise_run`, then the default signal dispositions back (core::signals).
+#[cfg(unix)]
+fn supervise(
+    child: std::process::Child,
+    timeout: Option<std::time::Duration>,
+    collectors: &mut [Box<dyn Collector>],
+    sink: &mut dyn EffectSink,
+) -> i32 {
+    let code = supervise_run(child, timeout, collectors, sink);
+    tartaros_core::signals::restore();
+    code
+}
+
 /// Supervise the confined child: enforce the wall-clock timeout, then reap the
 /// whole process group so no descendant is left behind.
 #[cfg(unix)]
-fn supervise(
+fn supervise_run(
     mut child: std::process::Child,
     timeout: Option<std::time::Duration>,
     collectors: &mut [Box<dyn Collector>],
@@ -248,6 +270,9 @@ fn supervise(
                 return exit_code_of(status);
             }
             Ok(None) => {
+                for sig in tartaros_core::signals::take() {
+                    kill_group(sig);
+                }
                 if let Some(t) = timeout {
                     if start.elapsed() >= t {
                         kill_group(libc::SIGTERM);
@@ -708,22 +733,30 @@ fn build_profile(policy: &Policy) -> String {
     p
 }
 
-/// Translate a single-segment glob (absolute path with `*`/`?`, no `**`) into an
-/// anchored Seatbelt regex. `*` → `[^/]*`, `?` → `[^/]`; every other character is
-/// escaped as a literal. (The CLI unwraps single-char classes `[x]` before this,
-/// so brackets arriving here are treated literally.)
+/// Translate a glob (absolute path) into an anchored Seatbelt regex, component
+/// by component: `**` is any number of components (none included), `*` → `[^/]*`
+/// and `?` → `[^/]` within one; every other character is a literal. The same
+/// meaning as `tartaros_core::glob_matches`, which `why` uses. (The CLI unwraps
+/// single-char classes `[x]` before this, so brackets here are literal.)
 fn glob_to_anchored_regex(pattern: &str) -> String {
     let mut out = String::from("^");
-    for c in pattern.chars() {
-        match c {
-            '*' => out.push_str("[^/]*"),
-            '?' => out.push_str("[^/]"),
-            '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '\\' => {
-                out.push('\\');
-                out.push(c);
+    for comp in pattern.split('/').filter(|c| !c.is_empty()) {
+        if comp == "**" {
+            out.push_str("(/.*)?");
+            continue;
+        }
+        out.push('/');
+        for c in comp.chars() {
+            match c {
+                '*' => out.push_str("[^/]*"),
+                '?' => out.push_str("[^/]"),
+                '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '\\' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '"' => out.push_str("\\\""),
+                _ => out.push(c),
             }
-            '"' => out.push_str("\\\""),
-            _ => out.push(c),
         }
     }
     out.push('$');
@@ -822,6 +855,14 @@ fn emit_handoff_regex(p: &mut String, root: &Path, home: bool) {
     p.push_str(&format!(
         "(deny file-write* (regex #\"^{root_re}(/.*)?/\\.git/modules/.*/config$\"))\n"
     ));
+    // Linked worktrees: what git reads from `.git/worktrees/<name>/` (config and
+    // the pointer to the common gitdir), at any depth, present or not.
+    for name in HANDOFF_WORKTREE_NAMES {
+        let name_re = regex_escape(name);
+        p.push_str(&format!(
+            "(deny file-write* (regex #\"^{root_re}(/.*)?/\\.git/worktrees/[^/]+/{name_re}$\"))\n"
+        ));
+    }
     // The `.git` DIRECTORY itself: deny unlink/rename (but NOT writes inside it —
     // objects/refs stay writable for git). Without this, moving the whole `.git`
     // aside and creating a fresh one at the same path re-points the host's git at
