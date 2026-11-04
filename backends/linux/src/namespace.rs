@@ -318,6 +318,17 @@ pub(crate) fn userns_blocker_hint() -> String {
         .into()
 }
 
+/// A mount whose target is gone by the time the child mounts it: another run's
+/// directory that ended (`/tmp/snr/<run>`), a temporary its launcher removed, a
+/// placeholder another run took back. The plan is made in the parent before the
+/// fork, and runs that share a scratch root come and go in between: failing the
+/// whole spawn on it (`spawn: No such file or directory`) stopped parallel runs at
+/// random. A path that is not there has nothing to hide or pin, the same as one
+/// absent when the plan was made; any other error still fails closed.
+fn vanished() -> bool {
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT)
+}
+
 /// Protect the trust-handoff set with READ-ONLY bind mounts instead of carving
 /// it out of the Landlock write grant. This lets the whole workspace be granted
 /// writable (so the agent can create new files at the repo root — which the carve
@@ -338,12 +349,13 @@ pub(crate) fn userns_blocker_hint() -> String {
 /// done once by the caller, not here, so it is shared with `--isolate-pids`.
 pub(crate) unsafe fn setup_ro_binds(
     paths: &[std::ffi::CString],
+    skippable: &[bool],
     need_unshare: bool,
 ) -> std::io::Result<()> {
     if need_unshare {
         enter_private_mount_ns()?;
     }
-    for p in paths {
+    for (i, p) in paths.iter().enumerate() {
         // Bind the path onto itself (one recursive mount).
         if libc::mount(
             p.as_ptr(),
@@ -353,6 +365,10 @@ pub(crate) unsafe fn setup_ro_binds(
             std::ptr::null(),
         ) != 0
         {
+            // Only another run's placeholder may be gone (see the caller).
+            if vanished() && skippable.get(i).copied().unwrap_or(false) {
+                continue;
+            }
             return Err(std::io::Error::last_os_error());
         }
         // Remount that bind read-only. MS_REMOUNT|MS_BIND changes only the mount
@@ -387,6 +403,9 @@ pub(crate) unsafe fn pin_mounts(paths: &[std::ffi::CString]) -> std::io::Result<
             std::ptr::null(),
         ) != 0
         {
+            if vanished() {
+                continue;
+            }
             return Err(std::io::Error::last_os_error());
         }
     }
@@ -444,6 +463,9 @@ pub(crate) unsafe fn hide_dirs(dirs: &[std::ffi::CString]) -> std::io::Result<()
             opts.as_ptr() as *const libc::c_void,
         ) != 0
         {
+            if vanished() {
+                continue;
+            }
             return Err(std::io::Error::last_os_error());
         }
     }
@@ -459,6 +481,9 @@ pub(crate) unsafe fn hide_files(files: &[std::ffi::CString]) -> std::io::Result<
     let null = c"/dev/null";
     for f in files {
         if libc::mount(null.as_ptr(), f.as_ptr(), std::ptr::null(), libc::MS_BIND, std::ptr::null()) != 0 {
+            if vanished() {
+                continue;
+            }
             return Err(std::io::Error::last_os_error());
         }
     }

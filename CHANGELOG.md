@@ -5,6 +5,23 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.21] — 2026-11-04
+
+### Fixed
+- **Parallel runs stopped each other on Linux with namespaces.** The mounts are
+  planned in the parent before the fork, and a target another run removed in
+  between (its run directory, a temporary, a placeholder it took back) failed the
+  whole spawn with `spawn: No such file or directory`. Measured: 4 runs out of
+  422 in a parallel seisin suite. A target that is gone is now skipped (nothing
+  to hide or pin, as if it had been absent from the start); any other mount
+  error still fails closed.
+- **An explicit write deny on a path that does not exist yet no longer costs the
+  directory its new files** (Linux with namespaces). It forced the carve, where a
+  directory holding a withheld entry takes no new ones: `--write-deny
+  app/.git/index.lock` (seisin's `never_writes`) left the role unable to create
+  `app/ok.txt` in its own territory. It is now held by a placeholder, as an
+  absent handoff path is, and removed after the run.
+
 ## [0.1.0-alpha.20] — 2026-11-03
 
 ### Fixed

@@ -169,14 +169,17 @@ than you asked for.
   a host:port capability: a TCP tunnel with TLS end to end, so it does not inspect
   SNI or certificates.
 
-- **A write-deny on a path that does not exist yet (Linux).** Landlock matches
-  inodes, so an explicit `--write-deny` on an absent path is enforced by
-  withholding the nearest existing ancestor: its existing children stay writable,
-  but no new entry can be created directly in it. Such a policy uses the carve
-  instead of the bind-mount strategy, on every host, when the absent deny lies
-  inside a writable root (or `/dev`); one outside them is unwritable anyway and
-  leaves the strategy alone. macOS matches by path and has no such cost.
-  Earlier versions silently dropped an absent explicit deny; it is now enforced.
+- **A write-deny on a path that does not exist yet (Linux).** With a mount
+  namespace (root, or a user namespace) it is held by an empty read-only
+  placeholder at its first missing component, bound read-only and removed when
+  the run ends, and the directory around it keeps taking new files (since
+  0.1.0-alpha.21). Without one, or where no placeholder can be put (under `/dev`,
+  through a symlink, in a directory the launcher cannot write), Landlock matches
+  inodes, so it is enforced by withholding the nearest existing ancestor: its
+  existing children stay writable, but no new entry can be created directly in
+  it. A deny outside every writable root is unwritable anyway. macOS matches by
+  path and has no such cost. While the run lasts the placeholder is visible to
+  other processes on the host, as sandbox-runtime's is.
 
 - **A read-deny on a path that does not exist yet (Linux).** The same inode limit:
   the nearest existing ancestor is withheld from the read grant instead. Its

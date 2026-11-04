@@ -80,7 +80,9 @@ with each binary, `--mutate` coverage for trust-handoff, and
 chmod/chown/utimes/xattrs held outside the roots on Linux without namespaces
 shipped in 0.1.0-alpha.19. Any-depth `denyWrite` patterns held rather than taken
 as covered by name, linked worktrees in the trust-handoff set, and Ctrl-C passed
-on to the agent shipped in 0.1.0-alpha.20. The details are in the [changelog](CHANGELOG.md).
+on to the agent shipped in 0.1.0-alpha.20. Parallel runs on Linux that no
+longer stop each other, and an absent write deny held by a placeholder instead of
+the carve, shipped in 0.1.0-alpha.21. The details are in the [changelog](CHANGELOG.md).
 
 ## How to help
 

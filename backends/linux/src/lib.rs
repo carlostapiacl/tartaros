@@ -216,7 +216,7 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
 /// workspace is granted wholesale and these are bound read-only (option B:
 /// existing paths only — the working tree is never materialized/touched).
 #[cfg(target_os = "linux")]
-fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
+fn robind_targets(policy: &Policy) -> Option<BindPlan> {
     // Need a mount namespace: real root has it; otherwise a user namespace can
     // grant it (unless the host blocks unprivileged userns, e.g. AppArmor). The
     // probe forks, so only call it when there is actually something to protect.
@@ -228,34 +228,89 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
         paths.push(r.path.clone());
     }
     let mut paths: Vec<PathBuf> = paths.iter().map(|p| tartaros_core::resolve_best_effort(p)).collect();
-    paths.retain(|p| p.exists());
     paths.sort();
     paths.dedup();
+    // What exists, and whether it looks like another run's placeholder, in one
+    // look: one that is gone by bind time may be skipped only if it was one, and
+    // a second look later could find it already gone.
+    let looked: Vec<(PathBuf, bool)> = paths
+        .into_iter()
+        .filter_map(|p| {
+            let m = std::fs::metadata(&p).ok()?;
+            let like = placeholder_meta(&std::fs::symlink_metadata(&p).unwrap_or(m));
+            Some((p, like))
+        })
+        .collect();
+    let (paths, placeholder_like): (Vec<PathBuf>, Vec<bool>) = looked.into_iter().unzip();
     // An explicit deny on a path that does not exist yet can't be bound
     // read-only (there is nothing to bind) and the whole-root grant would let it
-    // be created, so such a policy uses the carve, which withholds the nearest
+    // be created. With a mount namespace it is held by a placeholder at its first
+    // missing component (create_placeholders), as an absent handoff path is; where
+    // one cannot be planted (under /dev, through a symlink, in a directory this
+    // process cannot write) the policy uses the carve, which withholds the nearest
     // existing ancestor instead. Only one inside a writable root (or /dev) needs
-    // that: no write grant reaches one outside them, under either strategy, so
-    // it is as unwritable with the bind mounts as with the carve.
-    if !absent_write_denies_in_roots(policy).is_empty() {
-        return Vec::new();
+    // either: no write grant reaches one outside them.
+    let absent = absent_write_denies_in_roots(policy);
+    if !absent_denies_placeable(&absent, policy) {
+        return None;
     }
     // Same for a handoff name that is a symlink resolving nowhere: only the carve,
     // which withholds the link's parent, keeps the link from being replaced.
     if !policy.unresolvable_handoff_links().is_empty() {
-        return Vec::new();
+        return None;
     }
     // Nothing to protect, or no way to create a mount namespace on this host: fall
     // back to the Landlock carve (the probe forks, so gate it on paths first).
-    if paths.is_empty() || !namespace::mount_ns_capable() {
-        return Vec::new();
+    if (paths.is_empty() && absent.is_empty()) || !namespace::mount_ns_capable() {
+        return None;
     }
-    paths
+    Some(BindPlan { existing: paths, placeholder_like, absent })
+}
+
+/// The bind-mount strategy for one run: the protected paths that exist, bound
+/// read-only, and the explicit denies that do not, each held by a placeholder.
+#[cfg(target_os = "linux")]
+struct BindPlan {
+    existing: Vec<PathBuf>,
+    placeholder_like: Vec<bool>,
+    absent: Vec<PathBuf>,
 }
 
 /// The explicit write denies that do not exist yet and that a write grant would
 /// reach: inside a writable root, or /dev (granted to every run). Compared on
 /// the resolved paths, so a deny spelt through a symlink into a root counts.
+/// Whether every absent explicit write deny can get a placeholder: inside a
+/// writable root (not only /dev, which is granted but never planted in), its
+/// first missing component in an existing directory, no symlink on the way.
+#[cfg(target_os = "linux")]
+fn absent_denies_placeable(absent: &[PathBuf], policy: &Policy) -> bool {
+    let roots: Vec<PathBuf> = policy.writable_roots.iter().map(|r| tartaros_core::resolve_best_effort(r)).collect();
+    absent.iter().all(|d| {
+        let p = first_missing(d);
+        p.parent().is_some_and(|d| d.is_dir() && roots.iter().any(|r| d.starts_with(r)) && writable_dir(d)) && !has_symlink_component(&p)
+    })
+}
+
+/// The first component of `d` that does not exist (itself, if its parent does).
+#[cfg(target_os = "linux")]
+fn first_missing(d: &std::path::Path) -> PathBuf {
+    let mut p = d.to_path_buf();
+    while let Some(parent) = p.parent() {
+        if std::fs::symlink_metadata(parent).is_ok() {
+            break;
+        }
+        p = parent.to_path_buf();
+    }
+    p
+}
+
+/// Whether this process may create an entry in `d`: a placeholder that cannot be
+/// made there leaves the deny unheld, so such a policy keeps the carve.
+#[cfg(target_os = "linux")]
+fn writable_dir(d: &std::path::Path) -> bool {
+    cstring(d).is_some_and(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
+}
+
 #[cfg(target_os = "linux")]
 fn absent_write_denies_in_roots(policy: &Policy) -> Vec<PathBuf> {
     let granted: Vec<PathBuf> = policy
@@ -327,9 +382,9 @@ fn carve_because(policy: &Policy) -> String {
     let absent_inside = absent_write_denies_in_roots(policy);
     if !namespace::mount_ns_capable() {
         format!("no mount namespace on this host: {}", namespace::userns_blocker_hint())
-    } else if !absent_inside.is_empty() {
+    } else if !absent_inside.is_empty() && !absent_denies_placeable(&absent_inside, policy) {
         format!(
-            "a write deny inside a writable root does not exist yet ({}), and a read-only bind mount needs something to bind",
+            "a write deny inside a writable root does not exist yet ({}), and no placeholder can be put there to bind",
             absent_inside[0].display()
         )
     } else {
@@ -484,7 +539,7 @@ fn create_git_placeholders(policy: &Policy) -> Result<Placeholders, String> {
 /// root: an empty 0444 file at its first missing component. Never through a
 /// symlinked component (it could point anywhere), created O_EXCL. Fails closed.
 #[cfg(target_os = "linux")]
-fn create_placeholders(policy: &Policy) -> Result<Placeholders, String> {
+fn create_placeholders(policy: &Policy, absent_denies: &[PathBuf]) -> Result<(Placeholders, Vec<PathBuf>), String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let roots: Vec<PathBuf> = policy.writable_roots.iter().map(|r| tartaros_core::resolve_best_effort(r)).collect();
     let mut firsts: Vec<PathBuf> = Vec::new();
@@ -518,6 +573,26 @@ fn create_placeholders(policy: &Policy) -> Result<Placeholders, String> {
     firsts.sort();
     firsts.dedup();
     let mut made = Placeholders::default();
+    // An explicit write deny that did not exist when the strategy was chosen
+    // (robind_targets, which checked each can be planted): held the same way, at
+    // its first missing component. One that appeared since is bound as it is;
+    // one that cannot be planted now fails the run rather than go unheld.
+    let mut appeared = Vec::new();
+    for d in absent_denies {
+        if std::fs::symlink_metadata(d).is_ok() {
+            appeared.push(d.clone());
+            continue;
+        }
+        let p = first_missing(d);
+        match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p) {
+            Ok(_) => {
+                let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444));
+                made.0.push(p);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => appeared.push(p),
+            Err(e) => return Err(format!("placeholder for the deny {}: {e}; refusing to run with it unheld", d.display())),
+        }
+    }
     for p in firsts {
         match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p) {
             Ok(_) => {}
@@ -530,7 +605,14 @@ fn create_placeholders(policy: &Policy) -> Result<Placeholders, String> {
         let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444));
         made.0.push(p);
     }
-    Ok(made)
+    Ok((made, appeared))
+}
+
+/// An empty, read-only regular file: what a placeholder looks like.
+#[cfg(target_os = "linux")]
+fn placeholder_meta(m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    m.is_file() && m.len() == 0 && m.permissions().mode() & 0o777 == 0o444
 }
 
 /// Mount-level hardening for a run with its own mount namespace, built in the
@@ -739,7 +821,7 @@ pub fn namespaces_by_default() -> bool {
 /// limitation.
 #[cfg(target_os = "linux")]
 pub fn uses_bind_mounts(policy: &Policy) -> bool {
-    !robind_targets(policy).is_empty()
+    robind_targets(policy).is_some()
 }
 
 #[cfg(target_os = "linux")]
@@ -934,8 +1016,18 @@ fn confined_command(
     // agent's private mount namespace and leave no trace in the real tree (option
     // B: existing paths only; absent ones are not materialized). Without the
     // privilege we fall back to the carve (same guarantees as before).
-    let robind_paths = robind_targets(policy);
-    let use_bind_mounts = !robind_paths.is_empty();
+    // An explicit deny that does not exist yet (`never_writes` on a lock file) is
+    // held by a placeholder under the bind mounts. Before, it forced the carve,
+    // whose directory holding a withheld entry takes no new ones: a role with
+    // `never_writes = ["app/.git/index.lock"]` could not create `app/ok.txt` in
+    // its own territory. One list, decided once: a deny that appears between the
+    // decision and the placeholder is bound as it then is (create_placeholders).
+    let bind_plan = robind_targets(policy);
+    let use_bind_mounts = bind_plan.is_some();
+    let (robind_paths, mut skippable_of, absent_denies) = match bind_plan {
+        Some(BindPlan { existing, placeholder_like, absent }) => (existing, placeholder_like, absent),
+        None => (Vec::new(), Vec::new(), Vec::new()),
+    };
 
     // The carve needs the git internals to exist to deny them (see
     // create_git_placeholders); made before the carve reads the tree.
@@ -952,7 +1044,10 @@ fn confined_command(
     // neither create the path nor a symlink in its place. sandbox-runtime does the
     // same with /dev/null. The files are removed when the run ends. Created after
     // the carve above, which must not see them as existing denies.
-    let placeholders = if ns_capable { create_placeholders(policy).map_err(err)? } else { Placeholders::default() };
+    let (placeholders, appeared) = if ns_capable { create_placeholders(policy, &absent_denies).map_err(err)? } else { (Placeholders::default(), Vec::new()) };
+    // A deny that appeared meanwhile is bound as it is, and is not skippable.
+    skippable_of.extend(appeared.iter().map(|_| false));
+    let robind_paths: Vec<PathBuf> = robind_paths.into_iter().chain(appeared).collect();
     let plan = if ns_capable {
         let binds: Vec<PathBuf> = robind_paths.iter().chain(placeholders.paths()).cloned().collect();
         mount_plan(policy, &binds)
@@ -1033,6 +1128,17 @@ fn confined_command(
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
     let robind_cstrings: Vec<std::ffi::CString> =
         robind_paths.iter().chain(placeholders.paths()).filter_map(|p| cstring(p)).collect();
+    // Which binds may be skipped if gone at mount time: only an empty read-only
+    // file this run did not make (another run's placeholder, taken back when that
+    // run ended). A protected path that vanishes otherwise fails the run closed:
+    // skipping it would let the agent create it again under the whole-root grant.
+    let robind_skippable: Vec<bool> = robind_paths
+        .iter()
+        .zip(skippable_of.iter().copied())
+        .filter(|(p, _)| cstring(p).is_some())
+        .map(|(_, like)| like)
+        .chain(placeholders.paths().filter(|p| cstring(p).is_some()).map(|_| false))
+        .collect();
     // The carve's git placeholders are denied by Landlock, never bound: they go
     // back with the others only to be removed when the run ends.
     let mut placeholders = placeholders;
@@ -1141,7 +1247,7 @@ fn confined_command(
             // placeholders of the absent handoff paths. Fails closed — a mount
             // error aborts before the workspace is ever exposed writable.
             if !robind_cstrings.is_empty() {
-                namespace::setup_ro_binds(&robind_cstrings, false)?;
+                namespace::setup_ro_binds(&robind_cstrings, &robind_skippable, false)?;
             }
             // Hide the read-denied directories (unix sockets there stop resolving).
             namespace::hide_dirs(&hide)?;
@@ -1525,9 +1631,10 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn an_absent_deny_inside_a_root_is_said_whatever_the_host() {
-        // The carve withholds the root for it on every host: no bind mount can
-        // cover a path that is not there. The warning used to skip it.
+    fn an_absent_deny_inside_a_root_is_said_exactly_when_the_carve_is_used() {
+        // With a mount namespace it is held by a placeholder and the root keeps
+        // its new entries (0.1.0-alpha.21); without one the carve withholds the
+        // root for it, and the warning says so.
         let root = scratch("said-absent");
         let policy = Policy {
             writable_roots: vec![root.clone()],
@@ -1535,9 +1642,14 @@ mod tests {
             ..Default::default()
         };
         let got = roots_without_new_entries(&policy);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].root, root);
-        assert_eq!(got[0].denies, vec![root.join("not-yet")]);
+        if namespace::mount_ns_capable() {
+            assert!(uses_bind_mounts(&policy));
+            assert!(got.is_empty(), "{:?}", got.iter().map(|g| &g.root).collect::<Vec<_>>());
+        } else {
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].root, root);
+            assert_eq!(got[0].denies, vec![root.join("not-yet")]);
+        }
         assert!(!policy.linux_write_allowlist_except(&on_readonly_mount).contains(&root));
     }
 
