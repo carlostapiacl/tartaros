@@ -427,6 +427,31 @@ fn expand(s: &str) -> String {
 /// so a user's `./repo` is resolved here rather than rejected with "must be
 /// absolute". Used only for concrete path flags, never for glob patterns (which
 /// stay relative by design, e.g. `**/*.pem`).
+/// A glob made to name what the kernel will see: `~` expanded, a relative base
+/// taken from the working directory (as a literal path is), and the literal
+/// prefix resolved (`/tmp` → `/private/tmp`, a symlinked directory → its
+/// target). A pattern that starts with `**` has no prefix and is left as is.
+fn anchor_glob(pattern: &str) -> String {
+    let s = expand(pattern);
+    if s.starts_with("**") {
+        return s;
+    }
+    let s = expand_path(&s);
+    let comps: Vec<&str> = s.split('/').collect();
+    let glob = |c: &str| c.contains('*') || c.contains('?') || c.contains('[');
+    let Some(first) = comps.iter().position(|c| glob(c)) else { return s };
+    let prefix = comps[..first].join("/");
+    let base = tartaros_core::resolve_best_effort(std::path::Path::new(if prefix.is_empty() { "/" } else { &prefix }));
+    format!("{}/{}", base.display().to_string().trim_end_matches('/'), comps[first..].join("/"))
+}
+
+/// The literal part of an anchored glob, before its first glob component.
+#[cfg(not(target_os = "macos"))]
+fn glob_base(pattern: &str) -> PathBuf {
+    let glob = |c: &str| c.contains('*') || c.contains('?') || c.contains('[');
+    PathBuf::from(pattern.split('/').take_while(|c| !glob(c)).collect::<Vec<_>>().join("/"))
+}
+
 fn expand_path(s: &str) -> String {
     let s = expand(s);
     let p = std::path::Path::new(&s);
@@ -1645,6 +1670,7 @@ struct SandboxNet {
 /// onto the generic policy, and REFUSE (exit) on any field we cannot guarantee,
 /// rather than running under-enforced. "Apply fully or do not start."
 /// How a settings path pattern resolves after unwrapping single-char classes.
+#[derive(PartialEq, Clone, Copy)]
 enum PatKind {
     /// A concrete path (no remaining metacharacters).
     Literal,
@@ -1741,6 +1767,12 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     }
     let map_deny = |x: &str, write: bool, read: bool, p: &mut Policy| {
         let (n, kind) = classify(x);
+        // A class of more than one character (`secret[12].txt`) is matched by no
+        // engine here; taken as literal text it would protect neither name.
+        if kind != PatKind::Literal && n.contains('[') {
+            refuse_glob(x);
+        }
+        let n = if kind == PatKind::Literal { n } else { anchor_glob(&n) };
         match kind {
             PatKind::Literal => {
                 let path = PathBuf::from(expand_path(&n));
@@ -1751,7 +1783,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
                 // macOS: the pattern itself, as an anchored regex, read or write:
                 // exactly what it names, at any depth, present or not.
                 #[cfg(target_os = "macos")]
-                { p.glob_denies.push(tartaros_core::GlobDeny { pattern: expand(&n), read, write }); }
+                { p.glob_denies.push(tartaros_core::GlobDeny { pattern: n.clone(), read, write }); }
                 #[cfg(not(target_os = "macos"))]
                 {
                     // No any-depth read rule without a pattern engine (POL-01):
@@ -1762,23 +1794,24 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
                              on this backend); use a concrete path under denyRead"
                         ));
                     }
-                    let e = expand(&n);
-                    if let Some((base, suffix)) = tartaros_core::any_depth_split(&e) {
-                        // Held on every existing match (any_depth_rules, once the
-                        // writable roots are known); a new one where the
-                        // trust-handoff set holds that name.
-                        p.any_depth_denies.push((base, suffix));
+                    // Held on every existing match (any_depth_rules, once the
+                    // writable roots are known); a new one where the trust-handoff
+                    // set holds that name, so only such patterns are taken.
+                    let based = !n.starts_with("**");
+                    if based && (tartaros_core::any_depth_split(&n).is_some() || git_handoff_pattern(&n)) {
+                        p.any_depth_denies.push((glob_base(&n), n.clone()));
                     } else if !git_handoff_pattern(&n) {
                         refuse_glob(x);
-                    } else if verbose {
-                        eprintln!("tartaros: --settings: '{x}' is held by the trust-handoff set's git surfaces at any depth.");
+                    }
+                    if verbose {
+                        eprintln!("tartaros: --settings: '{x}' is held on what exists at the start and, for a new one, where the trust-handoff set holds that name.");
                     }
                 }
             }
             PatKind::SingleGlob => {
                 // macOS compiles single-* globs to anchored regexes; Linux cannot.
                 #[cfg(target_os = "macos")]
-                { p.glob_denies.push(tartaros_core::GlobDeny { pattern: expand(&n), read, write }); }
+                { p.glob_denies.push(tartaros_core::GlobDeny { pattern: n.clone(), read, write }); }
                 #[cfg(not(target_os = "macos"))]
                 { let _ = (read, write); refuse_glob(x); }
             }

@@ -77,3 +77,40 @@ fn an_any_depth_write_deny_holds_what_it_names_and_nothing_else() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The pattern names what the kernel will see: a relative base is taken from the
+/// working directory, and a symlinked prefix (`/tmp` on macOS, any link) is
+/// resolved. Before, macOS anchored `sub/**/x` at `/` and kept `/tmp/...` as
+/// written while the run's root was `/private/tmp/...`, so neither held.
+#[test]
+fn a_relative_or_symlinked_base_is_held() {
+    let dir = std::env::temp_dir().join(format!("tartaros-any-depth-base-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("real/sub/a")).unwrap();
+    std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+    for f in ["secret.txt", "rel.txt", "other.txt"] {
+        std::fs::write(dir.join("real/sub/a").join(f), "before\n").unwrap();
+    }
+    let real = dir.join("real");
+    let settings = dir.join("settings.json");
+    std::fs::write(
+        &settings,
+        format!(
+            r#"{{"filesystem":{{"allowWrite":["{r}"],"denyWrite":["{l}/sub/**/secret.txt","sub/**/rel.txt"]}},"network":{{"allowedDomains":[]}}}}"#,
+            r = real.display(),
+            l = dir.join("link").display()
+        ),
+    )
+    .unwrap();
+    let probe = |f: &str| format!("(echo y > sub/a/{f}) 2>/dev/null && echo W || echo D;");
+    let out = Command::new(BIN)
+        .current_dir(&real)
+        .args(["run", "--settings"])
+        .arg(&settings)
+        .args(["--", "sh", "-c", &format!("{}{}{}", probe("secret.txt"), probe("rel.txt"), probe("other.txt"))])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "D\nD\nW\n", "secret (by link), rel (relative), other");
+    let _ = std::fs::remove_dir_all(dir);
+}

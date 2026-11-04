@@ -13,13 +13,18 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   handoff name, so `<root>/**/.git/worktrees/**/commondir` and `<root>/**/.claude/**`
   passed `explain` and the run wrote `.git/worktrees/w/commondir` and
   `.claude/notes.md` anyway. macOS now compiles any `**` pattern to a Seatbelt
-  regex (read or write); Linux denies every existing match and refuses a pattern
-  it cannot hold (docs/limits.md). `tartaros why` answers from the pattern.
+  regex (read or write); Linux denies every existing match, `.git` included, and
+  refuses a pattern it cannot hold (docs/limits.md). A relative base is taken from
+  the working directory and a symlinked prefix resolved (on macOS `/tmp/x/**/y`
+  matched nothing under `/private/tmp`); a class of several characters is refused.
+  `tartaros why` answers from the pattern.
 - **Ctrl-C reaches the agent.** The run has a process group of its own, so a
   SIGINT to the launcher's group (a terminal's Ctrl-C) killed the launcher and
   the run with it, even an agent that catches SIGINT to interrupt rather than quit.
-  SIGINT, SIGTERM, SIGHUP and SIGQUIT are now passed on to the run, and the
-  launcher exits with the run's status.
+  SIGINT, SIGTERM, SIGHUP and SIGQUIT are now passed on to the run, once per
+  delivery, and the launcher exits with the run's status. The handlers are in
+  place before the agent starts (so `--isolate-pids`'s init does not die of a
+  Ctrl-C meant for the agent) and gone when the run ends.
 - **A linked worktree's `config.worktree` and `commondir`, and `.git/config.worktree`,
   are trust-handoff.** Either one points a trusted `git` in that worktree at
   planted hooks (`core.hooksPath`, or another gitdir). Corpus:

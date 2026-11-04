@@ -617,6 +617,7 @@ dependencies = [
 name = "tartaros-core"
 version = "0.1.0-alpha.20"
 dependencies = [
+ "libc",
  "serde_json",
 ]
 

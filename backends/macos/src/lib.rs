@@ -166,7 +166,7 @@ impl SeatbeltBackend {
                 Ok(())
             });
         }
-        let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })?;
+        let child = spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawning sandbox-exec: {e}") })?;
         Ok((child, prof))
     }
 
@@ -218,40 +218,32 @@ fn set_rlimit(resource: libc::c_int, limit: Option<u64>) -> std::io::Result<()> 
     Ok(())
 }
 
-/// Signals the launcher passes on to the run instead of dying of them: a
-/// terminal's Ctrl-C (SIGINT) and Ctrl-\ (SIGQUIT), a hangup, a parent's
-/// SIGTERM. The run has a process group of its own (so teardown reaps it whole),
-/// so one sent to the launcher's group never reached it: Ctrl-C killed the
-/// launcher, and the agent with it, even one that catches SIGINT to interrupt
-/// rather than quit. Measured with a node agent counting SIGINTs: none arrived,
-/// the run ended by SIGINT. The handler only records; `supervise` forwards.
-#[cfg(unix)]
-static PENDING_SIGNALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-#[cfg(unix)]
-const FORWARDED_SIGNALS: [libc::c_int; 4] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
 
 #[cfg(unix)]
-extern "C" fn note_signal(sig: libc::c_int) {
-    PENDING_SIGNALS.fetch_or(1 << sig, std::sync::atomic::Ordering::SeqCst);
+/// Spawn with the launcher counting the signals it passes on (core::signals),
+/// installed before the child exists so none is missed or kills the launcher.
+fn spawn_forwarding(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    tartaros_core::signals::install();
+    cmd.spawn().inspect_err(|_| tartaros_core::signals::restore())
 }
 
+/// `supervise_run`, then the default signal dispositions back (core::signals).
 #[cfg(unix)]
-fn forward_signals() {
-    for s in FORWARDED_SIGNALS {
-        unsafe { libc::signal(s, note_signal as *const () as libc::sighandler_t) };
-    }
-}
-
-#[cfg(unix)]
-fn pending_signals() -> impl Iterator<Item = libc::c_int> {
-    let m = PENDING_SIGNALS.swap(0, std::sync::atomic::Ordering::SeqCst);
-    FORWARDED_SIGNALS.into_iter().filter(move |s| m & (1 << s) != 0)
+fn supervise(
+    child: std::process::Child,
+    timeout: Option<std::time::Duration>,
+    collectors: &mut [Box<dyn Collector>],
+    sink: &mut dyn EffectSink,
+) -> i32 {
+    let code = supervise_run(child, timeout, collectors, sink);
+    tartaros_core::signals::restore();
+    code
 }
 
 /// Supervise the confined child: enforce the wall-clock timeout, then reap the
 /// whole process group so no descendant is left behind.
 #[cfg(unix)]
-fn supervise(
+fn supervise_run(
     mut child: std::process::Child,
     timeout: Option<std::time::Duration>,
     collectors: &mut [Box<dyn Collector>],
@@ -261,7 +253,6 @@ fn supervise(
     let pid = child.id() as i32;
     let start = Instant::now();
     let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
-    forward_signals();
     // Adaptive poll: start tight (short commands dominate) and back off to 50ms,
     // removing a fixed ~50ms per-launch latency. Cadence does not affect the
     // timeout/teardown guarantees.
@@ -279,7 +270,7 @@ fn supervise(
                 return exit_code_of(status);
             }
             Ok(None) => {
-                for sig in pending_signals() {
+                for sig in tartaros_core::signals::take() {
                     kill_group(sig);
                 }
                 if let Some(t) = timeout {

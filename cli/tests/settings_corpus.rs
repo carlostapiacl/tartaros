@@ -203,3 +203,13 @@ fn applied_empty_credentials_ask_for_nothing() {
     let json = format!(r#"{{"filesystem":{{"allowWrite":["{w}"]}},"network":{{"tlsTerminate":null}},"credentials":{{"envVars":[],"files":[]}}}}"#);
     assert_eq!(explain_settings("cred-empty", &json), 0, "an empty credentials block asks for nothing");
 }
+
+#[test]
+fn refused_a_class_of_several_characters() {
+    // `secret[12].txt` taken as literal text would protect neither secret1.txt
+    // nor secret2.txt: no backend here matches a class, so it must refuse.
+    let p = ws();
+    let p = p.display().to_string();
+    let json = format!(r#"{{"filesystem":{{"allowWrite":["{p}"],"denyWrite":["{p}/**/secret[12].txt"]}}}}"#);
+    assert_eq!(explain_settings("multiclass", &json), 78, "a multi-character class must refuse");
+}

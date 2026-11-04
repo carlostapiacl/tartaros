@@ -4,6 +4,9 @@
 //! (the policy, including the trust-handoff set), independent of *how* a given
 //! OS enforces it (the backends). Backends are swappable; the policy is not.
 
+#[cfg(unix)]
+pub mod signals;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -219,11 +222,11 @@ pub struct Policy {
     /// non-empty list. Kept apart from `fs_rules` because they are patterns, not
     /// concrete inode paths.
     pub glob_denies: Vec<GlobDeny>,
-    /// Any-depth write denies `<base>/**/<suffix>` (the suffix has no glob), for a
-    /// backend that matches by inode. `any_depth_rules` turns them into concrete
-    /// denies on what exists; an absent one is held where the trust-handoff set
-    /// holds that name (the CLI accepts no other), with the same limit for a new
-    /// one in a subdirectory (docs/limits.md).
+    /// Any-depth write denies for a backend that matches by inode: the pattern's
+    /// literal base (resolved) and the whole pattern. `any_depth_rules` turns
+    /// them into concrete denies on every existing match; an absent one is held
+    /// where the trust-handoff set holds that name (the CLI accepts no other),
+    /// with the same limit for a new one in a subdirectory (docs/limits.md).
     pub any_depth_denies: Vec<(PathBuf, String)>,
     /// Specific AF_UNIX socket paths the agent MAY connect to. On macOS Seatbelt
     /// this is enforced per path (`remote unix-socket (path-literal …)`), so a
@@ -856,19 +859,18 @@ impl Policy {
         (true, format!("writable root {}", root.display()))
     }
 
-    /// `any_depth_denies` as concrete deny rules: every existing `<dir>/<suffix>`
-    /// under `base` inside a writable root, and a writable root that is itself
+    /// `any_depth_denies` as concrete deny rules: every existing path under a
+    /// writable root that matches the pattern (`glob_matches`, the macOS regex's
+    /// meaning), `.git` included, and a writable root that is itself a match or
     /// inside one, whole.
     pub fn any_depth_rules(&self) -> Vec<FsRule> {
         let mut out = Vec::new();
-        for (base, suffix) in &self.any_depth_denies {
+        for (base, pattern) in &self.any_depth_denies {
             let base = resolve_best_effort(base);
-            let want: Vec<&str> = suffix.split('/').filter(|c| !c.is_empty()).collect();
             for root in &self.writable_roots {
                 let root = resolve_best_effort(root);
-                let start = if let Ok(rel) = root.strip_prefix(&base) {
-                    let rel: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
-                    if rel.windows(want.len()).any(|w| w.iter().zip(&want).all(|(a, b)| a == b)) {
+                let start = if root.starts_with(&base) {
+                    if root.ancestors().take_while(|a| a.starts_with(&base)).any(|a| glob_matches(pattern, a)) {
                         out.push(deny(root.clone(), false));
                         continue;
                     }
@@ -878,7 +880,7 @@ impl Policy {
                 } else {
                     continue;
                 };
-                any_depth_walk(&start, suffix, 0, &mut out);
+                any_depth_walk(&start, pattern, 0, &mut out);
             }
         }
         dedup(&mut out);
@@ -1437,26 +1439,26 @@ fn deny_git_worktrees_handoff(worktrees_dir: &Path, out: &mut Vec<FsRule>) {
     }
 }
 
-/// Every existing `<dir>/<suffix>` at or under `dir`, walked like the
-/// trust-handoff set: no symlink followed, `.git` not entered, and past the depth
-/// bound the whole subtree denied rather than left unchecked.
-fn any_depth_walk(dir: &Path, suffix: &str, depth: usize, out: &mut Vec<FsRule>) {
+/// Every existing path at or under `dir` that matches `pattern`. No symlink is
+/// followed (a link that matches is denied itself), a match is denied whole and
+/// not entered, and past the depth bound the subtree is denied rather than left
+/// unchecked. `.git` is entered: a pattern can name what is inside it.
+fn any_depth_walk(dir: &Path, pattern: &str, depth: usize, out: &mut Vec<FsRule>) {
     if depth > MAX_WALK_DEPTH {
         out.push(deny(dir.to_path_buf(), true));
         return;
     }
-    let hit = dir.join(suffix);
-    if std::fs::symlink_metadata(&hit).is_ok() {
-        out.push(deny(hit, false));
-    }
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
-        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
-        if !meta.is_dir() || meta.file_type().is_symlink() || path.file_name().is_some_and(|n| n == ".git") {
+        if glob_matches(pattern, &path) {
+            out.push(deny(path, false));
             continue;
         }
-        any_depth_walk(&path, suffix, depth + 1, out);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+        if meta.is_dir() && !meta.file_type().is_symlink() {
+            any_depth_walk(&path, pattern, depth + 1, out);
+        }
     }
 }
 
@@ -1569,7 +1571,7 @@ mod tests {
         let t = std::fs::canonicalize(&t).unwrap();
         let p = Policy {
             writable_roots: vec![t.join("ws"), t.join("agents/.claude/sub")],
-            any_depth_denies: vec![(t.clone(), ".claude".into())],
+            any_depth_denies: vec![(t.clone(), format!("{}/**/.claude", t.display()))],
             ..Default::default()
         };
         let got: Vec<PathBuf> = p.any_depth_rules().into_iter().map(|r| r.path).collect();
@@ -1577,6 +1579,34 @@ mod tests {
         assert!(got.contains(&t.join("ws/a/b/.claude")), "{got:?}");
         assert!(got.contains(&t.join("agents/.claude/sub")), "a root inside a match is denied whole: {got:?}");
         assert!(!got.iter().any(|g| g.ends_with("c/.claude")), "only what exists: {got:?}");
+        let _ = std::fs::remove_dir_all(t);
+    }
+
+    #[test]
+    fn any_depth_rules_follow_the_whole_pattern() {
+        // Cases a suffix match missed: a suffix that crosses into a writable
+        // root, a match inside `.git`, a `**` inside the suffix at any depth.
+        let t = std::env::temp_dir().join(format!("tt-anydepth-p-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        for d in ["r/a/cache", "r/repo/.git/worktrees/w/extra", "r/b"] {
+            std::fs::create_dir_all(t.join(d)).unwrap();
+        }
+        let t = std::fs::canonicalize(&t).unwrap();
+        for f in ["r/a/cache/token", "r/repo/.git/HEAD", "r/repo/.git/worktrees/w/extra/commondir", "r/b/HEADER"] {
+            std::fs::write(t.join(f), "x").unwrap();
+        }
+        let r = t.join("r");
+        let pat = |p: &str| (r.clone(), format!("{}/{p}", r.display()));
+        let p = Policy {
+            writable_roots: vec![r.join("a/cache"), r.join("repo"), r.join("b")],
+            any_depth_denies: vec![pat("**/cache/token"), pat("**/HEAD"), pat("**/.git/worktrees/**/commondir")],
+            ..Default::default()
+        };
+        let got: Vec<PathBuf> = p.any_depth_rules().into_iter().map(|r| r.path).collect();
+        for want in ["a/cache/token", "repo/.git/HEAD", "repo/.git/worktrees/w/extra/commondir"] {
+            assert!(got.contains(&r.join(want)), "{want} not denied: {got:?}");
+        }
+        assert!(!got.contains(&r.join("b/HEADER")), "a name that only starts like the pattern: {got:?}");
         let _ = std::fs::remove_dir_all(t);
     }
 

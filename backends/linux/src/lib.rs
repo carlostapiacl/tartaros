@@ -118,7 +118,7 @@ impl LandlockBackend {
         // absent-handoff placeholders stay (empty, read-only). Removing them now
         // would detach the read-only binds the agent relies on.
         std::mem::forget(placeholders);
-        cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })
+        spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -161,7 +161,7 @@ impl LandlockBackend {
         // If confined_command or spawn fails here, `cg` drops and tears down the
         // cgroup — no explicit cleanup, no leak on the error paths.
         let (mut cmd, placeholders) = confined_command(policy, command, procs)?;
-        let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+        let child = spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })?;
         let mut cols = make_collectors(child.id());
         let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut cols, sink);
         drop(placeholders);
@@ -201,7 +201,7 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
     let procs = cg.as_ref().map(|c| c.procs_path());
     // `cg` drops on every exit path (incl. the `?` below) -> cgroup torn down.
     let (mut cmd, placeholders) = confined_command(policy, command, procs)?;
-    let child = cmd.spawn().map_err(|e| RunError { reason: format!("spawn: {e}") })?;
+    let child = spawn_forwarding(&mut cmd).map_err(|e| RunError { reason: format!("spawn: {e}") })?;
     let code = supervise(child, policy.timeout, cg.as_ref().map(|c| c.dir()), &mut [], &mut VecSink::default());
     drop(placeholders); // the run is over: remove the absent-handoff placeholders
     Ok(RunOutcome { exit_code: code })
@@ -1228,40 +1228,33 @@ fn set_rlimit(resource: libc::c_int, limit: Option<u64>) -> std::io::Result<()> 
     Ok(())
 }
 
-/// Signals the launcher passes on to the run instead of dying of them: a
-/// terminal's Ctrl-C (SIGINT) and Ctrl-\ (SIGQUIT), a hangup, a parent's
-/// SIGTERM. The run has a process group of its own (so teardown reaps it whole),
-/// so one sent to the launcher's group never reached it: Ctrl-C killed the
-/// launcher, and the agent with it, even one that catches SIGINT to interrupt
-/// rather than quit. Measured with a node agent counting SIGINTs: none arrived,
-/// the run ended by SIGINT. The handler only records; `supervise` forwards.
-#[cfg(target_os = "linux")]
-static PENDING_SIGNALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-#[cfg(target_os = "linux")]
-const FORWARDED_SIGNALS: [libc::c_int; 4] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
 
 #[cfg(target_os = "linux")]
-extern "C" fn note_signal(sig: libc::c_int) {
-    PENDING_SIGNALS.fetch_or(1 << sig, std::sync::atomic::Ordering::SeqCst);
+/// Spawn with the launcher counting the signals it passes on (core::signals),
+/// installed before the child exists so none is missed or kills the launcher.
+fn spawn_forwarding(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    tartaros_core::signals::install();
+    cmd.spawn().inspect_err(|_| tartaros_core::signals::restore())
 }
 
+/// `supervise_run`, then the default signal dispositions back (core::signals).
 #[cfg(target_os = "linux")]
-fn forward_signals() {
-    for s in FORWARDED_SIGNALS {
-        unsafe { libc::signal(s, note_signal as *const () as libc::sighandler_t) };
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn pending_signals() -> impl Iterator<Item = libc::c_int> {
-    let m = PENDING_SIGNALS.swap(0, std::sync::atomic::Ordering::SeqCst);
-    FORWARDED_SIGNALS.into_iter().filter(move |s| m & (1 << s) != 0)
+fn supervise(
+    child: std::process::Child,
+    timeout: Option<std::time::Duration>,
+    cgroup_dir: Option<&str>,
+    collectors: &mut [Box<dyn Collector>],
+    sink: &mut dyn EffectSink,
+) -> i32 {
+    let code = supervise_run(child, timeout, cgroup_dir, collectors, sink);
+    tartaros_core::signals::restore();
+    code
 }
 
 /// Supervise a confined child (P1-B): enforce the wall-clock timeout, then reap
 /// the whole process group so no descendant is left behind.
 #[cfg(target_os = "linux")]
-fn supervise(
+fn supervise_run(
     mut child: std::process::Child,
     timeout: Option<std::time::Duration>,
     cgroup_dir: Option<&str>,
@@ -1272,7 +1265,6 @@ fn supervise(
     let pid = child.id() as i32;
     let start = Instant::now();
     let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
-    forward_signals();
     // Kill the whole run. When a cgroup exists, `cgroup.kill` SIGKILLs every
     // member atomically regardless of process group or PID namespace — essential
     // when --isolate-pids makes the agent PID 1 of its namespace, which is immune
@@ -1306,7 +1298,7 @@ fn supervise(
                 return exit_code_of(status);
             }
             Ok(None) => {
-                for sig in pending_signals() {
+                for sig in tartaros_core::signals::take() {
                     kill_group(sig);
                 }
                 if let Some(t) = timeout {
