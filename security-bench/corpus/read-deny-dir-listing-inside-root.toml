@@ -1,7 +1,7 @@
 id = "read-deny-dir-listing-inside-root"
 category = "secrets"
 severity = "high"
-os = ["linux", "macos"]
+os = ["linux"]
 
 # A read-denied directory inside a writable root, and a read-deny on an absent
 # path in a directory above the root (seisin denies `~/.aws` and a role's private

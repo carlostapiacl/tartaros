@@ -701,7 +701,9 @@ fn mount_plan(policy: &Policy, binds: &[PathBuf]) -> MountPlan {
     // listed `vault/` (`secret.md`) and could not read it. A read-only mode-000
     // tmpfs over it shows nothing and takes nothing, and a mount point cannot be
     // renamed away.
-    let allows: Vec<PathBuf> = policy.read_allows.iter().map(|a| resolve_best_effort(a)).collect();
+    // Only a read-allow that exists keeps a directory from being hidden whole: one
+    // that does not would leave the listing open for nothing in it.
+    let allows: Vec<PathBuf> = policy.read_allows.iter().map(|a| resolve_best_effort(a)).filter(|a| a.exists()).collect();
     let mut hide: Vec<PathBuf> = policy
         .read_denies
         .iter()

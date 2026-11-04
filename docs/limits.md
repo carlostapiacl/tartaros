@@ -185,7 +185,9 @@ than you asked for.
   (Linux).** Its files are unreadable, but when the read carve is on it can be
   listed: Landlock's right to read a directory comes down from the root above it,
   and there is no rule that grants a directory minus one entry. With a mount
-  namespace it is hidden (since 0.1.0-alpha.22). macOS denies the listing.
+  namespace it is hidden (since 0.1.0-alpha.22), unless something inside it is
+  read-allowed back or is a writable root: then it stays a Landlock deny, and the
+  names in it can be listed (not read). macOS denies the listing.
 
 - **A read-deny on a path that does not exist yet (Linux).** The same inode limit:
   the nearest existing ancestor is withheld from the read grant instead. Its
