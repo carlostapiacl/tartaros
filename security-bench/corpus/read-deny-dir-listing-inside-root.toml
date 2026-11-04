@@ -1,0 +1,31 @@
+id = "read-deny-dir-listing-inside-root"
+category = "secrets"
+severity = "high"
+os = ["linux", "macos"]
+
+# A read-denied directory inside a writable root, with a read-allow inside some
+# other read-deny (seisin's `isolate` makes one: the role's home is allowed back
+# inside a denied temp root). On Linux that turns the read carve on, which kept
+# the files unreadable but let the directory be listed: another role saw the
+# names in a private folder (`ls vault` printed `secret.md`). Fixed in
+# 0.1.0-alpha.22 by covering it like a read-denied directory outside the roots.
+[policy]
+writable_roots = ["{root}/work"]
+read_denies = ["{root}/work/vault", "{root}/other"]
+read_allows = ["{root}/other/allowed"]
+
+[[fixture]]
+path = "{root}/work/vault/secret-name.md"
+content = "PRIVATE"
+[[fixture]]
+path = "{root}/work/src/open.md"
+content = "open"
+[[fixture]]
+path = "{root}/other/allowed/x"
+content = "x"
+
+[attack]
+cmd = "ls {root}/work/vault | grep -q secret-name"
+
+[control]
+cmd = "cat {root}/work/src/open.md >/dev/null && cat {root}/other/allowed/x >/dev/null && echo ok > {root}/work/src/f.txt"

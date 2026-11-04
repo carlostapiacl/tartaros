@@ -693,15 +693,20 @@ fn mount_plan(policy: &Policy, binds: &[PathBuf]) -> MountPlan {
     let mut seal: Vec<PathBuf> = mount_points().into_iter().filter(|m| !under(m, &keep)).collect();
     seal.sort();
     seal.dedup();
-    // Hide: read-denied directories that hold no root and no read-allow, and do not
-    // sit inside a root (a deny inside the workspace stays a Landlock deny).
+    // Hide: read-denied directories that hold no root and no read-allow, inside a
+    // root or not. A deny inside the workspace was left to Landlock, which keeps
+    // its files unreadable but, once the read carve is on (a read-allow inside a
+    // read-deny, as seisin's `isolate` makes), lets it be listed: the right to
+    // read a directory comes down from the root above it. Measured: another role
+    // listed `vault/` (`secret.md`) and could not read it. A read-only mode-000
+    // tmpfs over it shows nothing and takes nothing, and a mount point cannot be
+    // renamed away.
     let allows: Vec<PathBuf> = policy.read_allows.iter().map(|a| resolve_best_effort(a)).collect();
     let mut hide: Vec<PathBuf> = policy
         .read_denies
         .iter()
         .map(|d| resolve_best_effort(d))
         .filter(|d| d.is_dir() && d.parent().is_some())
-        .filter(|d| !under(d, &roots))
         .filter(|d| !roots.iter().chain(allows.iter()).any(|r| r.starts_with(d)))
         .collect();
     // A read-denied directory that does hold a root or a read-allow (a deny on
