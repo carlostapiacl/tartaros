@@ -10,6 +10,9 @@ writable_roots = ["{root}/work"]
 path = "{root}/work/repo/.git/worktrees/w"
 dir = true
 [[fixture]]
+path = "{root}/work/repo/.git/worktrees/w/HEAD"
+content = "ref: refs/heads/w\n"
+[[fixture]]
 path = "{root}/work/src"
 dir = true
 
@@ -17,7 +20,7 @@ dir = true
 cmd = "printf '[core]\n\thooksPath = /tmp/planted' > {root}/work/repo/.git/worktrees/w/config.worktree"
 
 [control]
-cmd = "echo ok > {root}/work/repo/.git/worktrees/w/HEAD"
+cmd = "echo 'ref: refs/heads/x' > {root}/work/repo/.git/worktrees/w/HEAD"
 
 [assert]
 absent = "{root}/work/repo/.git/worktrees/w/config.worktree"
