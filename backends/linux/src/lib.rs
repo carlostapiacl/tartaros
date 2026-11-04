@@ -237,7 +237,10 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
     // existing ancestor instead. Only one inside a writable root (or /dev) needs
     // that: no write grant reaches one outside them, under either strategy, so
     // it is as unwritable with the bind mounts as with the carve.
-    if !absent_write_denies_in_roots(policy).is_empty() {
+    // With a mount namespace such a deny is held by a placeholder instead
+    // (create_placeholders), as an absent handoff path is; the caller then
+    // grants whole roots even when nothing else needs a bind.
+    if !absent_write_denies_in_roots(policy).is_empty() && !(absent_denies_placeable(policy) && namespace::mount_ns_capable()) {
         return Vec::new();
     }
     // Same for a handoff name that is a symlink resolving nowhere: only the carve,
@@ -256,6 +259,24 @@ fn robind_targets(policy: &Policy) -> Vec<PathBuf> {
 /// The explicit write denies that do not exist yet and that a write grant would
 /// reach: inside a writable root, or /dev (granted to every run). Compared on
 /// the resolved paths, so a deny spelt through a symlink into a root counts.
+/// Whether every absent explicit write deny can get a placeholder: inside a
+/// writable root (not only /dev, which is granted but never planted in), its
+/// first missing component in an existing directory, no symlink on the way.
+#[cfg(target_os = "linux")]
+fn absent_denies_placeable(policy: &Policy) -> bool {
+    let roots: Vec<PathBuf> = policy.writable_roots.iter().map(|r| tartaros_core::resolve_best_effort(r)).collect();
+    absent_write_denies_in_roots(policy).into_iter().all(|d| {
+        let mut p = d;
+        while let Some(parent) = p.parent() {
+            if std::fs::symlink_metadata(parent).is_ok() {
+                break;
+            }
+            p = parent.to_path_buf();
+        }
+        p.parent().is_some_and(|d| d.is_dir() && roots.iter().any(|r| d.starts_with(r))) && !has_symlink_component(&p)
+    })
+}
+
 #[cfg(target_os = "linux")]
 fn absent_write_denies_in_roots(policy: &Policy) -> Vec<PathBuf> {
     let granted: Vec<PathBuf> = policy
@@ -508,6 +529,22 @@ fn create_placeholders(policy: &Policy) -> Result<Placeholders, String> {
         let at_top = p.parent().map(|d| roots.iter().any(|r| d == r.as_path())).unwrap_or(false);
         if !at_top && !in_git {
             continue;
+        }
+        let parent_is_dir = p.parent().map(|d| d.is_dir()).unwrap_or(false);
+        let in_root = p.parent().map(|d| roots.iter().any(|r| d.starts_with(r))).unwrap_or(false);
+        if parent_is_dir && in_root && !has_symlink_component(&p) {
+            firsts.push(p);
+        }
+    }
+    // An explicit write deny that does not exist yet, inside a writable root:
+    // held the same way, at its first missing component, wherever it is.
+    for d in absent_write_denies_in_roots(policy) {
+        let mut p = d;
+        while let Some(parent) = p.parent() {
+            if std::fs::symlink_metadata(parent).is_ok() {
+                break;
+            }
+            p = parent.to_path_buf();
         }
         let parent_is_dir = p.parent().map(|d| d.is_dir()).unwrap_or(false);
         let in_root = p.parent().map(|d| roots.iter().any(|r| d.starts_with(r))).unwrap_or(false);
@@ -935,7 +972,13 @@ fn confined_command(
     // B: existing paths only; absent ones are not materialized). Without the
     // privilege we fall back to the carve (same guarantees as before).
     let robind_paths = robind_targets(policy);
-    let use_bind_mounts = !robind_paths.is_empty();
+    // An explicit deny that does not exist yet (`never_writes` on a lock file) is
+    // held by a placeholder under the bind mounts. Before, it forced the carve,
+    // whose directory holding a withheld entry takes no new ones: a role with
+    // `never_writes = ["app/.git/index.lock"]` could not create `app/ok.txt` in
+    // its own territory.
+    let use_bind_mounts = !robind_paths.is_empty()
+        || (ns_capable && !absent_write_denies_in_roots(policy).is_empty() && absent_denies_placeable(policy));
 
     // The carve needs the git internals to exist to deny them (see
     // create_git_placeholders); made before the carve reads the tree.
