@@ -220,6 +220,8 @@ const VANISHED_PAUSES_MS: [u64; 3] = [20, 100, 400];
 thread_local! {
     static BETWEEN_PLAN_AND_SPAWN: std::cell::RefCell<Option<Box<dyn FnMut(usize)>>> =
         std::cell::RefCell::new(None);
+    static BEFORE_HANDOFF_PLACEHOLDER: std::cell::RefCell<Option<Box<dyn FnMut(&std::path::Path)>>> =
+        std::cell::RefCell::new(None);
 }
 
 /// Plan the run and spawn it. A protected path that is gone by the time the
@@ -237,7 +239,21 @@ fn spawn_confined(
 ) -> Result<(std::process::Child, Placeholders), RunError> {
     let mut attempt = 1;
     loop {
-        let (mut cmd, placeholders, bind_targets) = confined_command(policy, command, cgroup_procs.clone())?;
+        let planned = match confined_command(policy, command, cgroup_procs.clone()) {
+            Err(e) if e.reason.starts_with(PLAN_VANISHED) => Err(e.reason[PLAN_VANISHED.len()..].to_string()),
+            other => Ok(other?),
+        };
+        let (mut cmd, placeholders, bind_targets) = match planned {
+            Ok(p) => p,
+            Err(reason) => {
+                let Some(pause) = VANISHED_PAUSES_MS.get(attempt - 1) else {
+                    return Err(RunError { reason: format!("{reason} ({attempt} attempts)") });
+                };
+                std::thread::sleep(std::time::Duration::from_millis(*pause));
+                attempt += 1;
+                continue;
+            }
+        };
         #[cfg(test)]
         BETWEEN_PLAN_AND_SPAWN.with(|h| {
             if let Some(f) = h.borrow_mut().as_mut() {
@@ -543,6 +559,25 @@ impl Drop for Placeholders {
 /// path, and they are removed when the run ends if still empty. Measured before
 /// this: `mkdir .git/hooks && echo x > .git/hooks/h` succeeded, `--materialize`
 /// included. Never through a symlinked component; fails closed.
+/// Marks a plan that failed because a path it was holding vanished meanwhile
+/// (its directory gone, or a file now), so `spawn_confined` plans again rather
+/// than fail the run: the race of `namespace::BIND_TARGET_VANISHED`, met one
+/// step earlier, while a placeholder is put in place. Never shown: the reason
+/// is stripped of it before it leaves `spawn_confined`.
+#[cfg(target_os = "linux")]
+const PLAN_VANISHED: &str = "\u{0}vanished\u{0}";
+
+/// Why a placeholder could not be made; marked `PLAN_VANISHED` when its
+/// directory went away meanwhile.
+#[cfg(target_os = "linux")]
+fn placeholder_failed(what: &str, p: &std::path::Path, e: &std::io::Error, unheld: &str) -> String {
+    let reason = format!("{what} {}: {e}; refusing to run with it {unheld}", p.display());
+    match e.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => format!("{PLAN_VANISHED}{reason}"),
+        _ => reason,
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn create_git_placeholders(policy: &Policy) -> Result<Placeholders, String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -573,7 +608,7 @@ fn create_git_placeholders(policy: &Policy) -> Result<Placeholders, String> {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => continue,
-            Err(e) => return Err(format!("git placeholder {}: {e}; refusing to run with it unprotected", p.display())),
+            Err(e) => return Err(placeholder_failed("git placeholder", &p, &e, "unprotected")),
         }
         if p.is_file() {
             let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444));
@@ -638,17 +673,23 @@ fn create_placeholders(policy: &Policy, absent_denies: &[PathBuf]) -> Result<(Pl
                 made.0.push(p);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => appeared.push(p),
-            Err(e) => return Err(format!("placeholder for the deny {}: {e}; refusing to run with it unheld", d.display())),
+            Err(e) => return Err(placeholder_failed("placeholder for the deny", d, &e, "unheld")),
         }
     }
     for p in firsts {
+        #[cfg(test)]
+        BEFORE_HANDOFF_PLACEHOLDER.with(|h| {
+            if let Some(f) = h.borrow_mut().as_mut() {
+                f(&p)
+            }
+        });
         match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             // A directory we cannot write to is one the agent cannot create in
             // either (same user, and Landlock grants no more than the mode).
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => continue,
-            Err(e) => return Err(format!("handoff placeholder {}: {e}; refusing to run with it unprotected", p.display())),
+            Err(e) => return Err(placeholder_failed("handoff placeholder", &p, &e, "unprotected")),
         }
         let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444));
         made.0.push(p);
@@ -1740,6 +1781,47 @@ mod tests {
         assert_eq!(std::fs::read_to_string(root.join("new")).unwrap(), "ok\n", "the root still takes new entries");
         drop(placeholders);
         assert!(!deny.exists(), "the placeholder goes with the run");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_repo_removed_while_its_placeholder_is_made_is_planned_again() {
+        // Another run's repo in the shared scratch root goes while this run puts
+        // a placeholder in its `.git`: the next plan finds nothing left to hold.
+        let root = scratch("vanish-placeholder");
+        let git = root.join("other").join(".git");
+        std::fs::create_dir_all(&git).unwrap();
+        let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
+        if !namespace::mount_ns_capable() {
+            eprintln!("skipped: no mount namespace on this host");
+            return;
+        }
+        let removed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let done = removed.clone();
+        let other = root.join("other");
+        BEFORE_HANDOFF_PLACEHOLDER.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |p: &std::path::Path| {
+                if !done.get() && p.starts_with(&other) {
+                    std::fs::remove_dir_all(&other).unwrap();
+                    done.set(true);
+                }
+            }))
+        });
+        let got = spawn_confined(&policy, &["/bin/true".to_string()], None);
+        BEFORE_HANDOFF_PLACEHOLDER.with(|h| *h.borrow_mut() = None);
+        assert!(removed.get(), "the hook ran: a placeholder was being made in the repo");
+        let (mut child, _placeholders) = got.expect("planned again and spawned");
+        assert!(child.wait().unwrap().success());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_placeholder_whose_directory_went_is_marked_for_a_new_plan() {
+        let p = std::path::Path::new("/x/.git/config");
+        let gone = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let denied = std::io::Error::from(std::io::ErrorKind::InvalidInput);
+        assert!(placeholder_failed("git placeholder", p, &gone, "unprotected").starts_with(PLAN_VANISHED));
+        assert!(!placeholder_failed("git placeholder", p, &denied, "unprotected").starts_with(PLAN_VANISHED));
     }
 
     #[cfg(target_os = "linux")]

@@ -14,6 +14,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   directory had become a file (ENOTDIR), still failed the spawn and the agent
   printed nothing. Such a run is now planned again: the new plan sees the path
   absent and holds it with a placeholder, as for any path missing at plan time.
+  The same holds when the path goes while its placeholder is being made
+  (`handoff placeholder ...: No such file or directory`, measured once too).
   A protected path is never skipped (the agent could then create it). The plans
   are 20, 100 and 400 ms apart, since what removes it is usually a whole tree
   going; a path still vanishing after four fails the run closed, named.
