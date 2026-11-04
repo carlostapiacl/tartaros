@@ -33,7 +33,10 @@ fn an_any_depth_write_deny_holds_what_it_names_and_nothing_else() {
         std::fs::create_dir_all(ws.join(d)).unwrap();
     }
     let ws = std::fs::canonicalize(&ws).unwrap();
-    for f in [".claude/notes.md", "sub/.claude/x", "repo/.git/worktrees/w/commondir", "repo/.git/worktrees/w/HEAD"] {
+    // `sub/notes.md` exists: on Linux without a mount namespace a directory that
+    // holds a denied entry takes no new ones (docs/limits.md), so the control
+    // beside the denied `.claude` edits a file rather than creating one.
+    for f in [".claude/notes.md", "sub/.claude/x", "sub/notes.md", "repo/.git/worktrees/w/commondir", "repo/.git/worktrees/w/HEAD"] {
         std::fs::write(ws.join(f), "before\n").unwrap();
     }
     let w = ws.display();

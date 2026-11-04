@@ -434,8 +434,9 @@ impl Drop for Placeholders {
 /// matches inodes), so a repository whose `.git` has no `hooks` directory, or no
 /// `config`, would let the agent create one: a checkout made by go-git or
 /// libgit2, or `git init --template=`, has none. Before the carve is built, put
-/// them there: an empty `hooks` directory (git's own layout) and an empty
-/// read-only `config`. The carve then denies them like any existing handoff
+/// them there: an empty `hooks` directory (git's own layout), an empty
+/// read-only `config` and `config.worktree`, and in a linked worktree's gitdir
+/// an empty read-only `config.worktree` and `commondir`. The carve then denies them like any existing handoff
 /// path, and they are removed when the run ends if still empty. Measured before
 /// this: `mkdir .git/hooks && echo x > .git/hooks/h` succeeded, `--materialize`
 /// included. Never through a symlinked component; fails closed.
@@ -446,16 +447,23 @@ fn create_git_placeholders(policy: &Policy) -> Result<Placeholders, String> {
     let mut made = Placeholders::default();
     for rule in policy.trust_handoff_rules() {
         let p = tartaros_core::resolve_best_effort(&rule.path);
-        let Some(git) = p.parent() else { continue };
-        if git.file_name().is_none_or(|n| n != ".git") || !git.is_dir() || std::fs::symlink_metadata(&p).is_ok() {
+        let Some(dir) = p.parent() else { continue };
+        // In `.git` itself, or in a linked worktree's `.git/worktrees/<name>/`.
+        let in_worktree = dir.parent().is_some_and(|w| w.file_name().is_some_and(|n| n == "worktrees") && w.parent().is_some_and(|g| g.file_name().is_some_and(|n| n == ".git")));
+        if !(dir.file_name().is_some_and(|n| n == ".git") || in_worktree) || !dir.is_dir() || std::fs::symlink_metadata(&p).is_ok() {
             continue;
         }
         if !roots.iter().any(|r| p.starts_with(r)) || has_symlink_component(&p) {
             continue;
         }
-        let made_it = match p.file_name().and_then(|n| n.to_str()) {
-            Some("hooks") => std::fs::create_dir(&p),
-            Some("config") => std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p).map(|_| ()),
+        let file = || std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p).map(|_| ());
+        // Empty and read-only: git reads an empty `config` or `config.worktree` as
+        // no settings, and a real linked worktree always has its `commondir`, so
+        // one put there stands in for a gitdir that was already incomplete.
+        let made_it = match (p.file_name().and_then(|n| n.to_str()), in_worktree) {
+            (Some("hooks"), false) => std::fs::create_dir(&p),
+            (Some("config" | "config.worktree"), false) => file(),
+            (Some("config.worktree" | "commondir"), true) => file(),
             _ => continue,
         };
         match made_it {

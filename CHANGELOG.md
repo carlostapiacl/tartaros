@@ -5,6 +5,20 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **An any-depth `denyWrite` in a settings file was accepted and not held.** A
+  pattern was taken as covered by the trust-handoff set whenever it mentioned a
+  handoff name, so `<root>/**/.git/worktrees/**/commondir` and `<root>/**/.claude/**`
+  passed `explain` and the run wrote `.git/worktrees/w/commondir` and
+  `.claude/notes.md` anyway. macOS now compiles any `**` pattern to a Seatbelt
+  regex (read or write); Linux denies every existing match and refuses a pattern
+  it cannot hold (docs/limits.md). `tartaros why` answers from the pattern.
+- **A linked worktree's `config.worktree` and `commondir`, and `.git/config.worktree`,
+  are trust-handoff.** Either one points a trusted `git` in that worktree at
+  planted hooks (`core.hooksPath`, or another gitdir). Corpus:
+  `trust-handoff-worktree-commondir`, `trust-handoff-worktree-config`,
+  `trust-handoff-worktree-main-config`.
+
 ## [0.1.0-alpha.19] — 2026-11-03
 
 ### Added
