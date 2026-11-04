@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.21] — 2026-11-04
+
 ### Fixed
 - **Parallel runs stopped each other on Linux with namespaces.** The mounts are
   planned in the parent before the fork, and a target another run removed in
