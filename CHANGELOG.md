@@ -25,6 +25,12 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   delivery, and the launcher exits with the run's status. The handlers are in
   place before the agent starts (so `--isolate-pids`'s init does not die of a
   Ctrl-C meant for the agent) and gone when the run ends.
+- **A relative write from the working directory failed on Linux with
+  namespaces.** Under the bind-mount strategy (root, or a user namespace) the
+  inherited cwd pointed into the mount below the writable root's own, which the
+  read-only seal covers, so `echo x > a/f` from inside the root failed with
+  EROFS while the same write by absolute path went through. The run enters its
+  working directory again once the mounts are in place.
 - **A linked worktree's `config.worktree` and `commondir`, and `.git/config.worktree`,
   are trust-handoff.** Either one points a trusted `git` in that worktree at
   planted hooks (`core.hooksPath`, or another gitdir). Corpus:

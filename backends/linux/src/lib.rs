@@ -1039,6 +1039,12 @@ fn confined_command(
     placeholders.0.append(&mut git_placeholders.0);
     let MountPlan { pins, seal, hide, hide_files } = plan;
     let mount_ns = ns_capable || isolate_pids || isolate_network;
+    // The working directory, entered again once the mounts are in place: the
+    // inherited cwd still points into the mount that was there before, which the
+    // pins cover and the seal makes read-only, so every relative write failed with
+    // EROFS (`echo x > a/f` from the root itself; absolute paths, and a `cd` back
+    // in, worked). Built here; the pre_exec closure must not allocate.
+    let cwd_c: Option<std::ffi::CString> = std::env::current_dir().ok().and_then(|p| cstring(&p));
     // Pre-build (in the parent) everything pre_exec would otherwise allocate after
     // the fork (review #7): the cgroup.procs path as a CString, and the user-ns
     // uid/gid maps (euid/egid are preserved across fork).
@@ -1147,6 +1153,11 @@ fn confined_command(
             // POSIX shm dir is not a side channel.
             if mount_ns {
                 namespace::mount_private_shm()?;
+                // Into the working directory again, through the new mounts. A cwd
+                // the run cannot reach (hidden, gone) keeps the old one, as before.
+                if let Some(c) = &cwd_c {
+                    libc::chdir(c.as_ptr());
+                }
             }
             // Kill-switch (supervisor loss): die if our parent dies, even on a
             // SIGKILL of the supervisor that never runs destroy_cgroup.
