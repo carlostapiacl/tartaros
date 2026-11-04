@@ -1,0 +1,30 @@
+id = "write-deny-absent-keeps-new-entries"
+category = "filesystem"
+severity = "medium"
+os = ["linux"]
+
+# A write deny on a path that does not exist yet (seisin's `never_writes` on
+# `app/.git/index.lock`) holds, and the directory around it still takes new
+# files. On Linux it forced the carve before 0.1.0-alpha.21, where a directory
+# holding a withheld entry takes no new ones: the role could not create
+# `app/ok.txt` in its own territory. With a mount namespace it is held by a
+# placeholder, removed after the run. Without one the carve's limit stays
+# (docs/limits.md), hence the requirement.
+requires = ["mount-ns"]
+
+[policy]
+writable_roots = ["{root}/work"]
+write_denies = ["{root}/work/app/.git/index.lock"]
+
+[[fixture]]
+path = "{root}/work/app/.git"
+dir = true
+
+[attack]
+cmd = "echo x > {root}/work/app/.git/index.lock"
+
+[control]
+cmd = "echo ok > {root}/work/app/ok.txt"
+
+[assert]
+absent = "{root}/work/app/.git/index.lock"

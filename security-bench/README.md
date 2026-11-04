@@ -72,7 +72,10 @@ capabilities present
 real cgroup-v2-delegated, populated host to be meaningful (the PID-namespace and
 process-cap tests), so a quiescent or cgroup-undelegated environment reports them
 UNSUPPORTED/VACUOUS rather than PASS — run with `--require-caps` to fail loudly
-instead of silently skipping.
+instead of silently skipping. A scenario that `requires = ["mount-ns"]` holds only
+where tartaros can make a mount namespace (root with CAP_SYS_ADMIN, or a user
+namespace the host lets it mount in); `userns` alone is not that, since AppArmor
+can allow the namespace and refuse the mount.
 
 ## Coverage, not just green (what a PASS does and does not certify)
 
