@@ -323,22 +323,25 @@ pub(crate) fn userns_blocker_hint() -> String {
 /// placeholder another run took back. The plan is made in the parent before the
 /// fork, and runs that share a scratch root come and go in between: failing the
 /// whole spawn on it (`spawn: No such file or directory`) stopped parallel runs at
-/// random. A path that is not there has nothing to hide or pin, the same as one
-/// absent when the plan was made; any other error still fails closed. ENOTDIR is
-/// the same race one level up: a component of the path is a file now.
+/// random. That attempt now fails with `MOUNT_TARGET_VANISHED` and the parent
+/// plans the run again (`spawn_confined`), from the tree as it is then. ENOTDIR
+/// is the same race one level up: a component of the path is a file now, or the
+/// target itself is no longer a directory.
 ///
-/// A read-only bind is not skipped: the path would then be creatable under the
-/// whole-root grant. `setup_ro_binds` fails with `BIND_TARGET_VANISHED` and the
-/// parent plans the run again (`spawn_confined`), which holds the now-absent
-/// path with a placeholder.
+/// Nothing is skipped: a vanished bind would leave its path creatable under the
+/// whole-root grant, a vanished pin would leave the directory around a protected
+/// path renameable once it is back, and a read-denied directory replaced by a
+/// unix socket is not "gone" at all (ENOTDIR on the tmpfs) but still has to be
+/// covered, which the next plan does as a file.
 fn vanished() -> bool {
     matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ENOENT) | Some(libc::ENOTDIR))
 }
 
-/// The errno a child reports when a read-only bind target was gone at mount
-/// time (see `vanished`). ESTALE, because nothing else in the child's setup
-/// returns it, so the parent can tell this race from any other spawn failure.
-pub(crate) const BIND_TARGET_VANISHED: i32 = libc::ESTALE;
+/// What a child reports when a mount target was gone at mount time (see
+/// `vanished`). Not an errno the kernel has: std hands the child's raw value to
+/// the parent unchanged, so the parent can tell this race from any real spawn
+/// failure (an ESTALE from NFS, say), which keeps its own error.
+pub(crate) const MOUNT_TARGET_VANISHED: i32 = 0x5441_5254;
 
 /// Protect the trust-handoff set with READ-ONLY bind mounts instead of carving
 /// it out of the Landlock write grant. This lets the whole workspace be granted
@@ -354,7 +357,7 @@ pub(crate) const BIND_TARGET_VANISHED: i32 = libc::ESTALE;
 /// `need_unshare` is true when no mount namespace exists yet (no `--isolate-pids`);
 /// we create a private one here. Fails closed: any mount error aborts the launch,
 /// so the workspace is never left writable with the handoff unprotected. A target
-/// that vanished is reported as `BIND_TARGET_VANISHED` so the run is planned again.
+/// that vanished is reported as `MOUNT_TARGET_VANISHED` so the run is planned again.
 ///
 /// The caller must already hold CAP_SYS_ADMIN — real root, or a user namespace
 /// entered up front (see `enter_user_namespace`). Entering the user namespace is
@@ -377,7 +380,7 @@ pub(crate) unsafe fn setup_ro_binds(
         ) != 0
         {
             if vanished() {
-                return Err(std::io::Error::from_raw_os_error(BIND_TARGET_VANISHED));
+                return Err(std::io::Error::from_raw_os_error(MOUNT_TARGET_VANISHED));
             }
             return Err(std::io::Error::last_os_error());
         }
@@ -414,7 +417,7 @@ pub(crate) unsafe fn pin_mounts(paths: &[std::ffi::CString]) -> std::io::Result<
         ) != 0
         {
             if vanished() {
-                continue;
+                return Err(std::io::Error::from_raw_os_error(MOUNT_TARGET_VANISHED));
             }
             return Err(std::io::Error::last_os_error());
         }
@@ -474,7 +477,7 @@ pub(crate) unsafe fn hide_dirs(dirs: &[std::ffi::CString]) -> std::io::Result<()
         ) != 0
         {
             if vanished() {
-                continue;
+                return Err(std::io::Error::from_raw_os_error(MOUNT_TARGET_VANISHED));
             }
             return Err(std::io::Error::last_os_error());
         }
@@ -492,7 +495,7 @@ pub(crate) unsafe fn hide_files(files: &[std::ffi::CString]) -> std::io::Result<
     for f in files {
         if libc::mount(null.as_ptr(), f.as_ptr(), std::ptr::null(), libc::MS_BIND, std::ptr::null()) != 0 {
             if vanished() {
-                continue;
+                return Err(std::io::Error::from_raw_os_error(MOUNT_TARGET_VANISHED));
             }
             return Err(std::io::Error::last_os_error());
         }

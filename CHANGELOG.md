@@ -7,18 +7,25 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 - **Parallel runs on Linux: a protected path removed while a run was being set
-  up failed it.** 0.1.0-alpha.21 skipped a vanished hide or pin, and a vanished
-  bind only if it was another run's placeholder. Measured in a parallel seisin
-  suite: another test's repo in a shared `/tmp` (`.git/config`,
-  `.claude/settings.json`), removed between plan and fork, and a path whose
-  directory had become a file (ENOTDIR), still failed the spawn and the agent
-  printed nothing. Such a run is now planned again: the new plan sees the path
-  absent and holds it with a placeholder, as for any path missing at plan time.
-  The same holds when the path goes while its placeholder is being made
-  (`handoff placeholder ...: No such file or directory`, measured once too).
-  A protected path is never skipped (the agent could then create it). The plans
-  are 20, 100 and 400 ms apart, since what removes it is usually a whole tree
-  going; a path still vanishing after four fails the run closed, named.
+  up failed it.** Measured in parallel seisin suites: another test's repo in a
+  shared `/tmp` (`.git/config`, `.claude/settings.json`) removed between plan
+  and fork, a path whose directory had become a file (ENOTDIR), and a directory
+  that went while a placeholder was made in it (`handoff placeholder ...: No
+  such file or directory`) failed the spawn, and the agent printed nothing.
+  Such a run is now planned again from the tree as it then is: a protected
+  path now absent is held with a placeholder, as any path missing at plan time;
+  one whose whole repo went is what a repo created during the run is
+  (docs/limits.md). The plans are 20, 100 and 400 ms apart, since what removes
+  it is usually a whole tree going; a path still vanishing after four fails the
+  run closed, named.
+- **A vanished mount target is no longer skipped.** 0.1.0-alpha.21 skipped a
+  hide or pin whose target was gone, and a read-only bind if it looked like
+  another run's placeholder. A skipped bind left the path creatable by the
+  agent; a skipped pin, the directory around a protected path renameable once
+  it came back; and a read-denied directory replaced by a unix socket fails its
+  hide with ENOTDIR, so skipping it let the agent connect. Each now takes the
+  new plan above. The child reports the race with a value of its own, so a real
+  spawn error (an ESTALE from NFS, say) keeps its message.
 
 ## [0.1.0-alpha.22] — 2026-11-04
 

@@ -206,7 +206,7 @@ fn run_impl(policy: &Policy, command: &[String]) -> Result<RunOutcome, RunError>
 }
 
 /// The pauses before each new plan when a protected path vanished between the
-/// plan and its mount (`namespace::BIND_TARGET_VANISHED`): one attempt more than
+/// plan and its mount (`namespace::MOUNT_TARGET_VANISHED`): one attempt more than
 /// pauses. Growing, because what removes it is usually a whole tree going
 /// (`rm -rf` of another run's repo), and each plan made while it goes picks a
 /// file it has not reached yet: three plans back to back fell inside one removal
@@ -224,13 +224,16 @@ thread_local! {
         std::cell::RefCell::new(None);
 }
 
-/// Plan the run and spawn it. A protected path that is gone by the time the
-/// child binds it read-only fails that attempt closed (skipping it would let the
-/// agent create it under the whole-root grant), and the run is planned again: the
-/// new plan sees the path absent and holds it with a placeholder, as it does for
-/// any path missing at plan time. Runs that share a scratch root remove each
-/// other's repos while one is being set up; this is that race, measured in a
-/// parallel seisin suite. The failed attempt's placeholders are removed with it.
+/// Plan the run and spawn it. A mount target that is gone by the time the child
+/// mounts it (a read-only bind, a pin, a hidden read-denied path) fails that
+/// attempt closed, and the run is planned again from the tree as it is then: a
+/// protected path now absent is held with a placeholder, as any path missing at
+/// plan time is, and one whose whole repo went is what any repo created during a
+/// run is (docs/limits.md). Skipping it instead would let the agent create a
+/// protected path under the whole-root grant, or reach a socket that replaced a
+/// hidden directory. Runs that share a scratch root remove each other's repos
+/// while one is being set up; this is that race, measured in parallel seisin
+/// suites. A failed attempt's placeholders are removed with it.
 #[cfg(target_os = "linux")]
 fn spawn_confined(
     policy: &Policy,
@@ -243,7 +246,7 @@ fn spawn_confined(
             Err(e) if e.reason.starts_with(PLAN_VANISHED) => Err(e.reason[PLAN_VANISHED.len()..].to_string()),
             other => Ok(other?),
         };
-        let (mut cmd, placeholders, bind_targets) = match planned {
+        let (mut cmd, placeholders, mount_targets) = match planned {
             Ok(p) => p,
             Err(reason) => {
                 let Some(pause) = VANISHED_PAUSES_MS.get(attempt - 1) else {
@@ -262,9 +265,9 @@ fn spawn_confined(
         });
         match spawn_forwarding(&mut cmd) {
             Ok(child) => return Ok((child, placeholders)),
-            Err(e) if e.raw_os_error() == Some(namespace::BIND_TARGET_VANISHED) => {
+            Err(e) if e.raw_os_error() == Some(namespace::MOUNT_TARGET_VANISHED) => {
                 // Looked at before the placeholders go, which are bind targets too.
-                let gone = bind_targets.iter().find(|p| std::fs::symlink_metadata(p).is_err()).cloned();
+                let gone = mount_targets.iter().find(|p| std::fs::symlink_metadata(p).is_err()).cloned();
                 drop(placeholders);
                 let Some(pause) = VANISHED_PAUSES_MS.get(attempt - 1) else {
                     let what = gone.map_or_else(|| "a protected path".to_string(), |p| p.display().to_string());
@@ -561,7 +564,7 @@ impl Drop for Placeholders {
 /// included. Never through a symlinked component; fails closed.
 /// Marks a plan that failed because a path it was holding vanished meanwhile
 /// (its directory gone, or a file now), so `spawn_confined` plans again rather
-/// than fail the run: the race of `namespace::BIND_TARGET_VANISHED`, met one
+/// than fail the run: the race of `namespace::MOUNT_TARGET_VANISHED`, met one
 /// step earlier, while a placeholder is put in place. Never shown: the reason
 /// is stripped of it before it leaves `spawn_confined`.
 #[cfg(target_os = "linux")]
@@ -816,6 +819,13 @@ fn mount_plan(policy: &Policy, binds: &[PathBuf]) -> MountPlan {
     for d in holding {
         hide_beside(&d, &kept, &mut hide, &mut hide_files);
     }
+    // A read deny that is itself a unix socket or a fifo (one that replaced a
+    // denied directory, say): Landlock does not mediate connect() or a fifo's
+    // peer, so it is covered like a socket in a denied directory.
+    hide_files.extend(policy.read_denies.iter().map(|d| resolve_best_effort(d)).filter(|d| {
+        use std::os::unix::fs::FileTypeExt;
+        std::fs::symlink_metadata(d).is_ok_and(|m| m.file_type().is_socket() || m.file_type().is_fifo())
+    }));
     hide.sort();
     hide.dedup();
     hide_files.sort();
@@ -1216,9 +1226,17 @@ fn confined_command(
     // must not allocate/stat). Empty unless we chose the bind-mount strategy.
     let robind_cstrings: Vec<std::ffi::CString> =
         robind_paths.iter().chain(placeholders.paths()).filter_map(|p| cstring(p)).collect();
-    // The same targets, for the parent to name one that vanished (spawn_confined).
-    let bind_targets: Vec<PathBuf> =
-        robind_paths.iter().chain(placeholders.paths()).filter(|p| cstring(p).is_some()).cloned().collect();
+    // Every mount target, for the parent to name one that vanished (spawn_confined).
+    let mount_targets: Vec<PathBuf> = {
+        use std::os::unix::ffi::OsStrExt;
+        robind_cstrings
+            .iter()
+            .chain(&plan.pins)
+            .chain(&plan.hide)
+            .chain(&plan.hide_files)
+            .map(|c| PathBuf::from(std::ffi::OsStr::from_bytes(c.as_bytes())))
+            .collect()
+    };
     // The carve's git placeholders are denied by Landlock, never bound: they go
     // back with the others only to be removed when the run ends.
     let mut placeholders = placeholders;
@@ -1406,7 +1424,7 @@ fn confined_command(
             Ok(())
         });
     }
-    Ok((cmd, placeholders, bind_targets))
+    Ok((cmd, placeholders, mount_targets))
 }
 
 /// Apply one `setrlimit` (cur=max=limit) when a limit is set. Returns an io error
@@ -1733,6 +1751,73 @@ mod tests {
         assert!(!policy.linux_write_allowlist_except(&on_readonly_mount).contains(&root));
     }
 
+    /// Wait for a child of `spawn_confined` and put the signal handlers its spawn
+    /// installed back, as `supervise` does after a run.
+    #[cfg(target_os = "linux")]
+    fn reap(child: &mut std::process::Child) -> std::process::ExitStatus {
+        let status = child.wait().unwrap();
+        tartaros_core::signals::restore();
+        status
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_read_denied_dir_removed_before_its_hide_is_planned_again() {
+        let root = scratch("vanish-hide");
+        let home = scratch("vanish-hide-home");
+        let vault = home.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let policy = Policy { writable_roots: vec![root.clone()], read_denies: vec![vault.clone()], ..Default::default() };
+        if !namespace::mount_ns_capable() {
+            eprintln!("skipped: no mount namespace on this host");
+            return;
+        }
+        let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = attempts.clone();
+        let gone = vault.clone();
+        let (mut child, _placeholders) = with_between_plan_and_spawn(
+            move |attempt| {
+                seen.set(attempt);
+                if attempt == 1 {
+                    std::fs::remove_dir(&gone).unwrap();
+                }
+            },
+            || spawn_confined(&policy, &["/bin/true".to_string()], None).expect("planned again and spawned"),
+        );
+        assert!(reap(&mut child).success());
+        assert_eq!(attempts.get(), 2, "the vanished hide took a new plan");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_socket_that_replaced_a_read_denied_dir_is_covered() {
+        // Its tmpfs fails with ENOTDIR: skipping that left the socket reachable.
+        let root = scratch("socket-hide");
+        let home = scratch("socket-hide-home");
+        let vault = home.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let policy = Policy { writable_roots: vec![root.clone()], read_denies: vec![vault.clone()], ..Default::default() };
+        if !namespace::mount_ns_capable() {
+            eprintln!("skipped: no mount namespace on this host");
+            return;
+        }
+        let swapped = vault.clone();
+        let listener = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let keep = listener.clone();
+        let cmd = vec!["/bin/sh".to_string(), "-c".to_string(), format!("test -S '{}'", vault.display())];
+        let (mut child, _placeholders) = with_between_plan_and_spawn(
+            move |attempt| {
+                if attempt == 1 {
+                    std::fs::remove_dir(&swapped).unwrap();
+                    *keep.borrow_mut() = Some(std::os::unix::net::UnixListener::bind(&swapped).unwrap());
+                }
+            },
+            || spawn_confined(&policy, &cmd, None).expect("planned again and spawned"),
+        );
+        assert!(!reap(&mut child).success(), "the socket is still a socket inside the run");
+        drop(listener);
+    }
+
     #[cfg(target_os = "linux")]
     fn with_between_plan_and_spawn<T>(f: impl FnMut(usize) + 'static, body: impl FnOnce() -> T) -> T {
         BETWEEN_PLAN_AND_SPAWN.with(|h| *h.borrow_mut() = Some(Box::new(f)));
@@ -1775,7 +1860,7 @@ mod tests {
             },
             || spawn_confined(&policy, &cmd, None).expect("planned again and spawned"),
         );
-        child.wait().unwrap();
+        reap(&mut child);
         assert_eq!(attempts.get(), 2, "one more plan, not more");
         assert_ne!(std::fs::read_to_string(&deny).unwrap_or_default(), "planted\n", "the agent recreated the protected file");
         assert_eq!(std::fs::read_to_string(root.join("new")).unwrap(), "ok\n", "the root still takes new entries");
@@ -1811,7 +1896,7 @@ mod tests {
         BEFORE_HANDOFF_PLACEHOLDER.with(|h| *h.borrow_mut() = None);
         assert!(removed.get(), "the hook ran: a placeholder was being made in the repo");
         let (mut child, _placeholders) = got.expect("planned again and spawned");
-        assert!(child.wait().unwrap().success());
+        assert!(reap(&mut child).success());
     }
 
     #[cfg(target_os = "linux")]
