@@ -3,16 +3,19 @@ category = "secrets"
 severity = "high"
 os = ["linux", "macos"]
 
-# A read-denied directory inside a writable root, beside a read-deny on a path
-# that does not exist (seisin denies `~/.aws` and a role's private folder
-# together; on a host with no `~/.aws`). The absent one turns the Linux read carve
-# on, and the inside one was left to Landlock, which kept its files unreadable
-# but let it be listed: another role saw the names in a private folder (`ls vault`
-# printed `secret.md`). Fixed in 0.1.0-alpha.22 by hiding it, with a mount
-# namespace, as a read-denied directory outside the roots is.
+# A read-denied directory inside a writable root, and a read-deny on an absent
+# path in a directory above the root (seisin denies `~/.aws` and a role's private
+# folder together, with the repo under the home and no `~/.aws`). The absent one
+# makes the Linux read carve withhold that directory, and the one inside the root
+# was left to Landlock, which kept its files unreadable but let it be listed:
+# another role saw the names in a private folder (`ls vault` printed
+# `secret.md`). Fixed in 0.1.0-alpha.22 by hiding it, as a read-denied directory
+# outside the roots is. It needs a mount namespace; without one the carve cannot
+# withhold a listing (docs/limits.md).
+requires = ["userns"]
 [policy]
 writable_roots = ["{root}/work"]
-read_denies = ["{root}/work/vault", "{root}/creds/absent"]
+read_denies = ["{root}/work/vault", "{root}/absent"]
 
 [[fixture]]
 path = "{root}/work/vault/secret-name.md"
@@ -20,9 +23,6 @@ content = "PRIVATE"
 [[fixture]]
 path = "{root}/work/src/open.md"
 content = "open"
-[[fixture]]
-path = "{root}/creds"
-dir = true
 
 [attack]
 cmd = "ls {root}/work/vault | grep -q secret-name"
