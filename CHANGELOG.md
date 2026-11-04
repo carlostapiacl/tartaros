@@ -13,6 +13,11 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   `.claude/notes.md` anyway. macOS now compiles any `**` pattern to a Seatbelt
   regex (read or write); Linux denies every existing match and refuses a pattern
   it cannot hold (docs/limits.md). `tartaros why` answers from the pattern.
+- **Ctrl-C reaches the agent.** The run has a process group of its own, so a
+  SIGINT to the launcher's group (a terminal's Ctrl-C) killed the launcher and
+  the run with it, even an agent that catches SIGINT to interrupt rather than quit.
+  SIGINT, SIGTERM, SIGHUP and SIGQUIT are now passed on to the run, and the
+  launcher exits with the run's status.
 - **A linked worktree's `config.worktree` and `commondir`, and `.git/config.worktree`,
   are trust-handoff.** Either one points a trusted `git` in that worktree at
   planted hooks (`core.hooksPath`, or another gitdir). Corpus:

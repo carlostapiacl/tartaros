@@ -1228,6 +1228,36 @@ fn set_rlimit(resource: libc::c_int, limit: Option<u64>) -> std::io::Result<()> 
     Ok(())
 }
 
+/// Signals the launcher passes on to the run instead of dying of them: a
+/// terminal's Ctrl-C (SIGINT) and Ctrl-\ (SIGQUIT), a hangup, a parent's
+/// SIGTERM. The run has a process group of its own (so teardown reaps it whole),
+/// so one sent to the launcher's group never reached it: Ctrl-C killed the
+/// launcher, and the agent with it, even one that catches SIGINT to interrupt
+/// rather than quit. Measured with a node agent counting SIGINTs: none arrived,
+/// the run ended by SIGINT. The handler only records; `supervise` forwards.
+#[cfg(target_os = "linux")]
+static PENDING_SIGNALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+const FORWARDED_SIGNALS: [libc::c_int; 4] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
+
+#[cfg(target_os = "linux")]
+extern "C" fn note_signal(sig: libc::c_int) {
+    PENDING_SIGNALS.fetch_or(1 << sig, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(target_os = "linux")]
+fn forward_signals() {
+    for s in FORWARDED_SIGNALS {
+        unsafe { libc::signal(s, note_signal as *const () as libc::sighandler_t) };
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn pending_signals() -> impl Iterator<Item = libc::c_int> {
+    let m = PENDING_SIGNALS.swap(0, std::sync::atomic::Ordering::SeqCst);
+    FORWARDED_SIGNALS.into_iter().filter(move |s| m & (1 << s) != 0)
+}
+
 /// Supervise a confined child (P1-B): enforce the wall-clock timeout, then reap
 /// the whole process group so no descendant is left behind.
 #[cfg(target_os = "linux")]
@@ -1242,6 +1272,7 @@ fn supervise(
     let pid = child.id() as i32;
     let start = Instant::now();
     let kill_group = |sig: i32| unsafe { libc::kill(-pid, sig); };
+    forward_signals();
     // Kill the whole run. When a cgroup exists, `cgroup.kill` SIGKILLs every
     // member atomically regardless of process group or PID namespace — essential
     // when --isolate-pids makes the agent PID 1 of its namespace, which is immune
@@ -1275,6 +1306,9 @@ fn supervise(
                 return exit_code_of(status);
             }
             Ok(None) => {
+                for sig in pending_signals() {
+                    kill_group(sig);
+                }
                 if let Some(t) = timeout {
                     if start.elapsed() >= t {
                         kill_all(libc::SIGTERM);
