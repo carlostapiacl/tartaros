@@ -382,9 +382,9 @@ fn carve_because(policy: &Policy) -> String {
     let absent_inside = absent_write_denies_in_roots(policy);
     if !namespace::mount_ns_capable() {
         format!("no mount namespace on this host: {}", namespace::userns_blocker_hint())
-    } else if !absent_inside.is_empty() {
+    } else if !absent_inside.is_empty() && !absent_denies_placeable(&absent_inside, policy) {
         format!(
-            "a write deny inside a writable root does not exist yet ({}), and a read-only bind mount needs something to bind",
+            "a write deny inside a writable root does not exist yet ({}), and no placeholder can be put there to bind",
             absent_inside[0].display()
         )
     } else {
@@ -1631,9 +1631,10 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn an_absent_deny_inside_a_root_is_said_whatever_the_host() {
-        // The carve withholds the root for it on every host: no bind mount can
-        // cover a path that is not there. The warning used to skip it.
+    fn an_absent_deny_inside_a_root_is_said_exactly_when_the_carve_is_used() {
+        // With a mount namespace it is held by a placeholder and the root keeps
+        // its new entries (0.1.0-alpha.21); without one the carve withholds the
+        // root for it, and the warning says so.
         let root = scratch("said-absent");
         let policy = Policy {
             writable_roots: vec![root.clone()],
@@ -1641,9 +1642,14 @@ mod tests {
             ..Default::default()
         };
         let got = roots_without_new_entries(&policy);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].root, root);
-        assert_eq!(got[0].denies, vec![root.join("not-yet")]);
+        if namespace::mount_ns_capable() {
+            assert!(uses_bind_mounts(&policy));
+            assert!(got.is_empty(), "{:?}", got.iter().map(|g| &g.root).collect::<Vec<_>>());
+        } else {
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].root, root);
+            assert_eq!(got[0].denies, vec![root.join("not-yet")]);
+        }
         assert!(!policy.linux_write_allowlist_except(&on_readonly_mount).contains(&root));
     }
 
