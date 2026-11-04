@@ -181,6 +181,12 @@ than you asked for.
   path and has no such cost. While the run lasts the placeholder is visible to
   other processes on the host, as sandbox-runtime's is.
 
+- **A read-denied directory inside a writable root, without a mount namespace
+  (Linux).** Its files are unreadable, but when the read carve is on it can be
+  listed: Landlock's right to read a directory comes down from the root above it,
+  and there is no rule that grants a directory minus one entry. With a mount
+  namespace it is hidden (since 0.1.0-alpha.22). macOS denies the listing.
+
 - **A read-deny on a path that does not exist yet (Linux).** The same inode limit:
   the nearest existing ancestor is withheld from the read grant instead. Its
   entries at launch stay readable and it can still be listed, but a file that

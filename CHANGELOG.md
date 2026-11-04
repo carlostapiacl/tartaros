@@ -5,6 +5,16 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **A read-denied directory inside a writable root could be listed on Linux.**
+  Its files stayed unreadable, but once the read carve was on (a read-deny on an
+  absent path above the root: seisin's `~/.aws` on a host without one, with the
+  repo under the home) the right to read a directory came down from the root, and
+  `ls` showed the names in another role's private folder. With a mount namespace
+  it is now hidden like a read-denied directory outside the roots. Corpus:
+  `read-deny-dir-listing-inside-root`. Without one the limit stays
+  (docs/limits.md).
+
 ## [0.1.0-alpha.21] — 2026-11-04
 
 ### Fixed
