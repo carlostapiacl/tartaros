@@ -647,14 +647,16 @@ impl Policy {
     /// link, so the resolved target (`dotfiles/claude/commands`, with no handoff
     /// name in its real path) would be writable. These are found by a BOUNDED scan
     /// that inspects only directory-entry names and types (no per-path stat storm)
-    /// and resolves just the matching symlinks; it descends at most `cap`
-    /// directories, then stops and reports `capped = true`. The non-symlinked
-    /// surfaces stay fully covered by the patterns regardless, so a hit on the cap
-    /// (a huge writable root like a cache) degrades only this symlink edge, with a
-    /// warning — it never hangs and never refuses a large root.
-    pub fn symlinked_handoff_denies(&self, cap: usize) -> (Vec<PathBuf>, bool) {
+    /// and resolves just the matching symlinks. It inspects at most `cap` directories
+    /// over all the roots: first the roots inside `project`, then the others, one
+    /// directory from each in turn, so a huge cache listed first does not leave a small
+    /// root unread. It returns the denies and the roots it did not finish. The
+    /// non-symlinked surfaces stay fully covered by the patterns regardless, so an
+    /// unfinished root (a huge writable root like a cache) degrades only this symlink
+    /// edge, with a warning — it never hangs and never refuses a large root.
+    pub fn symlinked_handoff_denies(&self, cap: usize, project: Option<&Path>) -> (Vec<PathBuf>, Vec<PathBuf>) {
         if !self.trust_handoff_on() {
-            return (Vec::new(), false);
+            return (Vec::new(), Vec::new());
         }
         // Split each handoff name into (first segment, remainder) once.
         let splits: Vec<(&str, Option<&str>)> = HANDOFF_CONFIG_NAMES
@@ -664,54 +666,69 @@ impl Policy {
                 None => (*n, None),
             })
             .collect();
-        let mut out: Vec<PathBuf> = Vec::new();
-        let mut seen = 0usize;
-        let mut capped = false;
+        // The same directory reached twice (/var/folders and /private/var/folders)
+        // would spend its share twice.
+        let mut roots: Vec<PathBuf> = Vec::new();
         for root in &self.writable_roots {
-            let mut stack = vec![resolve_best_effort(root)];
-            while let Some(dir) = stack.pop() {
-                seen += 1;
-                if seen > cap {
-                    capped = true;
-                    break;
-                }
-                let entries = match std::fs::read_dir(&dir) {
-                    Ok(e) => e,
-                    Err(_) => continue,
-                };
-                for entry in entries.flatten() {
-                    let ft = match entry.file_type() {
-                        Ok(t) => t,
+            let root = resolve_best_effort(root);
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+        let project = project.map(resolve_best_effort);
+        let (inside, outside): (Vec<PathBuf>, Vec<PathBuf>) = roots
+            .into_iter()
+            .partition(|r| project.as_ref().is_some_and(|p| r.starts_with(p)));
+
+        let mut out: Vec<PathBuf> = Vec::new();
+        let mut unfinished: Vec<PathBuf> = Vec::new();
+        let mut budget = cap;
+        for group in [inside, outside] {
+            let mut walks: Vec<(PathBuf, Vec<PathBuf>)> =
+                group.into_iter().map(|r| (r.clone(), vec![r])).collect();
+            while budget > 0 && walks.iter().any(|(_, stack)| !stack.is_empty()) {
+                for (_, stack) in &mut walks {
+                    if budget == 0 {
+                        break;
+                    }
+                    let Some(dir) = stack.pop() else { continue };
+                    budget -= 1;
+                    let entries = match std::fs::read_dir(&dir) {
+                        Ok(e) => e,
                         Err(_) => continue,
                     };
-                    if ft.is_symlink() {
-                        let name = entry.file_name();
-                        let name = name.to_string_lossy();
-                        for (first, rest) in &splits {
-                            if name == *first {
-                                let target = resolve_best_effort(&entry.path());
-                                out.push(match rest {
-                                    Some(r) => target.join(r),
-                                    None => target,
-                                });
+                    for entry in entries.flatten() {
+                        let ft = match entry.file_type() {
+                            Ok(t) => t,
+                            Err(_) => continue,
+                        };
+                        if ft.is_symlink() {
+                            let name = entry.file_name();
+                            let name = name.to_string_lossy();
+                            for (first, rest) in &splits {
+                                if name == *first {
+                                    let target = resolve_best_effort(&entry.path());
+                                    out.push(match rest {
+                                        Some(r) => target.join(r),
+                                        None => target,
+                                    });
+                                }
                             }
-                        }
-                    } else if ft.is_dir() {
-                        // Do not descend into a real `.git` dir (internals handled
-                        // by the patterns) — and never follow a symlinked dir.
-                        if entry.file_name() != ".git" {
-                            stack.push(entry.path());
+                        } else if ft.is_dir() {
+                            // Do not descend into a real `.git` dir (internals handled
+                            // by the patterns) — and never follow a symlinked dir.
+                            if entry.file_name() != ".git" {
+                                stack.push(entry.path());
+                            }
                         }
                     }
                 }
             }
-            if capped {
-                break;
-            }
+            unfinished.extend(walks.into_iter().filter(|(_, stack)| !stack.is_empty()).map(|(root, _)| root));
         }
         out.sort();
         out.dedup();
-        (out, capped)
+        (out, unfinished)
     }
 
     /// Resolved handoff surfaces (`hooks/`, `config`, submodule `modules/`) of a
@@ -1837,17 +1854,53 @@ mod tests {
         std::os::unix::fs::symlink("../dotfiles/claude", root.join("proj/.claude")).unwrap();
 
         let policy = Policy { writable_roots: vec![root.clone()], ..Default::default() };
-        let (denies, capped) = policy.symlinked_handoff_denies(10_000);
-        assert!(!capped, "a tiny tree must not hit the cap");
+        let (denies, unfinished) = policy.symlinked_handoff_denies(10_000, None);
+        assert!(unfinished.is_empty(), "a tiny tree must not hit the cap");
         let resolved_commands = resolve_best_effort(&root.join("dotfiles/claude/commands"));
         assert!(denies.iter().any(|p| p == &resolved_commands),
             "the symlink's resolved .claude/commands target must be denied");
         // A plain sub-directory is never pinned by this scan.
         assert!(!denies.iter().any(|p| p == &root.join("proj/src")));
 
-        // The cap is honoured: cap 0 reports capped and resolves nothing.
-        let (empty, capped0) = policy.symlinked_handoff_denies(0);
-        assert!(capped0 && empty.is_empty());
+        // The cap is honoured: cap 0 names the root and resolves nothing.
+        let (empty, unfinished0) = policy.symlinked_handoff_denies(0, None);
+        assert!(empty.is_empty());
+        assert_eq!(unfinished0, vec![resolve_best_effort(&root)]);
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn symlink_scan_reads_the_project_first_and_then_takes_turns() {
+        let tmp = std::env::temp_dir().join(format!("sbx-slt-{}", std::process::id()));
+        // A cache with more directories than the budget, listed first.
+        for i in 0..40 {
+            fs::create_dir_all(tmp.join(format!("cache/d{i}"))).unwrap();
+        }
+        fs::create_dir_all(tmp.join("small/inner")).unwrap();
+        fs::create_dir_all(tmp.join("repo/own/inner")).unwrap();
+        fs::create_dir_all(tmp.join("dotfiles/a")).unwrap();
+        fs::create_dir_all(tmp.join("dotfiles/b")).unwrap();
+        let base = tmp.canonicalize().unwrap();
+        std::os::unix::fs::symlink(base.join("dotfiles/a"), base.join("repo/own/inner/.claude")).unwrap();
+        std::os::unix::fs::symlink(base.join("dotfiles/b"), base.join("small/inner/.claude")).unwrap();
+
+        let policy = Policy {
+            writable_roots: vec![base.join("cache"), base.join("small"), base.join("repo/own")],
+            ..Default::default()
+        };
+        // Two directories for the project, and the rest split between two roots.
+        let (denies, unfinished) = policy.symlinked_handoff_denies(8, Some(&base.join("repo")));
+        assert!(denies.iter().any(|p| p.starts_with(base.join("dotfiles/a"))), "the project's own");
+        assert!(denies.iter().any(|p| p.starts_with(base.join("dotfiles/b"))), "the small root after the cache");
+        assert_eq!(unfinished, vec![base.join("cache")]);
+
+        // A root reached by two spellings is walked, and reported, once.
+        let twice = Policy {
+            writable_roots: vec![base.join("cache"), base.join("repo/../cache")],
+            ..Default::default()
+        };
+        assert_eq!(twice.symlinked_handoff_denies(1, None).1, vec![base.join("cache")]);
 
         fs::remove_dir_all(&tmp).ok();
     }

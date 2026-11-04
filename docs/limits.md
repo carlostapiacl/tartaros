@@ -62,11 +62,12 @@ than you asked for.
 - **Symlinked handoff dirs in a very large writable root (macOS).** A handoff dir
   reached through a symlink (`proj/.claude -> dotfiles/claude`) canonicalises to a
   target the pattern rules don't name, so it is resolved by a bounded scan. The
-  scan stops after 10,000 directories per build so a huge writable root (a 20 GB
-  cache, `node_modules/`) never stalls profile generation; past that it warns and
-  leaves only the pattern protection (which always covers the non-symlinked
-  surfaces). A symlinked handoff dir buried deeper than the cap in such a root is
-  not auto-resolved — narrow the writable root to pin it. Cost is otherwise
+  scan reads 10,000 directories per build, over all the writable roots, so a huge
+  one (a 20 GB cache, `node_modules/`) never stalls profile generation. The roots
+  inside the working directory go first, then the others in turn. A root it does not
+  finish is named in a warning and keeps only the pattern protection (which always
+  covers the non-symlinked surfaces). A symlinked handoff dir left unread in such a
+  root is not auto-resolved — narrow the writable root to pin it. Cost is otherwise
   independent of the tree (named surfaces are pure pattern rules).
 - **AF_UNIX pathname sockets are not path-filtered on Linux.** Landlock does not
   govern `connect()` to a unix socket by path, and the seccomp AF_UNIX deny is
