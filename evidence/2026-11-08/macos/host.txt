@@ -1,0 +1,4 @@
+ProductName:		macOS
+ProductVersion:		15.7.9
+BuildVersion:		24G830
+Darwin 24.6.0 x86_64
