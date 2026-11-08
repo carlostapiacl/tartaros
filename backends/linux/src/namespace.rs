@@ -291,10 +291,11 @@ pub(crate) fn userns_blocker_hint() -> String {
     if knob("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").as_deref() == Some("1") {
         return "unprivileged user namespaces are restricted by AppArmor \
             (kernel.apparmor_restrict_unprivileged_userns=1, the Ubuntu 23.10+ default). \
-            Run tartaros as root, or allow it with `sudo sysctl -w \
-            kernel.apparmor_restrict_unprivileged_userns=0`, or install an AppArmor \
-            profile granting userns to this binary, or run inside a container that \
-            provides CAP_SYS_ADMIN."
+            Grant them to this binary alone with `sudo tartaros setup apparmor` (it \
+            must be a copy only root can change, e.g. in /usr/local/bin), or run \
+            tartaros as root, or lift the restriction host-wide with `sudo sysctl -w \
+            kernel.apparmor_restrict_unprivileged_userns=0`, or run inside a container \
+            that provides CAP_SYS_ADMIN."
             .into();
     }
     if knob("/proc/sys/kernel/unprivileged_userns_clone").as_deref() == Some("0") {

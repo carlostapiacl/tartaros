@@ -5,6 +5,20 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **`tartaros setup apparmor`: the full Linux mode on a stock Ubuntu.** Ubuntu
+  23.10 and later keep a user without root from making user namespaces, so
+  tartaros fell back to the Landlock carve; measured on Ubuntu 24.04 as a user,
+  the agent could not create a file at the top of a git repository and `git add`
+  and `git commit` failed on `.git/index.lock`. The command writes
+  `/etc/apparmor.d/tartaros`, which grants user namespaces to this binary and
+  nothing else (the shape Ubuntu ships for `lxc-usernsexec`), and loads it.
+  It refuses a binary anyone but root can change, a path AppArmor would have to
+  quote, and an existing file it did not write; `--print` shows the profile. With
+  it, on the same host and as the same user: namespaces on, files at the top of
+  the repository and `git commit` work, and the agent is still refused a user
+  namespace of its own. The message given when namespaces are unavailable names it.
+
 ### Fixed
 - **Linux: the agent saw the placeholders and committed them.** With a mount
   namespace, an absent top-level handoff name (`.mcp.json`, `.claude`, `.bashrc`,

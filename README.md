@@ -209,6 +209,20 @@ rustup target add x86_64-unknown-linux-musl
 cargo build --release -p tartaros-cli --target x86_64-unknown-linux-musl
 ```
 
+On Ubuntu 23.10 and later, AppArmor keeps a user without root from making the
+namespaces tartaros confines with, and it falls back to a weaker mode: among other
+things the agent cannot create files at the top of a git repository, so `git add`
+and `git commit` fail. `tartaros explain` says when that is the case. To give them
+to tartaros alone, install it where only root can change it and load its profile:
+
+```
+sudo install -m755 "$(command -v tartaros)" /usr/local/bin/tartaros
+sudo /usr/local/bin/tartaros setup apparmor    # --print shows the profile first
+```
+
+It refuses a binary its user could replace (an npm prefix in your home, for
+example), since that would lift the restriction for whoever replaces it.
+
 Every flag, the TOML policy format and `explain` are documented in
 [`cli/README.md`](cli/README.md).
 

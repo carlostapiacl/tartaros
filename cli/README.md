@@ -2,7 +2,7 @@
 
 Subcommands: `run` (confine a command), `explain` (print what a policy grants,
 without running — for auditing a profile before deploying it), `why` (the rule
-that decides one access), `snapshot` and `rollback` (undo a run), `version`, `help`.
+that decides one access), `snapshot` and `rollback` (undo a run), `setup apparmor` (Linux: let this binary make user namespaces on a host that restricts them; see the main README), `version`, `help`.
 
 Run a command confined by a policy, on the OS backend (Landlock / Seatbelt).
 
