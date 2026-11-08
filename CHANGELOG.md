@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.25] — 2026-11-08
+
 ### Added
 - **`tartaros setup apparmor`: the full Linux mode on a stock Ubuntu.** Ubuntu
   23.10 and later keep a user without root from making user namespaces, so
