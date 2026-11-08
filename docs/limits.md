@@ -218,8 +218,8 @@ than you asked for.
   without user namespaces**, renaming an ancestor of a read-denied secret or of an
   explicit write-deny inside a writable root can move it out from under its carve,
   and so can moving `.git` aside; and on **macOS**, moving an entire writable root
-  into another writable root (`mv root otherRoot/x`), measured on 2026-10-15 — the
-  same move is blocked on Linux. Until each is closed with a fix and a scenario,
+  into another writable root (`mv root otherRoot/x`), measured on 2026-10-15 (the
+  same move is blocked on Linux). Until each is closed with a fix and a scenario,
   these are not claimed.
 
 ## Windows
