@@ -11,7 +11,7 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
       default, so tartaros falls back to the Landlock carve there. Measured as a
       non-root user on such a host (alpha.19 took it from 5 to 2): 2 corpus attacks get through (an ancestor
       rename around a read deny inside a root, an absent top-level `.mcp.json`)
-      and 8 legitimate controls break. `tartaros setup apparmor` (unreleased)
+      and 8 legitimate controls break. `tartaros setup apparmor` (0.1.0-alpha.25)
       takes such a host to the full mode with one root command. What is left is
       the host where that is not an option; closing the two with the carve alone
       withholds whole roots and breaks more controls, so it needs another
@@ -60,7 +60,7 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
       the root (a new `sub/.gitmodules`, `.claude/skills/` when only `.claude/`
       exists) and a repository the agent creates during the run.
 - [ ] **Create-at-root on hosts with no user namespaces at all.** Where
-      AppArmor is what restricts them, `tartaros setup apparmor` (unreleased). A
+      AppArmor is what restricts them, `tartaros setup apparmor` (0.1.0-alpha.25). A
       minimal packaged helper for the rest (`unprivileged_userns_clone=0`,
       `max_user_namespaces=0`).
 - [ ] **More trust-handoff paths.** Shell rc files, editor task files
@@ -92,7 +92,8 @@ the carve, shipped in 0.1.0-alpha.21. A read-denied directory inside a writable
 root hidden rather than left listable shipped in 0.1.0-alpha.22. Runs set up while
 another removes the paths they protect, planned again instead of failing, shipped
 in 0.1.0-alpha.23. Programs that read preferences starting on macOS shipped in
-0.1.0-alpha.24. The details are in the [changelog](CHANGELOG.md).
+0.1.0-alpha.24. Placeholders git does not see and `tartaros setup apparmor` shipped in
+0.1.0-alpha.25. The details are in the [changelog](CHANGELOG.md).
 
 ## How to help
 

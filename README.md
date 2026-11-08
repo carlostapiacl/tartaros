@@ -8,7 +8,7 @@ leaves behind runs later outside the box. Every one of those claims is a test in
 this repo that you can run on your own machine.
 
 Open source (Apache-2.0) · macOS and Linux · Windows backend (preview) · one binary · no Docker, no VM, no
-account, no login · written in Rust · `v0.1.0-alpha.24`
+account, no login · written in Rust · `v0.1.0-alpha.25`
 
 [Website](https://carlostapiacl.github.io/tartaros/) ·
 [Evidence](https://carlostapiacl.github.io/tartaros/evidence.html) ·
@@ -103,9 +103,9 @@ other sandboxes (sandbox-runtime, nono, Codex, bubblewrap) and credited in
 
 | run | result |
 |---|---|
-| Linux 6.8, Ubuntu 24.04, Landlock + cgroup v2 + user namespaces (0.1.0-alpha.24, 2026-11-08, `--require-caps landlock,cgroup,userns`) | **157 / 157 pass**, 0 violations (the rest are macOS/Windows-only) |
-| macOS 15.7, Seatbelt (0.1.0-alpha.24, 2026-11-07) | **124 / 124 pass** (the rest are Linux/Windows-only) |
-| Mutation check, both OS: remove one protection, the suite must catch it (0.1.0-alpha.24) | **0 blind spots** |
+| Linux 6.8, Ubuntu 24.04, Landlock + cgroup v2 + user namespaces (0.1.0-alpha.25, 2026-11-08, `--require-caps landlock,cgroup,userns`) | **158 / 158 pass**, 0 violations (the rest are macOS/Windows-only) |
+| macOS 15.7, Seatbelt (0.1.0-alpha.25, 2026-11-08) | **125 / 125 pass** (the rest are Linux/Windows-only) |
+| Mutation check, both OS: remove one protection, the suite must catch it (0.1.0-alpha.25) | **0 blind spots** |
 | microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle (2026-10-15) | **20 / 20 pass** |
 | Windows 10 19045, the certified set (0.1.0-alpha.17, 2026-10-26) | **87 / 87 on both tiers** (AppContainer and dedicated user); `--allow-domain` enforced via a per-SID WFP filter + egress broker ([limits](docs/limits.md)) |
 
