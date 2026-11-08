@@ -1,13 +1,18 @@
 name: ci
 on:
-  # Branches only: a tag is tested by release.yml, on the targets it ships.
-  push:
-    branches: ["**"]
+  # Pull requests only: a merge to master is not tested again, and a tag is
+  # tested by release.yml, on the targets it ships.
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The runner's defaults make part of the corpus unmeasurable: AppArmor
@@ -42,7 +47,8 @@ jobs:
           cd security-bench && sudo ../target/debug/tartaros-bench corpus
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: build
