@@ -95,17 +95,21 @@ an **attack**, a **legitimate control** that must keep working, and an
 **assertion on the real effect** (the file is unchanged, the secret never shows up
 in the output). A sandbox that blocks everything fails its controls.
 
-The corpus now has 140 scenarios; 103 are derived from the public test suites of
+The corpus now has 161 scenarios; 122 are derived from the public test suites of
 other sandboxes (sandbox-runtime, nono, Codex, bubblewrap) and credited in
 [`security-bench/SOURCES.md`](security-bench/SOURCES.md).
 
-| run (2026-10-15) | result |
+| run | result |
 |---|---|
-| Linux 6.8, Ubuntu 24.04, Landlock | **136 / 136 pass**, 0 violations |
-| macOS 15.7, Seatbelt | **110 / 110 pass** (the rest are Linux/Windows-only) |
-| Mutation check, both OS: remove one protection, the suite must catch it | **0 blind spots** |
-| microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle | **20 / 20 pass** |
-| Windows 10 19045, corpus `--ignore-os` (backend via the bench) | **AppContainer 85/111, dedicated-user 90/111**, 0 critical violations; `--allow-domain` enforced via a per-SID WFP filter + egress broker ([limits](docs/limits.md)) |
+| Linux 6.8, Ubuntu 24.04, Landlock + cgroup v2 + user namespaces (0.1.0-alpha.24, 2026-11-08, `--require-caps landlock,cgroup,userns`) | **157 / 157 pass**, 0 violations (the rest are macOS/Windows-only) |
+| macOS 15.7, Seatbelt (0.1.0-alpha.24, 2026-11-07) | **124 / 124 pass** (the rest are Linux/Windows-only) |
+| Mutation check, both OS: remove one protection, the suite must catch it (0.1.0-alpha.24) | **0 blind spots** |
+| microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle (2026-10-15) | **20 / 20 pass** |
+| Windows 10 19045, the certified set (0.1.0-alpha.17, 2026-10-26) | **87 / 87 on both tiers** (AppContainer and dedicated user); `--allow-domain` enforced via a per-SID WFP filter + egress broker ([limits](docs/limits.md)) |
+
+The same release is measured against the other sandboxes, on contracts it was not written
+with, in [sandbox-conformance](https://github.com/carlostapiacl/sandbox-conformance)
+([2026-11-08 run](https://github.com/carlostapiacl/sandbox-conformance/blob/main/results/2026-11-08/README.md)).
 
 Scenarios still open on some host are kept in `security-bench/corpus-known-gaps/`
 with their measured status, not hidden — see [Know the edges](#know-the-edges).
@@ -224,8 +228,9 @@ the roadmap item that closes it:
   (disk quota is on the roadmap).
 - **Handoff files the agent creates.** Existing handoff files are protected
   everywhere at any depth, and macOS also covers files that don't exist yet.
-  On Linux, under the bind-mount strategy, a handoff file created during the run is
-  not, and `explain` says so ([roadmap](ROADMAP.md)).
+  On Linux, under the bind-mount strategy, absent top-level ones are held by a
+  placeholder; a nested name, or a repository, created during the run is not, and
+  `explain` says so ([roadmap](ROADMAP.md)).
 - **The effect log is observed, not enforced.** Enforcement is the kernel policy,
   while the log samples the process tree, so a very short-lived event can be
   missed. The broker's egress decisions are not sampled: each one is logged.

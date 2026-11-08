@@ -211,13 +211,16 @@ than you asked for.
 - **Relocating a protected path by moving its ancestor — partly open.** On macOS
   a read-denied secret inside a writable root cannot be relocated out of its deny
   by renaming an ancestor: the deny is pinned and every ancestor up to the root is
-  unlink-blocked. Still open and tracked on the roadmap, measured on 2026-10-15:
-  on **Linux**, renaming an ancestor of a read-denied secret or of an explicit
-  write-deny inside a writable root can move it out from under its carve; on **both
-  systems**, moving or swapping a whole `.git` directory (rename / `RENAME_EXCHANGE`)
-  and planting a fresh config; and on **macOS**, moving an entire writable root into
-  another writable root (`mv root otherRoot/x`) — the same move is already blocked on
-  Linux. Until each is closed with a fix and a scenario, these are not claimed.
+  unlink-blocked. On Linux with a mount namespace the directory above a protected
+  path is a mount point, so renaming it fails (EBUSY); moving or swapping a whole
+  `.git` directory is blocked on both systems that way (see *Moving the whole
+  `.git` dir aside* above). Still open and tracked on the roadmap: on **Linux
+  without user namespaces**, renaming an ancestor of a read-denied secret or of an
+  explicit write-deny inside a writable root can move it out from under its carve,
+  and so can moving `.git` aside; and on **macOS**, moving an entire writable root
+  into another writable root (`mv root otherRoot/x`), measured on 2026-10-15 — the
+  same move is blocked on Linux. Until each is closed with a fix and a scenario,
+  these are not claimed.
 
 ## Windows
 

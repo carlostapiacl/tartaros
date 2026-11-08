@@ -9,7 +9,7 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
 - [ ] **Linux without user namespaces.** *The same protection on a stock
       Ubuntu.* Ubuntu 23.10 and later restrict unprivileged user namespaces by
       default, so tartaros falls back to the Landlock carve there. Measured as a
-      non-root user on such a host: 2 corpus attacks get through (an ancestor
+      non-root user on such a host (alpha.19 took it from 5 to 2): 2 corpus attacks get through (an ancestor
       rename around a read deny inside a root, an absent top-level `.mcp.json`)
       and 8 legitimate controls break. Closing those two with the carve alone
       withholds whole roots and breaks more controls, so the next step needs
@@ -52,9 +52,11 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
       Still missing: effect-log collectors, so `--log` records on Windows, and
       HTTPS through Schannel under the `sandbox-user` tier, which Windows refuses
       to the restricted token today.
-- [ ] **Not-yet-existing handoff paths under the bind-mount strategy (Linux).**
-      Protect a `.claude/settings.json` or a nested repo's hooks that the agent
-      creates during the run, without placeholder residue in the working tree.
+- [ ] **Not-yet-existing handoff paths under the bind-mount strategy (Linux):
+      what's left.** Absent top-level handoff paths are held by a placeholder
+      (alpha.7, alpha.18, alpha.21). Still open: an absent handoff name nested below
+      the root (a new `sub/.gitmodules`, `.claude/skills/` when only `.claude/`
+      exists) and a repository the agent creates during the run.
 - [ ] **Create-at-root on hosts with no user namespaces at all.** An
       install-time AppArmor profile or a minimal packaged helper.
 - [ ] **More trust-handoff paths.** Shell rc files, editor task files

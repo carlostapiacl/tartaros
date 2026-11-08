@@ -5,9 +5,9 @@ handled responsibly.
 
 ## Supported versions
 
-TartarOS is pre-1.0 (`v0.1.0-alpha.17`). Only the latest release and `main` are
-supported. The security model and its honest limits are documented in the
-README ("Honest limits") and in the threat-model profiles
+TartarOS is pre-1.0 (`v0.1.0-alpha.*`). Only the latest release and `main` are
+supported. The security model and its limits are documented in the README
+("Know the edges"), in [`docs/limits.md`](docs/limits.md) and in the threat-model profiles
 (`--profile local-agent | hostile-code | multi-tenant`).
 
 ## Scope
@@ -22,8 +22,9 @@ Explicitly **out of scope** (documented non-guarantees, not vulnerabilities):
 
 - Kernel-level isolation between tenants. TartarOS runs on a **shared kernel**;
   a kernel exploit can cross the boundary. `multi-tenant` is single-kernel
-  hardening only — real tenant isolation needs a microVM backend (not yet
-  built; designed in [`docs/microvm-backend.md`](docs/microvm-backend.md)).
+  hardening only — real tenant isolation needs a microVM backend (phase 1,
+  the policy run under gVisor, is validated; phase 2, Firecracker, is not built:
+  [`docs/microvm-backend.md`](docs/microvm-backend.md)).
 - A capability a host cannot provide. These fail closed or are reported
   `UNSUPPORTED`; they are never silently downgraded.
 - A difference in defaults or a misconfiguration.
