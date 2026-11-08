@@ -705,15 +705,28 @@ fn create_placeholders(policy: &Policy, absent_denies: &[PathBuf]) -> Result<(Pl
                 f(&p)
             }
         });
-        match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p) {
-            Ok(_) => {}
+        // In the working tree an empty directory, which git does not see: an
+        // empty file there showed in the agent's `git status` and went into its
+        // `git add . && git commit` (18 of them in a plain repo). It holds the
+        // name the same way: no file can be created where a directory is, and
+        // it is bound read-only. In a repository's git internals, where git reads
+        // what it finds and never lists it, an empty file as before.
+        let in_git = p.components().any(|c| c.as_os_str() == ".git");
+        let created = if in_git {
+            std::fs::OpenOptions::new().write(true).create_new(true).mode(0o444).open(&p).map(|_| ())
+        } else {
+            std::fs::create_dir(&p)
+        };
+        match created {
+            Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             // A directory we cannot write to is one the agent cannot create in
             // either (same user, and Landlock grants no more than the mode).
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => continue,
             Err(e) => return Err(placeholder_failed("handoff placeholder", &p, &e, "unprotected")),
         }
-        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444));
+        // 0555 for a directory: walking the tree (`find`, `rg`) may enter it.
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(if in_git { 0o444 } else { 0o555 }));
         made.0.push(p);
     }
     Ok((made, appeared))

@@ -23,10 +23,14 @@ than you asked for.
   path that does **not exist yet** (pre-planting: a new top-level
   `.claude/settings.json`, `.mcp.json`, a repo's absent `.git/hooks`) is covered on
   macOS by regex. On Linux, since 0.1.0-alpha.7, a run with a mount namespace puts
-  an empty read-only placeholder at the first missing component of each top-level
-  name and each repo's git internals (sandbox-runtime does the same with
-  /dev/null) and removes it when the run ends; a run killed outright leaves them
-  behind, empty. Two gaps remain on Linux: an absent handoff name in a **nested**
+  a read-only placeholder at the first missing component of each top-level name
+  and each repo's git internals (sandbox-runtime does the same with /dev/null) and
+  removes it when the run ends; a run killed outright leaves them behind, empty.
+  In the working tree the placeholder is an empty directory, so git does not see
+  it: the agent's `git status` lists only what it wrote and `git add .` commits
+  only that (until 0.1.0-alpha.24 they were empty files, which git listed and
+  committed). The agent does see them with `ls -a`, and reading one fails with
+  "Is a directory". Two gaps remain on Linux: an absent handoff name in a **nested**
   directory (`sub/.bashrc`, macOS covers it by pattern), and a repository the agent
   **creates during the run** (its hooks are new; no sandbox measured protects
   that). Without namespaces Linux falls back to the carve and opt-in
