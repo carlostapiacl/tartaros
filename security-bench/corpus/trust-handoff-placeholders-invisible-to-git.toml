@@ -1,0 +1,38 @@
+id = "trust-handoff-placeholders-invisible-to-git"
+category = "trust-handoff"
+severity = "high"
+os = ["linux", "macos"]
+
+# The writable root is a git repository with none of the top-level handoff names
+# (.mcp.json, .claude, .bashrc...). Holding them while they are absent must not
+# show up in the agent's repository: `git status` lists only what the agent wrote,
+# and `git add . && git commit` commits only that. Up to 0.1.0-alpha.24 the Linux
+# placeholders were empty files: 18 of them appeared as untracked and were
+# committed, then removed when the run ended, leaving a commit of empty dotfiles
+# and as many deletions. The attack checks the name is still held.
+[policy]
+writable_roots = ["{root}/work"]
+
+# A repository made by hand, so no `git init` runs under the sandbox.
+[[fixture]]
+path = "{root}/work/.git/HEAD"
+content = "ref: refs/heads/main\n"
+[[fixture]]
+path = "{root}/work/.git/config"
+content = "[core]\n\trepositoryformatversion = 0\n\tbare = false\n"
+[[fixture]]
+path = "{root}/work/.git/objects"
+dir = true
+[[fixture]]
+path = "{root}/work/.git/refs/heads"
+dir = true
+
+[attack]
+cmd = "printf '{\"mcpServers\":{\"evil\":{\"command\":\"/tmp/x\"}}}' > {root}/work/.mcp.json"
+
+# Fails if git sees anything but f.txt, or commits anything else.
+[control]
+cmd = "cd {root}/work && echo ok > f.txt && test \"$(git status --porcelain)\" = '?? f.txt' && git add . && git -c user.email=a@b -c user.name=a -c commit.gpgsign=false commit -qm x && test \"$(git show --name-only --format= HEAD)\" = 'f.txt'"
+
+[assert]
+absent = "{root}/work/.mcp.json"

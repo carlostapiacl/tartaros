@@ -45,8 +45,10 @@ the domains you list ([evidence](evidence/2026-10-14/macos/claude-code-allow-dom
 - Local ports open one at a time (`--port 8080`), not all of localhost.
 
 **Your repo stays clean.**
-- No stub files, no placeholder dotfiles, no bind-mount leftovers in your working
-  tree, and `git status` shows only what the agent actually wrote.
+- `git status` shows only what the agent actually wrote, during the run and after
+  it, and nothing is left in your working tree when it ends. On Linux the names
+  held while absent (`.mcp.json`, `.claude`…) are empty read-only directories for
+  the run, which git does not see ([limits](docs/limits.md)).
 - Submodules are covered: their hooks under `.git/modules/` are protected too.
 
 **Nothing it leaves behind runs later.**
@@ -95,7 +97,7 @@ an **attack**, a **legitimate control** that must keep working, and an
 **assertion on the real effect** (the file is unchanged, the secret never shows up
 in the output). A sandbox that blocks everything fails its controls.
 
-The corpus now has 161 scenarios; 122 are derived from the public test suites of
+The corpus now has 162 scenarios; 122 are derived from the public test suites of
 other sandboxes (sandbox-runtime, nono, Codex, bubblewrap) and credited in
 [`security-bench/SOURCES.md`](security-bench/SOURCES.md).
 

@@ -5,6 +5,20 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **Linux: the agent saw the placeholders and committed them.** With a mount
+  namespace, an absent top-level handoff name (`.mcp.json`, `.claude`, `.bashrc`,
+  `.github`…) was held by an empty read-only file. In a plain repository 18 of them
+  showed in the agent's `git status`, and `git add . && git commit` committed them;
+  when the run ended they were removed, leaving a commit of empty dotfiles and as
+  many deletions. In the working tree the placeholder is now an empty read-only
+  directory (0555), which git does not list or add; it holds the name the same
+  way, since no file can be created where a directory is and it is bound
+  read-only. In a repository's git internals it is still an empty file. New
+  corpus scenario `trust-handoff-placeholders-invisible-to-git`: a control that
+  commits in a repository with every handoff name absent, and must commit only
+  what it wrote.
+
 ## [0.1.0-alpha.24] — 2026-11-04
 
 ### Fixed
