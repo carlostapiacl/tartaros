@@ -11,10 +11,12 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
       default, so tartaros falls back to the Landlock carve there. Measured as a
       non-root user on such a host (alpha.19 took it from 5 to 2): 2 corpus attacks get through (an ancestor
       rename around a read deny inside a root, an absent top-level `.mcp.json`)
-      and 8 legitimate controls break. Closing those two with the carve alone
-      withholds whole roots and breaks more controls, so the next step needs
-      another mechanism; until then they are in
-      [`docs/limits.md`](docs/limits.md) with their workarounds.
+      and 8 legitimate controls break. `tartaros setup apparmor` (unreleased)
+      takes such a host to the full mode with one root command. What is left is
+      the host where that is not an option; closing the two with the carve alone
+      withholds whole roots and breaks more controls, so it needs another
+      mechanism; until then they are in [`docs/limits.md`](docs/limits.md) with
+      their workarounds.
 - [ ] **Measured toolchain compatibility.** *A sandbox that doesn't break my
       tools.* A `compat` corpus that runs real tools confined on both OS and
       publishes the result: Go binaries using macOS TLS (`gh`, `terraform`),
@@ -57,8 +59,10 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
       (alpha.7, alpha.18, alpha.21). Still open: an absent handoff name nested below
       the root (a new `sub/.gitmodules`, `.claude/skills/` when only `.claude/`
       exists) and a repository the agent creates during the run.
-- [ ] **Create-at-root on hosts with no user namespaces at all.** An
-      install-time AppArmor profile or a minimal packaged helper.
+- [ ] **Create-at-root on hosts with no user namespaces at all.** Where
+      AppArmor is what restricts them, `tartaros setup apparmor` (unreleased). A
+      minimal packaged helper for the rest (`unprivileged_userns_clone=0`,
+      `max_user_namespaces=0`).
 - [ ] **More trust-handoff paths.** Shell rc files, editor task files
       (`.vscode/tasks.json`), virtualenv interpreters, `git` fsmonitor, and CI
       configuration beyond `.github/workflows`.
