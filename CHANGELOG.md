@@ -5,6 +5,12 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- `AGENT_ID` is in the default environment allowlist, next to `TRACEPARENT`: a
+  SPIFFE-style URI naming the agent workload reaches the agent without `--env`, so
+  its own logs and telemetry can carry it. It is a label passed through: tartaros
+  does not verify it and grants nothing because of it.
+
 ## [0.1.0-alpha.25] — 2026-11-08
 
 ### Added

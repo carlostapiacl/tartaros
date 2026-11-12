@@ -370,7 +370,10 @@ impl Policy {
 /// that carry no credential: path, home, identity, locale, shell, terminal, temp,
 /// and the proxy vars the egress broker sets (proxy config is not a secret and the
 /// agent needs it to reach the broker), and the W3C trace context (`TRACEPARENT`,
-/// `TRACESTATE`: ids that join a run to its launcher's trace, by spec not secrets).
+/// `TRACESTATE`: ids that join a run to its launcher's trace, by spec not secrets),
+/// and `AGENT_ID` (a SPIFFE-style URI naming the agent workload, for the agent's
+/// own logs and telemetry). `AGENT_ID` is a label passed through: tartaros does not
+/// verify it and grants nothing because of it.
 /// `LC_*` is matched by prefix, not listed.
 pub const ENV_ALLOWLIST: &[&str] = &[
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ", "PWD",
@@ -378,6 +381,7 @@ pub const ENV_ALLOWLIST: &[&str] = &[
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
     "TRACEPARENT", "TRACESTATE",
+    "AGENT_ID",
 ];
 
 /// Loader and interpreter injection vars: inherited, each one makes every child
@@ -2401,5 +2405,18 @@ mod tests {
         let has = |k: &str| env.iter().any(|(n, _)| n == k);
         assert!(has("TRACEPARENT") && has("TRACESTATE"));
         assert!(!has("GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn the_agent_id_reaches_the_agent_and_secrets_still_do_not() {
+        let p = Policy::default();
+        let launcher: Vec<(String, String)> = vec![
+            ("AGENT_ID".into(), "spiffe://example.org/agent/demo".into()),
+            ("GITHUB_TOKEN".into(), "secret".into()),
+        ];
+        let env = p.child_env_from(&launcher).unwrap();
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("AGENT_ID"), Some("spiffe://example.org/agent/demo"), "passed through unchanged");
+        assert!(get("GITHUB_TOKEN").is_none());
     }
 }

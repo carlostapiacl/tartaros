@@ -84,7 +84,9 @@ any tool can read (`--log effects.jsonl`). Every egress decision of the broker
 (`--allow-domain`) is in it, one line per connection. `--log-format otlp` writes
 the same records as OpenTelemetry log records in an open effect schema, stamped
 with the launcher's `TRACEPARENT`, so a run joins its launcher's trace in any
-OTel tool. `TRACEPARENT`/`TRACESTATE` reach the agent like `LANG` does.
+OTel tool. `TRACEPARENT`/`TRACESTATE` reach the agent like `LANG` does, and so
+does `AGENT_ID` (a SPIFFE-style URI naming the agent workload): a label passed
+through, never trusted or used to grant anything.
 
 **Already using sandbox-runtime?** `--settings settings.json` applies an existing
 sandbox-runtime config. It enforces every field it can and refuses, with exit 78,
