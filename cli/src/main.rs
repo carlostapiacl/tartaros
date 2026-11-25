@@ -22,6 +22,7 @@
 //!   --materialize          pre-create absent trust-handoff placeholders (Linux)
 //!   --allow-home-handoff   allow writing shell rc / .gitconfig / .ripgreprc (denied by default)
 //!   --handoff-exempt DIR   no trust-handoff protection inside DIR, a dependency tree (repeatable)
+//!   --handoff-scratch DIR  DIR is a writable root thrown away after the run: no trust-handoff protection in it
 //!   --allow-request SPEC   "METHODS host[/path]": the only requests an allowed domain gets (repeatable)
 //!   --private-tmp          run-private TMPDIR, AF_UNIX scoped to it (headless browsers)
 //!   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes (no curated base)
@@ -101,6 +102,10 @@ struct PolicyFile {
     /// protected (dependency trees: `vendor`, `node_modules`). See --handoff-exempt.
     #[serde(default)]
     handoff_exempt: Vec<String>,
+    /// Writable roots discarded after the run, where the trust-handoff set is not
+    /// protected (a run's TMPDIR). See --handoff-scratch.
+    #[serde(default)]
+    handoff_scratch: Vec<String>,
     /// `[[request_rule]]`: host, methods, path prefixes. See --allow-request.
     #[serde(default)]
     request_rule: Vec<RequestRuleFile>,
@@ -796,6 +801,11 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
                          writable root): a dependency tree a setup phase fills, whose
                          packages ship .gitattributes/.github/.git. Repeatable; said
                          at start and in explain
+  --handoff-scratch DIR  DIR (also a --write root) is thrown away after the run, so no
+                         trust-handoff protection in it: a run's TMPDIR, where tests
+                         create repos and conftest.py. Refused if it overlaps another
+                         writable root, holds $HOME or the starting directory, or is a
+                         git repo. Repeatable; said at start and in explain
   --private-tmp          run-private TMPDIR; AF_UNIX scoped to it (headless browsers)
   --browser              macOS: minimal extra Seatbelt grants for headless Chromium/Chrome
   --mach-lookup-only     macOS: allowMachLookup opens ONLY its prefixes, without the
@@ -875,6 +885,9 @@ fn cmd_run(rest: &[String]) -> ! {
     // run should show it was there.
     for e in &p.handoff_exempt {
         eprintln!("tartaros: trust-handoff not protected inside {} (--handoff-exempt)", e.display());
+    }
+    for e in &p.handoff_scratch {
+        eprintln!("tartaros: trust-handoff not protected inside {} (--handoff-scratch, discarded after the run)", e.display());
     }
     // Print the profile's honest caveat before running — a tier must never
     // silently overclaim (esp. multi-tenant on a shared kernel).
@@ -1777,6 +1790,10 @@ struct SandboxFs {
     /// where the trust-handoff set is not protected — `--handoff-exempt`.
     #[serde(default, rename = "handoffExempt")]
     handoff_exempt: Vec<String>,
+    /// tartaros's own extension: writable roots thrown away after the run, where
+    /// the trust-handoff set is not protected — `--handoff-scratch`.
+    #[serde(default, rename = "handoffScratch")]
+    handoff_scratch: Vec<String>,
 }
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -1959,6 +1976,7 @@ fn apply_settings_file(p: &mut Policy, path: &str, verbose: bool) {
     for x in &s.filesystem.deny_read.clone() { map_deny(x, false, true, p); }
     for x in &s.filesystem.deny_write.clone() { map_deny(x, true, false, p); }
     for x in &s.filesystem.handoff_exempt { p.handoff_exempt.push(PathBuf::from(expand_path(x))); }
+    for x in &s.filesystem.handoff_scratch { p.handoff_scratch.push(PathBuf::from(expand_path(x))); }
     for r in &s.network.request_rules { add_request_rule(r.host.clone(), r.methods.clone(), r.paths.clone()); }
     // Network: we default-deny. Anything we cannot enforce in-sandbox is refused.
     p.network = Some(Network::Denied);
@@ -2189,6 +2207,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
         p.strict = pf.strict;
         p.materialize_absent_handoff = pf.materialize_absent_handoff;
         p.handoff_exempt = pf.handoff_exempt.iter().map(|s| PathBuf::from(expand_path(s))).collect();
+        p.handoff_scratch = pf.handoff_scratch.iter().map(|s| PathBuf::from(expand_path(s))).collect();
         for r in &pf.request_rule {
             add_request_rule(r.host.clone(), r.methods.clone(), r.paths.clone());
         }
@@ -2272,6 +2291,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             "--log" => log = Some(val()),
             "--egress-log" => { let _ = EGRESS_LOG.set(val()); }
             "--handoff-exempt" => p.handoff_exempt.push(PathBuf::from(expand_path(&val()))),
+            "--handoff-scratch" => p.handoff_scratch.push(PathBuf::from(expand_path(&val()))),
             "--allow-request" => parse_allow_request(&val()),
             "--log-format" => log_format = Some(match val().as_str() {
                 "jsonl" => LogFormat::Jsonl,
@@ -2330,6 +2350,7 @@ fn explain_json(p: &Policy, profile: Option<&Profile>, blocked: Option<&str>) ->
             "git": tartaros_core::HANDOFF_GIT_NAMES,
             "home": if p.protect_home_handoff { tartaros_core::HANDOFF_HOME_NAMES.to_vec() } else { Vec::new() },
             "exempt": paths(&p.handoff_exempt),
+            "scratch": paths(&p.handoff_scratch),
         },
         "isolate_pids": p.isolate_pids,
         "isolate_network": p.isolate_network,
@@ -2442,6 +2463,10 @@ fn explain(p: &Policy) {
     if !p.handoff_exempt.is_empty() {
         println!("\ntrust-handoff NOT protected inside (--handoff-exempt):");
         for e in &p.handoff_exempt { println!("  ~ {}", e.display()); }
+    }
+    if !p.handoff_scratch.is_empty() {
+        println!("\ntrust-handoff NOT protected inside (--handoff-scratch, discarded after the run):");
+        for e in &p.handoff_scratch { println!("  ~ {}", e.display()); }
     }
     println!("\ntrust-handoff protected (deny write at any depth under each writable root):");
     for name in tartaros_core::HANDOFF_CONFIG_NAMES { println!("  ! **/{name}"); }

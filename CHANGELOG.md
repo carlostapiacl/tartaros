@@ -10,6 +10,17 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   SPIFFE-style URI naming the agent workload reaches the agent without `--env`, so
   its own logs and telemetry can carry it. It is a label passed through: tartaros
   does not verify it and grants nothing because of it.
+- **`--handoff-scratch DIR` (`handoffScratch` in a settings file): a writable root
+  that is thrown away after the run, with no trust-handoff protection in it.** A
+  run's own TMPDIR is where tests `git init` throwaway repos. Every one of them
+  writes `.git/hooks` samples, which the any-depth protection refused. Measured in
+  one fleet: 2,881 denials of pytest's temp tree. `--handoff-exempt` cannot open a
+  root, on purpose, because a root is usually the repo. A scratch root has to BE a
+  `--write` root. It is refused if it overlaps another writable root, holds `$HOME`
+  or the directory the run starts in, is a git repository itself, or lies in a
+  handoff surface. Every other rule still holds inside it, a `--write-deny`
+  included. It is printed at start and listed in `explain` (`trust_handoff.scratch`)
+  and `why`.
 
 ## [0.1.0-alpha.25] — 2026-11-08
 

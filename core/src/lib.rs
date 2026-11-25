@@ -193,6 +193,15 @@ pub struct Policy {
     /// explicit, listed exemption (see [`Policy::check_handoff_exempt`]); every
     /// other rule still holds inside, and the repo's own surfaces stay protected.
     pub handoff_exempt: Vec<PathBuf>,
+    /// Writable roots that are discarded after the run (a run's own TMPDIR), where
+    /// the trust-handoff set is NOT protected. Each must BE a writable root:
+    /// `handoff_exempt` refuses a root on purpose, because a root is usually the
+    /// repo, but a scratch root has no later reader for a planted hook to reach —
+    /// and the tests an agent runs there create `.git/hooks`, `conftest.py` and
+    /// `.github/` by the thousand (measured: 2,881 denials of pytest's own temp
+    /// tree in one fleet's baseline, 2026-11-24). See [`Policy::check_handoff_exempt`]
+    /// for what a scratch root may not be.
+    pub handoff_scratch: Vec<PathBuf>,
     /// Opt-in: also protect the per-user home-handoff surface
     /// (`HANDOFF_HOME_NAMES`: shell rc files, `.gitconfig`, `.ripgreprc`) under the
     /// writable roots, denied even if absent. Off by default because it breaks
@@ -853,7 +862,9 @@ impl Policy {
             return (false, format!("the writable root {} lies inside a trust-handoff surface", root.display()));
         }
         if self.handoff_exempted(&real) {
-            return (true, format!("writable root {}; trust-handoff not protected here (--handoff-exempt)", root.display()));
+            let scratch = self.handoff_scratch.iter().any(|s| real.starts_with(resolve_best_effort(s)));
+            let flag = if scratch { "--handoff-scratch, discarded after the run" } else { "--handoff-exempt" };
+            return (true, format!("writable root {}; trust-handoff not protected here ({flag})", root.display()));
         }
         let rel: Vec<String> = real.strip_prefix(&root).unwrap_or(&real).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
         let home: &[&str] = if self.protect_home_handoff { HANDOFF_HOME_NAMES } else { &[] };
@@ -908,20 +919,34 @@ impl Policy {
         out
     }
 
+    /// Every directory where the trust-handoff set is not protected: the
+    /// `handoff_exempt` dependency trees and the `handoff_scratch` roots. The one
+    /// list every backend and every explanation reads, so the two kinds can never
+    /// be opened in one place and enforced in another.
+    pub fn handoff_open(&self) -> impl Iterator<Item = &PathBuf> {
+        self.handoff_exempt.iter().chain(&self.handoff_scratch)
+    }
+
     /// Whether `path` lies in a `handoff_exempt` directory (resolved).
     pub fn handoff_exempted(&self, path: &Path) -> bool {
-        if self.handoff_exempt.is_empty() {
+        if self.handoff_exempt.is_empty() && self.handoff_scratch.is_empty() {
             return false;
         }
         let p = resolve_best_effort(path);
-        self.handoff_exempt.iter().any(|e| p.starts_with(resolve_best_effort(e)))
+        self.handoff_open().any(|e| p.starts_with(resolve_best_effort(e)))
     }
 
     /// `handoff_exempt` refuses what would turn the exemption into a hole: a
     /// directory that is not strictly inside a writable root, is a writable root
     /// itself, lies inside a handoff surface (`.git/hooks/x`), or is named like
     /// one (`.claude`, `.git`). Err carries the reason (refused, exit 78).
+    ///
+    /// `handoff_scratch` is the other way round — it must BE a writable root — and
+    /// refuses every root a later reader could trust: one that holds or sits in
+    /// another writable root (the repo is one), holds `$HOME` or the directory the
+    /// run starts in, is a git repository itself, or lies in a handoff surface.
     pub fn check_handoff_exempt(&self) -> Result<(), String> {
+        self.check_handoff_scratch(std::env::var_os("HOME").map(PathBuf::from).as_deref(), std::env::current_dir().ok().as_deref())?;
         for e in &self.handoff_exempt {
             if !e.is_absolute() {
                 return Err(format!("handoff exemption {}: must be an absolute path", e.display()));
@@ -941,6 +966,45 @@ impl Policy {
             });
             if named {
                 return Err(format!("handoff exemption {}: names a trust-handoff surface itself", e.display()));
+            }
+        }
+        Ok(())
+    }
+
+    /// The `handoff_scratch` half of [`Policy::check_handoff_exempt`], with the
+    /// home and the starting directory passed in so it can be tested.
+    pub fn check_handoff_scratch(&self, home: Option<&Path>, cwd: Option<&Path>) -> Result<(), String> {
+        let roots: Vec<PathBuf> = self.writable_roots.iter().map(|r| resolve_best_effort(r)).collect();
+        for s in &self.handoff_scratch {
+            let at = |why: &str| Err(format!("handoff scratch {}: {why}", s.display()));
+            if !s.is_absolute() {
+                return at("must be an absolute path");
+            }
+            let real = resolve_best_effort(s);
+            if !roots.contains(&real) {
+                return at("must be a writable root itself (pass it to --write too)");
+            }
+            if let Some(other) = roots.iter().find(|r| **r != real && (r.starts_with(&real) || real.starts_with(r))) {
+                return at(&format!("overlaps the writable root {}: a scratch root holds only what is thrown away", other.display()));
+            }
+            if real.parent().is_none() {
+                return at("is the filesystem root");
+            }
+            if let Some(h) = home.map(resolve_best_effort) {
+                if h.starts_with(&real) {
+                    return at("holds $HOME");
+                }
+            }
+            if let Some(c) = cwd.map(resolve_best_effort) {
+                if c.starts_with(&real) {
+                    return at("holds the directory the run starts in, whose handoff files a tool reads after it");
+                }
+            }
+            if std::fs::symlink_metadata(real.join(".git")).is_ok() {
+                return at("is a git repository: its hooks and config outlive the run");
+            }
+            if root_inside_handoff_surface(&real) {
+                return at("lies inside a trust-handoff surface");
             }
         }
         Ok(())
@@ -1644,6 +1708,35 @@ mod tests {
         }
         assert!(!rules.contains(&t.join("repo/.git/worktrees/w/HEAD")));
         let _ = std::fs::remove_dir_all(t);
+    }
+
+    #[test]
+    fn a_scratch_root_drops_its_rules_and_refuses_what_a_later_reader_trusts() {
+        let base = std::env::temp_dir().join(format!("tt-scratch-{}", std::process::id()));
+        let repo = base.join("repo");
+        let tmp = base.join("run/tmp");
+        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(tmp.join("t/repo/.git/hooks")).unwrap();
+        let mut p = Policy { writable_roots: vec![repo.clone(), tmp.clone()], ..Default::default() };
+        let has = |p: &Policy, s: &str| p.trust_handoff_rules().iter().any(|r| r.path.to_string_lossy().ends_with(s));
+        assert!(has(&p, "t/repo/.git/hooks"));
+        p.handoff_scratch = vec![tmp.clone()];
+        let home = base.join("home");
+        assert!(p.check_handoff_scratch(Some(&home), Some(&repo)).is_ok());
+        assert!(!has(&p, "t/repo/.git/hooks"), "the scratch root's rules are dropped");
+        assert!(has(&p, "repo/.git/hooks"), "the repo's stay");
+        let refused = |roots: Vec<PathBuf>, scratch: PathBuf, home: &Path, cwd: &Path| {
+            let q = Policy { writable_roots: roots, handoff_scratch: vec![scratch], ..Default::default() };
+            q.check_handoff_scratch(Some(home), Some(cwd)).is_err()
+        };
+        // Not a root; the repo; overlapping a root; holding $HOME; holding the start; relative.
+        assert!(refused(vec![repo.clone()], tmp.clone(), &home, &repo));
+        assert!(refused(vec![repo.clone()], repo.clone(), &home, &tmp));
+        assert!(refused(vec![repo.clone(), base.clone()], base.clone(), &home, &tmp));
+        assert!(refused(vec![tmp.clone()], tmp.clone(), &tmp.join("u"), &repo));
+        assert!(refused(vec![tmp.clone()], tmp.clone(), &home, &tmp.join("w")));
+        assert!(refused(vec![PathBuf::from("rel")], PathBuf::from("rel"), &home, &repo));
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
