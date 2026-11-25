@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.26] — 2026-11-25
+
 ### Added
 - `AGENT_ID` is in the default environment allowlist, next to `TRACEPARENT`: a
   SPIFFE-style URI naming the agent workload reaches the agent without `--env`, so

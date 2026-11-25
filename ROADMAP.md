@@ -93,7 +93,8 @@ root hidden rather than left listable shipped in 0.1.0-alpha.22. Runs set up whi
 another removes the paths they protect, planned again instead of failing, shipped
 in 0.1.0-alpha.23. Programs that read preferences starting on macOS shipped in
 0.1.0-alpha.24. Placeholders git does not see and `tartaros setup apparmor` shipped in
-0.1.0-alpha.25. The details are in the [changelog](CHANGELOG.md).
+0.1.0-alpha.25. Passing `AGENT_ID` through and scratch roots (`--handoff-scratch`) shipped in
+0.1.0-alpha.26. The details are in the [changelog](CHANGELOG.md).
 
 ## How to help
 
