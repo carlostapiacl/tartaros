@@ -208,3 +208,75 @@ fn a_handoff_exemption_opens_the_dependency_tree_and_nothing_else() {
     }
     fs::remove_dir_all(&work).ok();
 }
+
+#[test]
+fn a_scratch_root_lets_tests_make_repos_and_leaves_the_repo_protected() {
+    // The shape of a fleet's run: a repo the agent works in, and the run's own
+    // TMPDIR beside it, where tests `git init` throwaway repos under pytest's
+    // `pytest-of-<user>/`. Measured in one baseline: 2,881 denials, every one a
+    // `.git/hooks` sample that `git init` writes.
+    let work = mk_work();
+    let tmp = work.with_extension("scratch");
+    fs::create_dir_all(&tmp).unwrap();
+    let be = SeatbeltBackend;
+    let mut p = policy_for(&work);
+    p.writable_roots.push(tmp.clone());
+    p.handoff_scratch = vec![tmp.clone()];
+    assert!(be.validate(&p).is_ok());
+    // Control: the same `git init` in a writable root that is NOT scratch is
+    // refused — this is the protection the scratch root lifts, and only there.
+    let mut plain = p.clone();
+    plain.handoff_scratch.clear();
+    let ctl = tmp.join("control");
+    let rc = sh(&be, &plain, &format!("mkdir -p {0} && cd {0} && /usr/bin/git init -q repo 2>/dev/null", ctl.display()));
+    assert_ne!(rc, 0, "without --handoff-scratch, git init's hooks are refused");
+    fs::remove_dir_all(&ctl).ok();
+    let t = tmp.join("pytest-of-root/pytest-0/test_x0");
+    let rc = sh(&be, &p, &format!(
+        "mkdir -p {0} && cd {0} && /usr/bin/git init -q repo && echo x > repo/.git/hooks/pre-commit \
+         && mkdir -p repo/.github/workflows && echo x > repo/.github/workflows/ci.yml && rm repo/.git/hooks/pre-commit \
+         && echo x > {1}/.mcp.json",
+        t.display(), tmp.display()));
+    assert_eq!(rc, 0, "git init, a hook, a workflow and their removal, all inside the scratch root");
+    assert!(t.join("repo/.git/config").exists());
+    // The repo beside it keeps every surface.
+    for f in [".git/hooks/pre-commit", "a/nested/.git/hooks/pre-commit", ".mcp.json"] {
+        let rc = sh(&be, &p, &format!("echo x > {}", work.join(f).display()));
+        assert_ne!(rc, 0, "{f} must stay protected in the repo");
+        assert!(!work.join(f).exists());
+    }
+    // A write-deny inside the scratch root still wins.
+    let mut q = p.clone();
+    q.fs_rules.push(tartaros_core::FsRule { path: tmp.join("keep"), access: tartaros_core::Access::Deny, even_if_absent: true });
+    let rc = sh(&be, &q, &format!("mkdir -p {0} 2>/dev/null; echo x > {0}/f", tmp.join("keep").display()));
+    assert_ne!(rc, 0);
+    fs::remove_dir_all(&work).ok();
+    fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn a_scratch_root_that_a_later_reader_could_trust_is_refused() {
+    let work = mk_work();
+    let be = SeatbeltBackend;
+    let tmp = work.with_extension("scratch");
+    fs::create_dir_all(&tmp).unwrap();
+    let base = |extra: &[std::path::PathBuf], scratch: std::path::PathBuf| {
+        let mut p = policy_for(&work);
+        p.writable_roots.extend(extra.iter().cloned());
+        p.handoff_scratch = vec![scratch];
+        p
+    };
+    // Not a writable root of its own.
+    assert!(be.validate(&base(&[], tmp.clone())).is_err());
+    // The repo: a writable root that is a git repository.
+    assert!(be.validate(&base(&[], work.clone())).is_err());
+    // Holding another writable root, or inside one.
+    assert!(be.validate(&base(&[work.parent().unwrap().to_path_buf()], work.parent().unwrap().to_path_buf())).is_err());
+    let inner = work.join("tmp");
+    fs::create_dir_all(&inner).unwrap();
+    assert!(be.validate(&base(std::slice::from_ref(&inner), inner.clone())).is_err());
+    // Relative.
+    assert!(be.validate(&base(&[std::path::PathBuf::from("rel")], std::path::PathBuf::from("rel"))).is_err());
+    fs::remove_dir_all(&work).ok();
+    fs::remove_dir_all(&tmp).ok();
+}

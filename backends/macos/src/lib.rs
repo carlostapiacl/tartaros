@@ -625,7 +625,8 @@ fn build_profile(policy: &Policy) -> String {
     // them like any directory; re-open writes there (last match wins), then
     // re-apply the explicit write-denies that fall inside, so a `--write-deny`
     // still beats the exemption. Validated in `validate` (check_handoff_exempt).
-    for e in &policy.handoff_exempt {
+    // A `handoff_scratch` root is re-opened the same way, whole.
+    for e in policy.handoff_open() {
         let real = canonical_best_effort(e);
         p.push_str(&format!("(allow file-write* (subpath {}))\n", quote(&real)));
         for rule in policy.fs_rules.iter().filter(|r| r.access == Access::Deny) {
