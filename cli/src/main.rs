@@ -303,6 +303,8 @@ fn cmd_run(rest: &[String]) -> ! {
     }
     let private_tmp = setup_private_tmp(&mut p);
     warn_reachable_host_sockets(&p);
+    #[cfg(target_os = "linux")]
+    warn_roots_without_new_entries(&p);
     let code = run(&p, &cmd, log.as_ref());
     // What the broker decided is in its log before the launcher exits: a refusal
     // in the run's last milliseconds was lost (`--egress-log` came back empty).
@@ -474,6 +476,29 @@ fn warn_reachable_host_sockets(p: &Policy) {
             found.join(", ")
         );
     }
+}
+
+/// Say before the run, not after the first EACCES, where the Landlock carve will
+/// refuse new entries: directly in a writable root with a deny below it, and in
+/// a repository's `.git` (its hooks and config are denied), which makes
+/// `git add` and `git commit` fail on `.git/index.lock`. Measured 2026-11-27 on
+/// Ubuntu 24.04 without root. `explain` said it; `run` did not.
+#[cfg(target_os = "linux")]
+fn warn_roots_without_new_entries(p: &Policy) {
+    let roots = tartaros_linux::roots_without_new_entries(p);
+    let gits = tartaros_linux::git_dirs_without_new_entries(p);
+    if roots.is_empty() && gits.is_empty() {
+        return;
+    }
+    let mut what: Vec<String> = roots.iter().map(|w| w.root.display().to_string()).collect();
+    what.extend(gits.iter().map(|g| format!("{} (git add/commit will fail)", g.display())));
+    let because = roots.first().map(|w| w.because.clone()).unwrap_or_else(|| tartaros_linux::carve_reason(p));
+    eprintln!(
+        "tartaros: warning: new files cannot be created directly in {}; existing files and subdirectories \
+         are writable. Why: {}",
+        what.join(", "),
+        if because.ends_with('.') { because.clone() } else { format!("{because}.") }
+    );
 }
 
 /// `run`'s snapshot flags, taken out of the policy options.
