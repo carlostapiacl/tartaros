@@ -42,7 +42,8 @@ the domains you list ([evidence](evidence/2026-10-14/macos/claude-code-allow-dom
   out.
 - On Linux as root the agent gets its own network namespace whose only route is
   the broker.
-- Local ports open one at a time (`--port 8080`), not all of localhost.
+- Local ports open one at a time, not all of localhost: `--port 8080` to connect,
+  `--listen 8080` to serve on it.
 
 **Your repo stays clean.**
 - `git status` shows only what the agent actually wrote, during the run and after
