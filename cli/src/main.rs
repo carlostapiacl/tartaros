@@ -154,7 +154,7 @@ POLICY:
   --config FILE          load a TOML policy (flags override it); its [broker]
                          table starts the credential broker (docs/broker.md)
   --settings FILE        map a sandbox-runtime settings.json onto the generic
-                         policy; refuses (exit 2) on anything it can't guarantee
+                         policy; refuses (exit 78) on anything it can't guarantee
   --role NAME            label for the effect log
   --write DIR            a writable root (repeatable)
   --read-deny DIR        deny reads of this path, e.g. a secret dir (repeatable)
