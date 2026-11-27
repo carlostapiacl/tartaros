@@ -5,6 +5,25 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **`--listen N` (`listen_ports` in a policy file): let the agent serve on N.**
+  A test suite that starts its own server needs to bind and listen, which no
+  grant allowed without `--net`. Listening is an inbound channel, so it is its
+  own opt-in, separate from `--port`: bind, listen, accept and connect on N, and
+  nothing else (an ephemeral port stays denied). Neither kernel scopes the
+  address: on macOS a bind to `0.0.0.0:N` is reachable from the LAN; on Linux a
+  listen grant alone keeps the run's private network namespace when the host
+  offers one, so the listener is reachable only from inside the run. `explain`
+  says which applies ([limits](docs/limits.md)). Refused on Windows. Corpus
+  scenarios `network-listen-port` and `network-port-grant-no-listen`.
+
+### Changed
+- **`--port N` is connect-only on Linux too.** Linux granted Landlock `BindTcp`
+  as well as `ConnectTcp` for a port grant, so an agent could listen on a granted
+  port nothing held; macOS never allowed it, and `network-local-bind-denied`
+  states the intent ("granting an outbound loopback port must not also grant
+  LISTENING"). A policy that relied on it adds `--listen N`.
+
 ## [0.1.0-alpha.26] — 2026-11-25
 
 ### Added

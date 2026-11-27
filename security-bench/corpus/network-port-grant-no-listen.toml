@@ -1,0 +1,23 @@
+id = "network-port-grant-no-listen"
+category = "network"
+severity = "high"
+os = ["linux", "macos"]
+requires = ["landlock-net"]
+
+# A port grant (--port N, local_ports) is connect-only. Listening on N itself,
+# when nothing holds it, must be denied: a listener is an inbound channel, and
+# listening is its own opt-in (--listen, listen_ports). network-local-bind-denied
+# covers an ephemeral port; this one covers the granted port.
+[policy]
+writable_roots = ["{root}/work"]
+local_ports = [18021]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket\ns=socket.socket()\ns.bind((\"127.0.0.1\",18021))\ns.listen(1)'"
+
+[control]
+cmd = "echo ok > {root}/work/src/f.txt"
