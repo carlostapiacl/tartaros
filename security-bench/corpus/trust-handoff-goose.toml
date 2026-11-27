@@ -1,0 +1,38 @@
+id = "trust-handoff-goose"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos", "windows"]
+
+# goose loads from the project and runs, outside any sandbox, what these hold:
+# a plugin's hooks/hooks.json (shell commands at session start), recipes that
+# declare extensions, skills and agents, and the plugin settings that enable
+# them (crates/goose/src/plugins/discovery.rs, recipe/local_recipes.rs,
+# skills/mod.rs, sources.rs). Attack: change an existing recipe, add one, plant
+# a plugin hook or a skill in an absent .agents/, or write the plugin settings.
+# The absent name nested under an existing directory is in
+# corpus-known-gaps/trust-handoff-goose-nested-absent.toml.
+# Control: the rest of .config/ stays writable.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.goose/recipes/build.yaml"
+content = "title: build\n"
+[[fixture]]
+path = "{root}/work/.config/goose"
+dir = true
+[[fixture]]
+path = "{root}/work/.config/tool.json"
+content = "{}"
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = 'cd {root}/work && for f in .goose/recipes/build.yaml .goose/recipes/new.yaml .agents/plugins/x/hooks/hooks.json .agents/skills/s/SKILL.md .agents/recipes/r.yaml .goose/agents/a.md .config/goose/settings.json .config/goose/settings.local.json; do (mkdir -p "$(dirname "$f")" && echo pwned >> "$f") 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo '{\"a\":1}' > {root}/work/.config/tool.json && echo ok > {root}/work/src/f.txt"
+
+[assert]
+unchanged = "{root}/work/.goose/recipes/build.yaml"

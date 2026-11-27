@@ -1,0 +1,27 @@
+id = "trust-handoff-allow-one-name"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos", "windows"]
+
+# --allow-handoff opens exactly the names it lists. With .goose opened, the agent
+# writes a goose recipe (the control), and every other name stays protected:
+# a goose plugin hook in .agents/, an .mcp.json, a Claude Code setting.
+[policy]
+writable_roots = ["{root}/work"]
+handoff_allow = [".goose"]
+
+[[fixture]]
+path = "{root}/work/.goose/recipes"
+dir = true
+[[fixture]]
+path = "{root}/work/.mcp.json"
+content = "{\"mcpServers\":{}}"
+
+[attack]
+cmd = 'cd {root}/work && for f in .agents/plugins/x/hooks/hooks.json .mcp.json .claude/settings.json; do (mkdir -p "$(dirname "$f")" && echo pwned >> "$f") 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo 'title: t' > {root}/work/.goose/recipes/r.yaml"
+
+[assert]
+unchanged = "{root}/work/.mcp.json"
