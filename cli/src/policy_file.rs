@@ -36,8 +36,9 @@ pub(crate) struct PolicyFile {
     pub(crate) listen_any: bool,
     #[serde(default)]
     pub(crate) net: bool,
+    /// Unset keeps the default (denied on Linux); `false` is --allow-unix.
     #[serde(default)]
-    pub(crate) deny_unix_sockets: bool,
+    pub(crate) deny_unix_sockets: Option<bool>,
     #[serde(default)]
     pub(crate) isolate_pids: bool,
     #[serde(default)]

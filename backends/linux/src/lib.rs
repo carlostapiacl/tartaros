@@ -463,6 +463,30 @@ pub fn roots_without_new_entries(policy: &Policy) -> Vec<RootWithoutNewEntries> 
     out
 }
 
+/// The `.git` directories, directly in a writable root, in which the run cannot
+/// create new entries: under the carve, `.git` is withheld because its hooks and
+/// config are denied, so git cannot write `index.lock` and every `git add` or
+/// `git commit` fails. Empty under the bind-mount strategy.
+#[cfg(target_os = "linux")]
+pub fn git_dirs_without_new_entries(policy: &Policy) -> Vec<PathBuf> {
+    if uses_bind_mounts(policy) || !policy.trust_handoff_on() {
+        return Vec::new();
+    }
+    let grants = policy.linux_write_allowlist_except(&on_readonly_mount);
+    policy
+        .writable_roots
+        .iter()
+        .map(|r| tartaros_core::resolve_best_effort(r).join(".git"))
+        .filter(|g| g.is_dir() && !grants.iter().any(|w| w == g))
+        .collect()
+}
+
+/// Why the run uses the carve instead of the bind mounts (for a warning).
+#[cfg(target_os = "linux")]
+pub fn carve_reason(policy: &Policy) -> String {
+    carve_because(policy)
+}
+
 /// Why the run uses the carve instead of the bind mounts.
 #[cfg(target_os = "linux")]
 fn carve_because(policy: &Policy) -> String {

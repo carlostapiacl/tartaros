@@ -19,6 +19,13 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   when `run` would refuse here, with the reason in `refused`), `engine`
   (`landlock+seccomp` or `seatbelt`), `landlock_abi` (asked of the kernel) and
   `covers` (`process-tree`).
+- **`run` warns, before it starts, where new files cannot be created** (Linux,
+  without a mount namespace): directly in a writable root with a deny below it,
+  and in a repository's `.git`, where `git add` and `git commit` fail on
+  `.git/index.lock`. `explain` already said so; `run` did not, and the first
+  `git add` failed. The warning names the fix for the host (`sudo tartaros setup
+  apparmor` on Ubuntu 23.10+). Test `linux_git_warning` checks it against the
+  kernel on whichever host it runs.
 - **The AF_UNIX warning on Linux names the user's own daemons:** the session bus
   `/run/user/<uid>/bus` (from which `systemd-run --user` starts a process outside
   the sandbox, measured on Ubuntu 24.04), `systemd/private`, and rootless docker
@@ -56,6 +63,17 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   in `--json`) and in `why`. Corpus scenario `trust-handoff-allow-one-name`.
 
 ### Changed
+- **AF_UNIX is denied by default on Linux; `--allow-unix` opens it.** Landlock
+  cannot scope a unix socket by path, and with the old default an agent could
+  set `XDG_RUNTIME_DIR` itself and run `systemd-run --user` through the session
+  bus, starting a process outside the sandbox (measured on Ubuntu 24.04, with and
+  without namespaces; reported in goose#12805). The default now matches macOS,
+  where Seatbelt already denies AF_UNIX. `socketpair()` is not affected, so
+  multiprocessing, asyncio and child pipes keep working; a tool that creates its
+  own unix socket (syslog, `git credential-cache`, an `ssh-agent` started inside)
+  needs `--allow-unix`. A policy file keeps the default unless it sets
+  `deny_unix_sockets`; `false` is `--allow-unix`. `Policy::default()` in the
+  library is unchanged.
 - **`--port N` is connect-only on Linux too.** Linux granted Landlock `BindTcp`
   as well as `ConnectTcp` for a port grant, so an agent could listen on a granted
   port nothing held; macOS never allowed it, and `network-local-bind-denied`

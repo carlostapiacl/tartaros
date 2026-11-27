@@ -75,14 +75,17 @@ than you asked for.
   independent of the tree (named surfaces are pure pattern rules).
 - **AF_UNIX pathname sockets are not path-filtered on Linux.** Landlock does not
   govern `connect()` to a unix socket by path, and the seccomp AF_UNIX deny is
-  all-or-nothing, so a confined agent can reach a host daemon's socket
-  (`docker.sock`, containerd, D-Bus, systemd) unless AF_UNIX is denied wholesale —
-  a host-escape vector. `--deny-unix` and the `hostile-code` / `multi-tenant`
-  profiles block it; the default (`local-agent`) does not, but **warns loudly** at
-  launch when such a socket is present rather than leaving it silent. macOS filters
-  AF_UNIX by path (`allowUnixSockets`) and denies it by default in the Seatbelt
-  profile, so this is Linux-only. (Reproduced: a default run reached `docker.sock`
-  and the D-Bus bus; `--deny-unix` / `hostile-code` close it.)
+  all-or-nothing, so an agent that may create a unix socket can reach any host
+  daemon's (`docker.sock`, containerd, D-Bus, systemd): a host-escape vector. From
+  the session bus `/run/user/<uid>/bus`, `systemd-run --user` starts a process
+  outside the sandbox, even with namespaces (measured 2026-11-27, Ubuntu 24.04).
+  So the CLI denies `socket(AF_UNIX)` by default on Linux, as Seatbelt does on
+  macOS. `socketpair()` is a different call and keeps working: multiprocessing,
+  asyncio subprocesses and node child processes are unaffected. What breaks is a
+  tool that makes its own unix socket: syslog (`logger`), `git credential-cache`,
+  an `ssh-agent` started inside the run, a test server on a unix socket.
+  `--allow-unix` opens AF_UNIX for such a run, all of it, and the run warns when a
+  daemon socket is present.
 - **No disk-space quota.** `--max-mem` caps memory, not disk: an agent can fill a
   writable root (and the underlying filesystem) until it is full — a host DoS that
   path-based confinement does not stop. Open fds are bounded (hard `RLIMIT_NOFILE`

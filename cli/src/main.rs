@@ -18,7 +18,8 @@
 //!   --allow-domain HOST    egress ONLY to this domain, via the capability broker
 //!                          (CONNECT/HTTPS + SSRF defense); repeatable
 //!   --net                  allow all network (default: denied)
-//!   --deny-unix            deny AF_UNIX sockets (Linux, seccomp)
+//!   --deny-unix            deny AF_UNIX sockets (Linux, seccomp; the default there)
+//!   --allow-unix           let the agent create AF_UNIX sockets (Linux; reaches host daemons)
 //!   --isolate-pids         run in a private PID+mount namespace (Linux; hides host processes)
 //!   --isolate-net          run in an empty network namespace (Linux; no egress at all, loopback only)
 //!   --seccomp-strict       deny dangerous syscalls to shrink kernel attack surface (Linux)
@@ -178,7 +179,9 @@ HARDENING (Linux; the hostile/multi-tenant profiles set these):
   --isolate-net          empty network namespace (no egress, any protocol)
   --seccomp-strict       deny dangerous syscalls (shrink kernel attack surface)
   --strict               a requested guarantee that cannot be installed aborts the run
-  --deny-unix            deny AF_UNIX sockets
+  --deny-unix            deny AF_UNIX sockets (the default on Linux)
+  --allow-unix           let the agent create AF_UNIX sockets (Linux): it can then
+                         reach host daemons (D-Bus, systemd --user, docker)
   --isolate-proc         deny reads of other processes' /proc
   --materialize          pre-create absent trust-handoff placeholders
   --allow-home-handoff   let the agent write shell rc / .gitconfig / .ripgreprc in its
@@ -300,6 +303,8 @@ fn cmd_run(rest: &[String]) -> ! {
     }
     let private_tmp = setup_private_tmp(&mut p);
     warn_reachable_host_sockets(&p);
+    #[cfg(target_os = "linux")]
+    warn_roots_without_new_entries(&p);
     let code = run(&p, &cmd, log.as_ref());
     // What the broker decided is in its log before the launcher exits: a refusal
     // in the run's last milliseconds was lost (`--egress-log` came back empty).
@@ -423,16 +428,15 @@ fn create_private_tmp() -> std::io::Result<std::path::PathBuf> {
 /// filtering — Landlock does not govern `connect()` to a pathname socket, and the
 /// seccomp AF_UNIX deny is all-or-nothing — so a confined agent can still reach a
 /// host daemon's unix socket (docker.sock, containerd, dbus, systemd), which is a
-/// full host-escape vector. We cannot block it per-path, but we warn loudly when
-/// the network is restricted, `--deny-unix` is off, and a dangerous socket is
-/// present, and point to the fix. macOS denies AF_UNIX egress in the Seatbelt
+/// full host-escape vector. AF_UNIX is denied by default; when `--allow-unix`
+/// opens it and a dangerous socket is present, we warn loudly and point to the fix. macOS denies AF_UNIX egress in the Seatbelt
 /// profile natively, so this is Linux-only.
 fn warn_reachable_host_sockets(p: &Policy) {
-    use tartaros_core::Network;
     if cfg!(not(target_os = "linux")) {
         return;
     }
-    if matches!(p.network, Some(Network::Allowed)) || p.deny_unix_sockets {
+    // The network grant does not matter: a unix socket is not on the network.
+    if p.deny_unix_sockets {
         return;
     }
     const DANGEROUS: &[&str] = &[
@@ -467,11 +471,34 @@ fn warn_reachable_host_sockets(p: &Policy) {
         eprintln!(
             "tartaros: warning: a host daemon socket is present and reachable by the \
              agent over AF_UNIX ({}) — Landlock cannot filter unix sockets by path, so \
-             this is a host-escape vector. Add --deny-unix (or --profile hostile-code) \
-             to block ALL AF_UNIX, or do not expose the socket.",
+             this is a host-escape vector. Drop --allow-unix (AF_UNIX is denied by \
+             default), or do not expose the socket.",
             found.join(", ")
         );
     }
+}
+
+/// Say before the run, not after the first EACCES, where the Landlock carve will
+/// refuse new entries: directly in a writable root with a deny below it, and in
+/// a repository's `.git` (its hooks and config are denied), which makes
+/// `git add` and `git commit` fail on `.git/index.lock`. Measured 2026-11-27 on
+/// Ubuntu 24.04 without root. `explain` said it; `run` did not.
+#[cfg(target_os = "linux")]
+fn warn_roots_without_new_entries(p: &Policy) {
+    let roots = tartaros_linux::roots_without_new_entries(p);
+    let gits = tartaros_linux::git_dirs_without_new_entries(p);
+    if roots.is_empty() && gits.is_empty() {
+        return;
+    }
+    let mut what: Vec<String> = roots.iter().map(|w| w.root.display().to_string()).collect();
+    what.extend(gits.iter().map(|g| format!("{} (git add/commit will fail)", g.display())));
+    let because = roots.first().map(|w| w.because.clone()).unwrap_or_else(|| tartaros_linux::carve_reason(p));
+    eprintln!(
+        "tartaros: warning: new files cannot be created directly in {}; existing files and subdirectories \
+         are writable. Why: {}",
+        what.join(", "),
+        if because.ends_with('.') { because.clone() } else { format!("{because}.") }
+    );
 }
 
 /// `run`'s snapshot flags, taken out of the policy options.
@@ -625,6 +652,15 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
     // by default, as sandbox-runtime does: a trusted shell or git later runs what
     // the agent planted there. --allow-home-handoff is the dotfiles-repo opt-out.
     let mut p = Policy { network: Some(Network::Denied), protect_home_handoff: true, ..Default::default() };
+    // AF_UNIX is denied by default on Linux, as Seatbelt denies it on macOS:
+    // Landlock cannot scope a unix socket by path, and a reachable daemon socket
+    // is a way out (the session bus starts an unconfined `systemd-run --user`,
+    // measured 2026-11-27 on Ubuntu 24.04). socketpair() keeps working, so
+    // multiprocessing, asyncio and child pipes are unaffected. --allow-unix opens it.
+    #[cfg(target_os = "linux")]
+    {
+        p.deny_unix_sockets = true;
+    }
     let mut profile: Option<Profile> = None;
 
     // First pass: load --config (a policy file), so flags can override it.
@@ -641,7 +677,9 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
         p.listen_ports = pf.listen_ports;
         p.listen_any = pf.listen_any;
         p.network = Some(if pf.net { Network::Allowed } else { Network::Denied });
-        p.deny_unix_sockets = pf.deny_unix_sockets;
+        if let Some(deny) = pf.deny_unix_sockets {
+            p.deny_unix_sockets = deny;
+        }
         p.isolate_pids = pf.isolate_pids;
         p.isolate_network = pf.isolate_network;
         p.harden_syscalls = pf.harden_syscalls;
@@ -716,6 +754,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             "--allow-domain" => p.allow_domains.push(val()),
             "--net" => p.network = Some(Network::Allowed),
             "--deny-unix" => p.deny_unix_sockets = true,
+            "--allow-unix" => p.deny_unix_sockets = false,
             "--isolate-pids" => p.isolate_pids = true,
             "--isolate-net" => p.isolate_network = true,
             "--seccomp-strict" => p.harden_syscalls = true,
