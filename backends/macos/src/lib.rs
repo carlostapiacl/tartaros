@@ -24,6 +24,13 @@ impl Backend for SeatbeltBackend {
     }
 
     fn validate(&self, policy: &Policy) -> Result<(), PolicyError> {
+        if policy.listen_any {
+            return Err(PolicyError {
+                reason: "--listen any is unsupported on macOS: Seatbelt scopes a listen grant by port, not \
+                         address, so any port would be reachable from the LAN. Grant the ports with --listen N."
+                    .into(),
+            });
+        }
         if policy.writable_roots.is_empty() {
             return Err(PolicyError { reason: "no writable roots".into() });
         }

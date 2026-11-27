@@ -31,6 +31,9 @@ pub(crate) struct PolicyFile {
     /// Ports the agent may listen on (opt-in). See --listen.
     #[serde(default)]
     pub(crate) listen_ports: Vec<u16>,
+    /// `--listen any` (Linux, private network namespace only).
+    #[serde(default)]
+    pub(crate) listen_any: bool,
     #[serde(default)]
     pub(crate) net: bool,
     #[serde(default)]

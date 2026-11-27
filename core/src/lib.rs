@@ -96,6 +96,14 @@ pub struct Policy {
     /// host offers one, so the listener is reachable only from inside the run
     /// (docs/limits.md).
     pub listen_ports: Vec<u16>,
+    /// `--listen any`: bind, accept and connect on ANY TCP port, the ephemeral
+    /// port 0 included, for test suites that pick their own port. Linux only, and
+    /// only when the run has its own empty network namespace (no --net, --port,
+    /// --allow-domain or egress namespace; root or user namespaces), where the
+    /// only reachable address is the run's own loopback. Refused anywhere else:
+    /// Seatbelt and Landlock scope ports, not addresses, so outside a private
+    /// namespace "any port" would open every port to the LAN.
+    pub listen_any: bool,
     /// External hosts (by IP) the role may reach; everything else is outside.
     pub allowed_hosts: Vec<String>,
     /// Egress allow-list BY DOMAIN NAME. Non-empty means: the agent gets no direct

@@ -173,8 +173,11 @@ than you asked for.
   inside the run; with another network grant, or without namespaces, it is
   reachable from the host and the LAN. `explain` prints which case applies.
   `--port N` never allows listening, and port 0 (an ephemeral port, as
-  `bind(("127.0.0.1", 0))` asks for) stays denied: a suite that listens on random
-  ports needs fixed ones or `--net`.
+  `bind(("127.0.0.1", 0))` asks for) stays denied. A suite that listens on random
+  ports can use `--listen any` on Linux, which runs only where the run gets its own
+  empty network namespace (no other network grant, root or user namespaces):
+  there the only address is the run's own loopback. Anywhere else it is refused
+  with exit 78, and on macOS always.
 
 - **Domain egress on non-root Linux.** Landlock's network filter is port-based,
   not address-based, so a port grant alone cannot stop an agent from reaching an

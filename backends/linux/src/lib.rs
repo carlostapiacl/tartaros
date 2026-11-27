@@ -35,9 +35,28 @@ mod cgroup;
 #[cfg(target_os = "linux")]
 mod landlock_probe;
 #[cfg(target_os = "linux")]
-pub use landlock_probe::{landlock_fs_supported, landlock_net_supported};
+pub use landlock_probe::{landlock_abi, landlock_fs_supported, landlock_net_supported};
 
 pub struct LandlockBackend;
+
+const LISTEN_ANY_REFUSED: &str = "--listen any needs the run's own empty network namespace, so the only \
+    address it can listen on is its own loopback: no --net, --port, --allow-domain or egress namespace, and \
+    root or user namespaces (`tartaros setup apparmor` on Ubuntu 23.10+). Grant the ports with --listen N instead.";
+
+/// Whether `--listen any` would get a private, empty network namespace on this
+/// host: the same conditions as the default network namespace (no network grant
+/// at all), or `--isolate-network`.
+fn listen_any_private(policy: &Policy) -> bool {
+    let no_grant = !matches!(policy.network, Some(tartaros_core::Network::Allowed))
+        && policy.local_ports.is_empty()
+        && policy.allow_domains.is_empty()
+        && policy.egress_netns.is_none();
+    #[cfg(target_os = "linux")]
+    let ns = namespace::mount_ns_capable();
+    #[cfg(not(target_os = "linux"))]
+    let ns = false;
+    no_grant && (policy.isolate_network || ns)
+}
 
 impl Backend for LandlockBackend {
     fn name(&self) -> &str {
@@ -47,6 +66,9 @@ impl Backend for LandlockBackend {
     fn validate(&self, policy: &Policy) -> Result<(), PolicyError> {
         if policy.writable_roots.is_empty() {
             return Err(PolicyError { reason: "no writable roots".into() });
+        }
+        if policy.listen_any && !listen_any_private(policy) {
+            return Err(PolicyError { reason: LISTEN_ANY_REFUSED.into() });
         }
         // AF_UNIX cannot be filtered by path on the seccomp backend (it is
         // all-or-nothing). Honouring an allow-one-socket request by ignoring it
@@ -1107,7 +1129,13 @@ fn confined_command(
         .set_compatibility(CompatLevel::BestEffort)
         .handle_access(all)
         .map_err(|e| err(format!("handle_access fs: {e}")))?;
-    if restrict_net {
+    // `--listen any` runs in its own empty network namespace (validated above):
+    // TCP there reaches only the run's own loopback, so Landlock does not filter
+    // ports; seccomp still closes UDP, raw and the other families.
+    if policy.listen_any && !listen_any_private(policy) {
+        return Err(err(LISTEN_ANY_REFUSED.into()));
+    }
+    if restrict_net && !policy.listen_any {
         builder = builder
             .handle_access(AccessNet::ConnectTcp | AccessNet::BindTcp)
             .map_err(|e| err(format!("handle_access net: {e}")))?;
@@ -1210,7 +1238,7 @@ fn confined_command(
     // loopback-vs-external is left to the proxy layer. A port grant never lets
     // the agent listen. With no granted ports and restriction on, all TCP
     // connect/bind is denied.
-    if restrict_net {
+    if restrict_net && !policy.listen_any {
         for port in policy.local_ports.iter().chain(&policy.listen_ports) {
             ruleset = ruleset
                 .add_rule(NetPort::new(*port, AccessNet::ConnectTcp))
@@ -1698,6 +1726,13 @@ pub fn enforcement_report(policy: &Policy) -> Vec<String> {
         && policy.egress_netns.is_none();
     if ns_capable && no_net_grant && !policy.isolate_network {
         out.push("network namespace: ON by default (no network grant: no egress on any protocol, abstract unix sockets of the host unreachable)".into());
+    }
+    if policy.listen_any {
+        out.push(if listen_any_private(policy) {
+            "listen: any TCP port, reachable only from inside the run (its own empty network namespace)".into()
+        } else {
+            format!("listen any: REFUSED on this host. {LISTEN_ANY_REFUSED}")
+        });
     }
     if !policy.listen_ports.is_empty() {
         let private = (ns_capable && no_net_grant) || policy.isolate_network;
