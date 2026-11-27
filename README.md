@@ -7,6 +7,12 @@ reach, its network stays on an allowlist, your repo stays clean, and nothing it
 leaves behind runs later outside the box. Every one of those claims is a test in
 this repo that you can run on your own machine.
 
+TartarOS grew out of [sandbox-conformance](https://github.com/carlostapiacl/sandbox-conformance),
+the lab where I measure agent sandboxes. It is where I try to build the one the lab
+asks for: safe by default, with every protection configurable, so you can turn it
+on, off or narrow it per run, and `tartaros explain` shows what a run grants. It is
+alpha, under active development, and open to contributions ([how](#contributing)).
+
 Open source (Apache-2.0) · macOS and Linux · Windows backend (preview) · one binary · no Docker, no VM, no
 account, no login · written in Rust · `v0.1.0-alpha.26`
 
@@ -111,12 +117,13 @@ other sandboxes (sandbox-runtime, nono, Codex, bubblewrap) and credited in
 | microVM phase 1 (gVisor `runsc`), the policy compiled to an OCI bundle (2026-10-15) | **20 / 20 pass** |
 | Windows 10 19045, the certified set (0.1.0-alpha.17, 2026-10-26) | **87 / 87 on both tiers** (AppContainer and dedicated user); `--allow-domain` enforced via a per-SID WFP filter + egress broker ([limits](docs/limits.md)) |
 
-The same release is measured against the other sandboxes, on contracts it was not written
-with, in [sandbox-conformance](https://github.com/carlostapiacl/sandbox-conformance)
-([2026-11-08 run](https://github.com/carlostapiacl/sandbox-conformance/blob/main/results/2026-11-08/README.md)).
+The same release is measured against the other sandboxes in
+[sandbox-conformance](https://github.com/carlostapiacl/sandbox-conformance)
+([2026-11-20 run](https://github.com/carlostapiacl/sandbox-conformance/blob/main/results/2026-11-20/README.md),
+which states that both projects are mine).
 
 Scenarios still open on some host are kept in `security-bench/corpus-known-gaps/`
-with their measured status, not hidden — see [Know the edges](#know-the-edges).
+with their measured status; see [Know the edges](#know-the-edges).
 
 Raw output, host stamps and JSON reports are in
 [`evidence/2026-10-14/`](evidence/2026-10-14/), and every scenario is listed on the
