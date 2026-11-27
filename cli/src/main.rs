@@ -13,6 +13,8 @@
 //!   --port N               allow connecting to this loopback TCP port (repeatable; never listening)
 //!   --listen N             allow listening on this TCP port, and connecting to it (repeatable;
 //!                          opt-in: an inbound channel, see docs/limits.md)
+//!   --listen any           any port, ephemeral included; Linux only, inside the run's own
+//!                          empty network namespace (refused where it would reach the LAN)
 //!   --allow-domain HOST    egress ONLY to this domain, via the capability broker
 //!                          (CONNECT/HTTPS + SSRF defense); repeatable
 //!   --net                  allow all network (default: denied)
@@ -164,6 +166,9 @@ POLICY:
                          never listening on it)
   --listen N             allow listening on this TCP port, and connecting to it
                          (repeatable; opt-in, an inbound channel: docs/limits.md)
+  --listen any           any port, ephemeral (0) included, for test suites. Linux
+                         only, in the run's own empty network namespace; refused
+                         (exit 78) where a listener would be reachable from the LAN
   --allow-domain HOST    egress ONLY to this domain through the broker (HTTPS via
                          CONNECT, SSRF-defended); .example.com matches subdomains
   --net                  allow all network (default: denied)
@@ -440,8 +445,24 @@ fn warn_reachable_host_sockets(p: &Policy) {
         "/run/systemd/private",
         "/var/run/libvirt/libvirt-sock",
     ];
-    let found: Vec<&str> =
-        DANGEROUS.iter().copied().filter(|s| std::path::Path::new(s).exists()).collect();
+    // The user's own daemons (goose#12805: the session bus starts an unconfined
+    // `systemd-run --user`, measured 2026-11-27 on Ubuntu 24.04). The agent's
+    // environment is scrubbed of XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS, but
+    // it can spell the path itself.
+    #[cfg(unix)]
+    let uid = unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    let uid = 0;
+    let per_user: Vec<String> = ["bus", "systemd/private", "docker.sock", "podman/podman.sock"]
+        .iter()
+        .map(|s| format!("/run/user/{uid}/{s}"))
+        .collect();
+    let found: Vec<&str> = DANGEROUS
+        .iter()
+        .copied()
+        .chain(per_user.iter().map(String::as_str))
+        .filter(|s| std::path::Path::new(s).exists())
+        .collect();
     if !found.is_empty() {
         eprintln!(
             "tartaros: warning: a host daemon socket is present and reachable by the \
@@ -618,6 +639,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
         p.fs_rules.extend(pf.write_denies.iter().map(|s| FsRule { path: PathBuf::from(expand_path(s)), access: Access::Deny, even_if_absent: true }));
         p.local_ports = pf.local_ports;
         p.listen_ports = pf.listen_ports;
+        p.listen_any = pf.listen_any;
         p.network = Some(if pf.net { Network::Allowed } else { Network::Denied });
         p.deny_unix_sockets = pf.deny_unix_sockets;
         p.isolate_pids = pf.isolate_pids;
@@ -687,7 +709,10 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             "--read-allow" => p.read_allows.push(PathBuf::from(expand_path(&val()))),
             "--write-deny" => p.fs_rules.push(FsRule { path: PathBuf::from(expand_path(&val())), access: Access::Deny, even_if_absent: true }),
             "--port" => p.local_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --port"); exit(2); })),
-            "--listen" => p.listen_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --listen"); exit(2); })),
+            "--listen" => match val().as_str() {
+                "any" => p.listen_any = true,
+                v => p.listen_ports.push(v.parse().unwrap_or_else(|_| { eprintln!("bad --listen (a port, or `any`)"); exit(2); })),
+            },
             "--allow-domain" => p.allow_domains.push(val()),
             "--net" => p.network = Some(Network::Allowed),
             "--deny-unix" => p.deny_unix_sockets = true,

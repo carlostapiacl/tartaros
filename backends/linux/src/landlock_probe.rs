@@ -25,3 +25,16 @@ pub fn landlock_net_supported() -> bool {
         .is_ok()
 }
 
+
+/// The Landlock ABI version this kernel offers, or `None` when Landlock is absent
+/// or disabled. Asks the kernel directly (`LANDLOCK_CREATE_RULESET_VERSION`), so a
+/// launcher can report the engine it runs on without parsing a version string.
+pub fn landlock_abi() -> Option<u32> {
+    const LANDLOCK_CREATE_RULESET_VERSION: libc::c_ulong = 1;
+    // SAFETY: with a NULL attr, size 0 and the VERSION flag the call only returns
+    // the ABI number (or -1); it creates no fd and changes nothing.
+    let v = unsafe {
+        libc::syscall(libc::SYS_landlock_create_ruleset, std::ptr::null::<libc::c_void>(), 0usize, LANDLOCK_CREATE_RULESET_VERSION)
+    };
+    (v > 0).then_some(v as u32)
+}

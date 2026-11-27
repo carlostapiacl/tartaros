@@ -6,6 +6,24 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **`--listen any` (`listen_any` in a policy file): any port, the ephemeral one
+  included, for test suites that pick their own.** Linux only, and only when the
+  run has its own empty network namespace (no `--net`, `--port`, `--allow-domain`
+  or egress namespace; root or user namespaces), so a listener is reachable only
+  from inside the run. Refused (exit 78) on macOS, on Windows and on a Linux host
+  without namespaces, where Landlock and Seatbelt would open every port to the
+  LAN. Corpus scenario `network-listen-any`: the ephemeral port serves, a server
+  on the host's loopback stays out of reach.
+- **`explain --json` has a `confinement` object** for a launcher that shows or
+  logs whether its commands are confined (goose#12805): `active` (false exactly
+  when `run` would refuse here, with the reason in `refused`), `engine`
+  (`landlock+seccomp` or `seatbelt`), `landlock_abi` (asked of the kernel) and
+  `covers` (`process-tree`).
+- **The AF_UNIX warning on Linux names the user's own daemons:** the session bus
+  `/run/user/<uid>/bus` (from which `systemd-run --user` starts a process outside
+  the sandbox, measured on Ubuntu 24.04), `systemd/private`, and rootless docker
+  and podman sockets. The environment scrub drops `XDG_RUNTIME_DIR`, but the agent
+  can spell the path itself; `--deny-unix` closes it.
 - **`--listen N` (`listen_ports` in a policy file): let the agent serve on N.**
   A test suite that starts its own server needs to bind and listen, which no
   grant allowed without `--net`. Listening is an inbound channel, so it is its
