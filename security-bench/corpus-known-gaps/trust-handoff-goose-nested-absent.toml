@@ -1,0 +1,33 @@
+# STATUS 2026-11-26 (known gap): macos=pass, linux=violation
+#   linux root (bind-mount strategy): .config/goose absent under an existing
+#   .config/, and .agents absent in a nested project, are both writable.
+#   linux non-root (Landlock carve): .config/goose absent under .config/ is
+#   writable; --materialize closes it. Same class as .claude/skills absent under
+#   an existing .claude/ (trust-handoff-claude-agents): an absent handoff name
+#   nested below a directory that exists. ROADMAP, "Not-yet-existing handoff
+#   paths under the bind-mount strategy".
+id = "trust-handoff-goose-nested-absent"
+category = "trust-handoff"
+severity = "critical"
+os = ["linux", "macos"]
+
+# The goose surfaces of trust-handoff-goose, absent, below a directory that
+# exists: .config/ without goose/, and a nested project without .agents/.
+[policy]
+writable_roots = ["{root}/work"]
+
+[[fixture]]
+path = "{root}/work/.config/tool.json"
+content = "{}"
+[[fixture]]
+path = "{root}/work/proj/README.md"
+content = "proj\n"
+
+[attack]
+cmd = 'cd {root}/work && for f in .config/goose/settings.json .config/goose/config.yaml proj/.agents/plugins/y/hooks/hooks.json; do (mkdir -p "$(dirname "$f")" && echo pwned >> "$f") 2>/dev/null && exit 0; done; exit 1'
+
+[control]
+cmd = "echo '{\"a\":1}' > {root}/work/.config/tool.json && echo ok >> {root}/work/proj/README.md"
+
+[assert]
+absent = "{root}/work/.config/goose/settings.json"

@@ -80,6 +80,17 @@ pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
     // Codex CLI config/prompts a trusted Codex run later loads and acts on —
     // the same passive-RCE surface as .claude, protected as a whole directory.
     ".codex",
+    // goose loads from the project: plugins (`.agents/plugins`, whose
+    // `hooks/hooks.json` runs shell commands at session start), skills, agents
+    // and recipes (`.agents/*`, `.goose/*`; a recipe declares extensions it
+    // starts), all enabled by default. Whole directories, like `.codex`.
+    // `.config/goose` holds the project plugin settings (`settings.json`,
+    // `settings.local.json`) that decide which of them are on; under HOME it is
+    // also the user config whose `config.yaml` lists the extensions goose starts.
+    // Only that subdirectory: the rest of `.config/` is ordinary project files.
+    ".agents",
+    ".goose",
+    ".config/goose",
     // Editor auto-run surfaces: tasks/launch/extensions and workspace files a
     // trusted editor runs or trusts on open. Protected as whole directories, since
     // the auto-run surface is more than three JSON files (extensions.json,
@@ -119,6 +130,7 @@ pub const HANDOFF_DIR_SUFFIXES: &[&str] = &[
     ".git/hooks",
     ".claude/commands", ".claude/agents", ".claude/skills", ".claude/hooks",
     ".codex", ".vscode", ".idea", ".husky", ".github/workflows",
+    ".agents", ".goose", ".config/goose",
 ];
 
 /// Per-USER startup/config files a trusted tool or the host's next shell later
@@ -202,6 +214,15 @@ pub struct Policy {
     /// explicit, listed exemption (see [`Policy::check_handoff_exempt`]); every
     /// other rule still holds inside, and the repo's own surfaces stay protected.
     pub handoff_exempt: Vec<PathBuf>,
+    /// Names of the trust-handoff config set (`HANDOFF_CONFIG_NAMES`) that are NOT
+    /// protected in this run: `.goose` for a repo where the agent writes goose
+    /// recipes, `.vscode` for one where it edits the editor config. Opt-in, one
+    /// name at a time, and only names of that list: an unknown name is refused
+    /// (a typo must not read as a protection that holds), and the git surfaces
+    /// (`.git/hooks`, `.git/config`) cannot be opened this way — `handoff_scratch`
+    /// and `handoff_exempt` scope that to one directory. See
+    /// [`Policy::check_handoff_exempt`] and [`Policy::handoff_config_names`].
+    pub handoff_allow: Vec<String>,
     /// Writable roots that are discarded after the run (a run's own TMPDIR), where
     /// the trust-handoff set is NOT protected. Each must BE a writable root:
     /// `handoff_exempt` refuses a root on purpose, because a root is usually the
@@ -360,8 +381,9 @@ impl Policy {
             return Vec::new();
         }
         let mut out = Vec::new();
+        let names = self.handoff_config_names();
         for root in &self.writable_roots {
-            for name in HANDOFF_CONFIG_NAMES {
+            for name in &names {
                 let p = root.join(name);
                 if !p.exists() {
                     out.push(p);
@@ -681,7 +703,8 @@ impl Policy {
             return (Vec::new(), Vec::new());
         }
         // Split each handoff name into (first segment, remainder) once.
-        let splits: Vec<(&str, Option<&str>)> = HANDOFF_CONFIG_NAMES
+        let names = self.handoff_config_names();
+        let splits: Vec<(&str, Option<&str>)> = names
             .iter()
             .map(|n| match n.split_once('/') {
                 Some((a, b)) => (a, Some(b)),
@@ -804,9 +827,10 @@ impl Policy {
         if !self.trust_handoff_on() {
             return Vec::new();
         }
+        let names = self.handoff_config_names();
         let mut out = Vec::new();
         for root in &self.writable_roots {
-            expand_root(root, self.protect_home_handoff, &mut out);
+            expand_root(root, &names, self.protect_home_handoff, &mut out);
         }
         out.retain(|r| !self.handoff_exempted(&r.path));
         // Upward check: a writable root named INSIDE a handoff surface (e.g. under
@@ -877,7 +901,8 @@ impl Policy {
         }
         let rel: Vec<String> = real.strip_prefix(&root).unwrap_or(&real).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
         let home: &[&str] = if self.protect_home_handoff { HANDOFF_HOME_NAMES } else { &[] };
-        let named = HANDOFF_CONFIG_NAMES.iter().chain(HANDOFF_GIT_NAMES).chain(home).find(|name| {
+        let config = self.handoff_config_names();
+        let named = config.iter().chain(HANDOFF_GIT_NAMES).chain(home).find(|name| {
             let n: Vec<&str> = name.split('/').collect();
             rel.windows(n.len()).any(|w| w.iter().zip(&n).all(|(a, b)| a == b))
         });
@@ -936,6 +961,38 @@ impl Policy {
         self.handoff_exempt.iter().chain(&self.handoff_scratch)
     }
 
+    /// The trust-handoff config names this run protects: `HANDOFF_CONFIG_NAMES`
+    /// without the ones `handoff_allow` opens. Every backend builds its rules
+    /// from this list, so an opened name is open on all of them alike.
+    pub fn handoff_config_names(&self) -> Vec<&'static str> {
+        HANDOFF_CONFIG_NAMES.iter().copied().filter(|n| !self.handoff_allow.iter().any(|a| a == n)).collect()
+    }
+
+    /// `handoff_allow` names only entries of the config set. An unknown name is
+    /// refused rather than ignored, and the git surfaces are refused with where to
+    /// go instead.
+    pub fn check_handoff_allow(&self) -> Result<(), String> {
+        for a in &self.handoff_allow {
+            if HANDOFF_CONFIG_NAMES.contains(&a.as_str()) {
+                continue;
+            }
+            if HANDOFF_GIT_NAMES.contains(&a.as_str()) || a.starts_with(".git/") || a == ".git" {
+                return Err(format!(
+                    "--allow-handoff {a}: the git surfaces cannot be opened for the whole run; \
+                     use --handoff-scratch for a throwaway root or --handoff-exempt for one directory"
+                ));
+            }
+            if HANDOFF_HOME_NAMES.contains(&a.as_str()) {
+                return Err(format!("--allow-handoff {a}: a home-handoff name; use --allow-home-handoff"));
+            }
+            return Err(format!(
+                "--allow-handoff {a}: not a trust-handoff name (one of: {})",
+                HANDOFF_CONFIG_NAMES.join(", ")
+            ));
+        }
+        Ok(())
+    }
+
     /// Whether `path` lies in a `handoff_exempt` directory (resolved).
     pub fn handoff_exempted(&self, path: &Path) -> bool {
         if self.handoff_exempt.is_empty() && self.handoff_scratch.is_empty() {
@@ -955,6 +1012,7 @@ impl Policy {
     /// another writable root (the repo is one), holds `$HOME` or the directory the
     /// run starts in, is a git repository itself, or lies in a handoff surface.
     pub fn check_handoff_exempt(&self) -> Result<(), String> {
+        self.check_handoff_allow()?;
         self.check_handoff_scratch(std::env::var_os("HOME").map(PathBuf::from).as_deref(), std::env::current_dir().ok().as_deref())?;
         for e in &self.handoff_exempt {
             if !e.is_absolute() {
@@ -1358,9 +1416,9 @@ fn carve(dir: &Path, denied: &[PathBuf], out: &mut Vec<PathBuf>) {
     }
 }
 
-fn expand_root(root: &Path, home: bool, out: &mut Vec<FsRule>) {
+fn expand_root(root: &Path, names: &[&str], home: bool, out: &mut Vec<FsRule>) {
     // Top-level config handoff files: deny even if absent.
-    for name in HANDOFF_CONFIG_NAMES {
+    for name in names {
         out.push(deny(root.join(name), true));
     }
     // Opt-in home-handoff names, same treatment (deny even if absent).
@@ -1369,12 +1427,12 @@ fn expand_root(root: &Path, home: bool, out: &mut Vec<FsRule>) {
             out.push(deny(root.join(name), true));
         }
     }
-    walk(root, 0, true, home, out);
+    walk(root, 0, true, names, home, out);
 }
 
 /// Recursive walk. At each directory, protect a repo's git handoff files if the
 /// directory is a git repo, and protect any config handoff files that exist.
-fn walk(dir: &Path, depth: usize, is_root: bool, home: bool, out: &mut Vec<FsRule>) {
+fn walk(dir: &Path, depth: usize, is_root: bool, names: &[&str], home: bool, out: &mut Vec<FsRule>) {
     if depth > MAX_WALK_DEPTH {
         // Fail-safe: beyond the discovery bound we cannot verify which
         // trust-handoff paths live below, so deny write to the whole subtree
@@ -1419,7 +1477,7 @@ fn walk(dir: &Path, depth: usize, is_root: bool, home: bool, out: &mut Vec<FsRul
     // inode to protect behind it. Deny the link entry itself, so it cannot be
     // dropped and replaced by a real directory, and where it points, so a
     // dangling target cannot be created: fail closed.
-    for name in HANDOFF_CONFIG_NAMES.iter().chain(if home { HANDOFF_HOME_NAMES } else { &[] }) {
+    for name in names.iter().chain(if home { HANDOFF_HOME_NAMES } else { &[] }) {
         let Some(first) = Path::new(name).components().next() else { continue };
         let link = dir.join(first);
         if unresolvable_link(&link) {
@@ -1433,7 +1491,7 @@ fn walk(dir: &Path, depth: usize, is_root: bool, home: bool, out: &mut Vec<FsRul
         // later runs. (On Linux an absent nested path can only be withheld where a
         // mount namespace is unavailable — the carve covers it; the bind-mount
         // strategy and macOS regex both cover absent paths.)
-        for name in HANDOFF_CONFIG_NAMES {
+        for name in names {
             out.push(deny(dir.join(name), true));
         }
         if home {
@@ -1461,7 +1519,7 @@ fn walk(dir: &Path, depth: usize, is_root: bool, home: bool, out: &mut Vec<FsRul
         if path.file_name().and_then(|n| n.to_str()) == Some(".git") {
             continue;
         }
-        walk(&path, depth + 1, false, home, out);
+        walk(&path, depth + 1, false, names, home, out);
     }
 }
 
@@ -2521,4 +2579,31 @@ mod tests {
         assert_eq!(get("AGENT_ID"), Some("spiffe://example.org/agent/demo"), "passed through unchanged");
         assert!(get("GITHUB_TOKEN").is_none());
     }
+
+    #[test]
+    fn handoff_allow_opens_only_the_names_it_lists() {
+        let root = std::env::temp_dir().join(format!("tt-handoff-allow-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let p = Policy { writable_roots: vec![root.clone()], handoff_allow: vec![".goose".into()], ..Default::default() };
+        assert!(p.check_handoff_allow().is_ok());
+        let names = p.handoff_config_names();
+        assert!(!names.contains(&".goose"));
+        assert!(names.contains(&".agents") && names.contains(&".mcp.json"));
+        let rules = p.trust_handoff_rules();
+        assert!(!rules.iter().any(|r| r.path.ends_with(".goose")), "an allowed name gets no deny");
+        assert!(rules.iter().any(|r| r.path.ends_with(".agents")), "every other name keeps its deny");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handoff_allow_refuses_unknown_git_and_home_names() {
+        let refused = |n: &str| Policy { handoff_allow: vec![n.into()], ..Default::default() }.check_handoff_allow();
+        assert!(refused(".gose").unwrap_err().contains("not a trust-handoff name"));
+        assert!(refused(".git/hooks").unwrap_err().contains("--handoff-scratch"));
+        assert!(refused(".git").is_err());
+        assert!(refused(".bashrc").unwrap_err().contains("--allow-home-handoff"));
+        // validation runs with the other handoff checks every backend calls
+        assert!(Policy { handoff_allow: vec![".gose".into()], ..Default::default() }.check_handoff_exempt().is_err());
+    }
+
 }

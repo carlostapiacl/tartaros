@@ -16,6 +16,26 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   offers one, so the listener is reachable only from inside the run. `explain`
   says which applies ([limits](docs/limits.md)). Refused on Windows. Corpus
   scenarios `network-listen-port` and `network-port-grant-no-listen`.
+- **goose's project surfaces are in the trust-handoff set: `.agents/`, `.goose/`
+  and `.config/goose/`.** goose loads plugins from `.agents/plugins` (a plugin's
+  `hooks/hooks.json` runs shell commands when a session starts), skills, agents
+  and recipes from `.agents/` and `.goose/` (a recipe declares the extensions it
+  starts), and decides which plugins are on from `.config/goose/settings.json`
+  and `settings.local.json`, all enabled by default and run outside any sandbox.
+  An agent confined by tartaros could plant one for the next goose session. They
+  are protected at any depth, absent ones included, like `.codex`; under HOME,
+  `.config/goose` also covers the `config.yaml` that lists the extensions goose
+  starts. The rest of `.config/` stays writable. Corpus scenario
+  `trust-handoff-goose`.
+- **`--allow-handoff NAME` (`handoff_allow` in a policy file, `handoffAllow` in a
+  settings file): leave one name of the trust-handoff set unprotected.** Every
+  name stays protected by default; this opens one, at any depth, for a repo where
+  the agent's job is to write it (`.goose` for goose recipes, `.vscode` for the
+  editor config). Only names `explain` lists: an unknown name is refused (exit
+  78), so a typo never reads as a protection that holds, and the git surfaces
+  cannot be opened this way (`--handoff-scratch` and `--handoff-exempt` scope
+  that to one directory). Said at start, in `explain` (`trust_handoff.allowed`
+  in `--json`) and in `why`. Corpus scenario `trust-handoff-allow-one-name`.
 
 ### Changed
 - **`--port N` is connect-only on Linux too.** Linux granted Landlock `BindTcp`
