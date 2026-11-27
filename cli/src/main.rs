@@ -10,7 +10,9 @@
 //!   --read-deny DIR        deny reads of this path (repeatable; secrets)
 //!   --read-allow DIR       re-allow reading this path inside a read-deny (repeatable)
 //!   --write-deny DIR       deny writes to this path inside a writable root (repeatable)
-//!   --port N               allow loopback TCP to this port (repeatable)
+//!   --port N               allow connecting to this loopback TCP port (repeatable; never listening)
+//!   --listen N             allow listening on this TCP port, and connecting to it (repeatable;
+//!                          opt-in: an inbound channel, see docs/limits.md)
 //!   --allow-domain HOST    egress ONLY to this domain, via the capability broker
 //!                          (CONNECT/HTTPS + SSRF defense); repeatable
 //!   --net                  allow all network (default: denied)
@@ -84,6 +86,9 @@ struct PolicyFile {
     write_denies: Vec<String>,
     #[serde(default)]
     local_ports: Vec<u16>,
+    /// Ports the agent may listen on (opt-in). See --listen.
+    #[serde(default)]
+    listen_ports: Vec<u16>,
     #[serde(default)]
     net: bool,
     #[serde(default)]
@@ -779,7 +784,10 @@ POLICY:
   --read-deny DIR        deny reads of this path, e.g. a secret dir (repeatable)
   --read-allow DIR       re-allow reading this path inside a read-deny (repeatable)
   --write-deny DIR       deny writes to this path inside a writable root (repeatable)
-  --port N               allow loopback TCP to this port (repeatable)
+  --port N               allow connecting to this loopback TCP port (repeatable;
+                         never listening on it)
+  --listen N             allow listening on this TCP port, and connecting to it
+                         (repeatable; opt-in, an inbound channel: docs/limits.md)
   --allow-domain HOST    egress ONLY to this domain through the broker (HTTPS via
                          CONNECT, SSRF-defended); .example.com matches subdomains
   --net                  allow all network (default: denied)
@@ -2199,6 +2207,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
         p.read_allows = pf.read_allows.iter().map(|s| PathBuf::from(expand_path(s))).collect();
         p.fs_rules.extend(pf.write_denies.iter().map(|s| FsRule { path: PathBuf::from(expand_path(s)), access: Access::Deny, even_if_absent: true }));
         p.local_ports = pf.local_ports;
+        p.listen_ports = pf.listen_ports;
         p.network = Some(if pf.net { Network::Allowed } else { Network::Denied });
         p.deny_unix_sockets = pf.deny_unix_sockets;
         p.isolate_pids = pf.isolate_pids;
@@ -2267,6 +2276,7 @@ fn build_policy(opts: &[String], verbose: bool) -> (Policy, Option<LogSpec>, Opt
             "--read-allow" => p.read_allows.push(PathBuf::from(expand_path(&val()))),
             "--write-deny" => p.fs_rules.push(FsRule { path: PathBuf::from(expand_path(&val())), access: Access::Deny, even_if_absent: true }),
             "--port" => p.local_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --port"); exit(2); })),
+            "--listen" => p.listen_ports.push(val().parse().unwrap_or_else(|_| { eprintln!("bad --listen"); exit(2); })),
             "--allow-domain" => p.allow_domains.push(val()),
             "--net" => p.network = Some(Network::Allowed),
             "--deny-unix" => p.deny_unix_sockets = true,
@@ -2341,6 +2351,7 @@ fn explain_json(p: &Policy, profile: Option<&Profile>, blocked: Option<&str>) ->
             .map(|r| serde_json::json!({ "host": r.host, "methods": r.methods, "paths": r.paths }))
             .collect::<Vec<_>>(),
         "local_ports": p.local_ports,
+        "listen_ports": p.listen_ports,
         "writable_roots": paths(&p.writable_roots),
         "write_denied": p.fs_rules.iter().filter(|r| r.access == Access::Deny).map(|r| r.path.display().to_string()).collect::<Vec<_>>(),
         "read_denied": paths(&p.read_denies),
@@ -2379,7 +2390,10 @@ fn explain(p: &Policy) {
     println!("role: {}", if p.role.is_empty() { "(unset)" } else { &p.role });
     println!("network: {:?}", p.network);
     if !p.local_ports.is_empty() {
-        println!("loopback ports: {:?}", p.local_ports);
+        println!("loopback ports (connect only): {:?}", p.local_ports);
+    }
+    if !p.listen_ports.is_empty() {
+        println!("listen ports (bind + accept, opt-in): {:?}", p.listen_ports);
     }
     if !p.allow_domains.is_empty() {
         println!("egress domains (via broker, HTTPS/CONNECT + SSRF defense): {}", p.allow_domains.join(", "));

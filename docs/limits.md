@@ -162,6 +162,20 @@ than you asked for.
   these hardened hosts. macOS has none of these limits.
 
 
+- **A listen grant is port-scoped, not loopback-scoped.** `--listen N` lets the
+  agent bind and accept on N. Neither kernel filter looks at the address:
+  Landlock's network rules are port-only, and Seatbelt's `local ip "localhost:N"`
+  also matches a bind to `0.0.0.0:N`; `listen()` is checked before any client
+  exists, so the peer address cannot narrow it either. On **macOS** a server the
+  agent binds to `0.0.0.0:N` therefore accepts clients from the LAN (measured on
+  macOS 15.7.9). On **Linux**, a listen grant alone keeps the run's own network
+  namespace when the host offers one, so the listener is reachable only from
+  inside the run; with another network grant, or without namespaces, it is
+  reachable from the host and the LAN. `explain` prints which case applies.
+  `--port N` never allows listening, and port 0 (an ephemeral port, as
+  `bind(("127.0.0.1", 0))` asks for) stays denied: a suite that listens on random
+  ports needs fixed ones or `--net`.
+
 - **Domain egress on non-root Linux.** Landlock's network filter is port-based,
   not address-based, so a port grant alone cannot stop an agent from reaching an
   external host on the broker's port. On **Linux as root** this is closed: the

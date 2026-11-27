@@ -55,7 +55,7 @@ impl NetworkCollector {
         Self::new(
             policy.role.clone(),
             root_pid,
-            policy.local_ports.clone(),
+            policy.local_ports.iter().chain(&policy.listen_ports).copied().collect(),
             policy.allowed_hosts.clone(),
         )
     }

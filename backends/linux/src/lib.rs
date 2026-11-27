@@ -1204,15 +1204,19 @@ fn confined_command(
         .add_rule(PathBeneath::new(dev_fd, write_only))
         .map_err(|e| err(format!("add /dev rule: {e}")))?;
 
-    // Network: allow TCP connect/bind only on the granted ports. Landlock net is
+    // Network: TCP connect on the granted ports (`local_ports`), and bind as
+    // well on the listen ports (`listen_ports`, opt-in). Landlock net is
     // port-based (not host-based): a granted port is reachable on any host, so
-    // loopback-vs-external is left to the proxy layer. With no granted ports and
-    // restriction on, all TCP connect/bind is denied.
+    // loopback-vs-external is left to the proxy layer. A port grant never lets
+    // the agent listen. With no granted ports and restriction on, all TCP
+    // connect/bind is denied.
     if restrict_net {
-        for port in &policy.local_ports {
+        for port in policy.local_ports.iter().chain(&policy.listen_ports) {
             ruleset = ruleset
                 .add_rule(NetPort::new(*port, AccessNet::ConnectTcp))
                 .map_err(|e| err(format!("add connect port {port}: {e}")))?;
+        }
+        for port in &policy.listen_ports {
             ruleset = ruleset
                 .add_rule(NetPort::new(*port, AccessNet::BindTcp))
                 .map_err(|e| err(format!("add bind port {port}: {e}")))?;
@@ -1649,7 +1653,7 @@ pub fn enforcement_report(policy: &Policy) -> Vec<String> {
         "filesystem / trust-handoff: UNAVAILABLE (needs Linux >= 5.13) — run aborts".into()
     });
     let net_denied = matches!(policy.network, Some(Network::Denied));
-    if net_denied || !policy.local_ports.is_empty() {
+    if net_denied || !policy.local_ports.is_empty() || !policy.listen_ports.is_empty() {
         out.push(if landlock_probe::landlock_net_supported() {
             "network (TCP, per-port): GUARANTEED (Landlock ABI v4+)".into()
         } else {
@@ -1694,6 +1698,18 @@ pub fn enforcement_report(policy: &Policy) -> Vec<String> {
         && policy.egress_netns.is_none();
     if ns_capable && no_net_grant && !policy.isolate_network {
         out.push("network namespace: ON by default (no network grant: no egress on any protocol, abstract unix sockets of the host unreachable)".into());
+    }
+    if !policy.listen_ports.is_empty() {
+        let private = (ns_capable && no_net_grant) || policy.isolate_network;
+        out.push(format!(
+            "listen ports {:?}: {}",
+            policy.listen_ports,
+            if private {
+                "reachable only from inside the run (its own network namespace)"
+            } else {
+                "reachable from the host, and from the LAN when bound to 0.0.0.0 (Landlock scopes the port, not the address)"
+            }
+        ));
     }
     out.push(if ns_capable {
         "outside the writable roots: READ-ONLY mounts (chmod, utimes, xattrs refused too); absent handoff paths blocked by read-only placeholders; read-denied dirs hidden".into()

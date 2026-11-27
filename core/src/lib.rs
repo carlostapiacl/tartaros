@@ -156,7 +156,16 @@ pub struct Policy {
     pub network: Option<Network>,
     /// Specific loopback ports the role may reach (e.g. its app's 8001/8081/3307)
     /// without opening all of localhost. The field the field-use detected it needs.
+    /// CONNECT only: a port grant never lets the agent listen (see `listen_ports`).
     pub local_ports: Vec<u16>,
+    /// Ports the agent may LISTEN on (bind + accept), and connect to, for a test
+    /// suite that starts its own server. Opt-in and separate from `local_ports`,
+    /// because a listener is an inbound channel. Neither kernel filter scopes the
+    /// address: on macOS a bind to `0.0.0.0:N` is reachable from the LAN; on Linux
+    /// a listen grant alone keeps the run's private network namespace when the
+    /// host offers one, so the listener is reachable only from inside the run
+    /// (docs/limits.md).
+    pub listen_ports: Vec<u16>,
     /// External hosts (by IP) the role may reach; everything else is outside.
     pub allowed_hosts: Vec<String>,
     /// Egress allow-list BY DOMAIN NAME. Non-empty means: the agent gets no direct

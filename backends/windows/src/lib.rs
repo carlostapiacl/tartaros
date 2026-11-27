@@ -392,6 +392,9 @@ impl Backend for AppContainerBackend {
         if !policy.local_ports.is_empty() {
             unsupported.push("--port local-port grants (only the egress broker's loopback port is reachable on Windows)");
         }
+        if !policy.listen_ports.is_empty() {
+            unsupported.push("--listen ports (listening is not scoped per port on Windows yet)");
+        }
         if policy.isolate_pids {
             unsupported.push("--isolate-pids (no PID namespace; process listing not yet measured)");
         }

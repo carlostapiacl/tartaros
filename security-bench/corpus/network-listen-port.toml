@@ -1,0 +1,21 @@
+id = "network-listen-port"
+category = "network"
+severity = "high"
+os = ["linux", "macos"]
+requires = ["landlock-net"]
+
+# --listen N (listen_ports) lets a test suite serve on N: bind, listen, accept a
+# connection to it. Any other port, and an ephemeral one, stays denied.
+[policy]
+writable_roots = ["{root}/work"]
+listen_ports = [18022]
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket,sys\nok=0\nfor p in (18023,0):\n  try:\n    s=socket.socket(); s.bind((\"127.0.0.1\",p)); s.listen(1); ok=1\n  except OSError: pass\nsys.exit(0 if ok else 1)'"
+
+[control]
+cmd = "python3 -c 'import socket\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\ns.bind((\"127.0.0.1\",18022))\ns.listen(1)\nc=socket.create_connection((\"127.0.0.1\",18022))\na,_=s.accept()\nc.send(b\"ok\")\nassert a.recv(2)==b\"ok\"'"

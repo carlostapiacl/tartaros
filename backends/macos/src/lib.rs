@@ -329,6 +329,12 @@ pub fn enforcement_report(policy: &Policy) -> Vec<String> {
         "filesystem / trust-handoff: GUARANTEED (Seatbelt)".to_string(),
         "network (default-deny + per-port): GUARANTEED (Seatbelt)".to_string(),
     ];
+    if !policy.listen_ports.is_empty() {
+        out.push(format!(
+            "listen ports {:?}: reachable from the host, and from the LAN when bound to 0.0.0.0 (Seatbelt scopes the port, not the address)",
+            policy.listen_ports
+        ));
+    }
     if policy.max_memory_bytes.is_some() {
         out.push("memory cap (--max-mem): NOT AVAILABLE on macOS — Darwin does not enforce RLIMIT_AS; the run is refused (use Linux/cgroup)".into());
     }
@@ -535,6 +541,16 @@ fn build_profile(policy: &Policy) -> String {
     // localhost. (Field-detected: a role needs 8001/8081/3307 but not 8787.)
     for port in &policy.local_ports {
         p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));
+    }
+    // Ports the agent may serve on (`--listen`), opt-in: bind, listen (checked as
+    // network-inbound) and connect. Seatbelt matches `local ip "localhost:N"` on
+    // the PORT only: a bind to 0.0.0.0:N passes too and then accepts LAN clients
+    // (measured on macOS 15.7.9), and listen() is checked before any peer exists,
+    // so the remote address cannot narrow it. Said in explain and docs/limits.md.
+    for port in &policy.listen_ports {
+        p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));
+        p.push_str(&format!("(allow network-bind (local ip \"localhost:{port}\"))\n"));
+        p.push_str(&format!("(allow network-inbound (local ip \"localhost:{port}\"))\n"));
     }
     // Specific AF_UNIX sockets the agent may reach (e.g. a per-run audit socket).
     // Everything else stays denied by `(deny default)` — Seatbelt can scope this
@@ -1207,6 +1223,25 @@ mod tests {
         assert!(prof.contains("(allow network-outbound (remote ip \"localhost:8001\"))"));
         assert!(prof.contains("(allow network-outbound (remote ip \"localhost:8081\"))"));
         assert!(!prof.contains("localhost:8787"));
+        assert!(!prof.contains("(allow network*)"));
+        // A port grant is connect-only: listening is `listen_ports`.
+        assert!(!prof.contains("network-bind (local ip"));
+        assert!(!prof.contains("network-inbound"));
+    }
+
+    #[test]
+    fn listen_ports_open_bind_and_inbound_on_those_ports_only() {
+        let policy = Policy {
+            writable_roots: vec![PathBuf::from("/work")],
+            local_ports: vec![8001],
+            listen_ports: vec![18080],
+            ..Default::default()
+        };
+        let prof = compile_profile(&policy);
+        assert!(prof.contains("(allow network-bind (local ip \"localhost:18080\"))"));
+        assert!(prof.contains("(allow network-inbound (local ip \"localhost:18080\"))"));
+        assert!(prof.contains("(allow network-outbound (remote ip \"localhost:18080\"))"));
+        assert!(!prof.contains("network-bind (local ip \"localhost:8001\")"));
         assert!(!prof.contains("(allow network*)"));
     }
 
