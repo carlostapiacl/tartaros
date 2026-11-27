@@ -17,6 +17,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   `.config/goose` also covers the `config.yaml` that lists the extensions goose
   starts. The rest of `.config/` stays writable. Corpus scenario
   `trust-handoff-goose`.
+- **`--allow-handoff NAME` (`handoff_allow` in a policy file, `handoffAllow` in a
+  settings file): leave one name of the trust-handoff set unprotected.** Every
+  name stays protected by default; this opens one, at any depth, for a repo where
+  the agent's job is to write it (`.goose` for goose recipes, `.vscode` for the
+  editor config). Only names `explain` lists: an unknown name is refused (exit
+  78), so a typo never reads as a protection that holds, and the git surfaces
+  cannot be opened this way (`--handoff-scratch` and `--handoff-exempt` scope
+  that to one directory). Said at start, in `explain` (`trust_handoff.allowed`
+  in `--json`) and in `why`. Corpus scenario `trust-handoff-allow-one-name`.
 
 ## [0.1.0-alpha.26] — 2026-11-25
 

@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use tartaros_core::{
-    Access, Backend, Network, Policy, PolicyError, RunError, RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES,
+    Access, Backend, Network, Policy, PolicyError, RunError, RunOutcome, HANDOFF_GIT_NAMES,
 };
 
 #[cfg(windows)]
@@ -172,7 +172,7 @@ fn read_denied(denies: &[PathBuf], allows: &[PathBuf], p: &Path) -> bool {
 /// subdirectory, such as `sub/.gitattributes`.
 pub fn placeholder_plan(policy: &Policy) -> Vec<PathBuf> {
     let roots: Vec<PathBuf> = policy.writable_roots.iter().filter(|r| r.is_dir()).cloned().collect();
-    let names: Vec<&str> = HANDOFF_CONFIG_NAMES.iter().chain(HANDOFF_GIT_NAMES).copied().collect();
+    let names: Vec<&str> = policy.handoff_config_names().into_iter().chain(HANDOFF_GIT_NAMES.iter().copied()).collect();
     let mut targets: Vec<PathBuf> = Vec::new();
     for rule in policy.trust_handoff_rules() {
         let p = rule.path;

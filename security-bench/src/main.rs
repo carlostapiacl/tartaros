@@ -151,6 +151,8 @@ struct PolicySpec {
     #[serde(default)]
     local_ports: Vec<u16>,
     #[serde(default)]
+    handoff_allow: Vec<String>,
+    #[serde(default)]
     materialize_absent_handoff: bool,
     #[serde(default)]
     protect_home_handoff: bool,
@@ -1173,6 +1175,7 @@ fn policy_for(c: &Contract, root_s: &str) -> Policy {
         read_allows: c.policy.read_allows.iter().map(|s| PathBuf::from(sub(s))).collect(),
         fs_rules: c.policy.write_denies.iter().map(|s| tartaros_core::FsRule { path: PathBuf::from(sub(s)), access: tartaros_core::Access::Deny, even_if_absent: true }).collect(),
         local_ports: c.policy.local_ports.clone(),
+        handoff_allow: c.policy.handoff_allow.clone(),
         network: match c.policy.network.as_deref() {
             Some("allowed") => Some(Network::Allowed),
             _ => Some(Network::Denied),

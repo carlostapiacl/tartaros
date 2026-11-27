@@ -11,7 +11,7 @@
 
 use tartaros_core::{
     Access, Backend, Collector, EffectSink, FsRule, Network, Policy, PolicyError, RunError,
-    RunOutcome, HANDOFF_CONFIG_NAMES, HANDOFF_GIT_NAMES, HANDOFF_HOME_NAMES, HANDOFF_WORKTREE_NAMES,
+    RunOutcome, HANDOFF_GIT_NAMES, HANDOFF_HOME_NAMES, HANDOFF_WORKTREE_NAMES,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -598,7 +598,7 @@ fn build_profile(policy: &Policy) -> String {
     // the root it still matches; outside the root is not writable anyway).
     for root in &policy.writable_roots {
         if policy.trust_handoff_on() {
-            emit_handoff_regex(&mut p, root, policy.protect_home_handoff);
+            emit_handoff_regex(&mut p, root, &policy.handoff_config_names(), policy.protect_home_handoff);
         }
     }
     // A `.git` pointer file (worktree/submodule) can repoint the repo at a gitdir
@@ -818,7 +818,7 @@ fn emit_deny(p: &mut String, path: &Path, roots: &[PathBuf]) {
 /// cannot escape it (it would still match under the root, and outside the root
 /// is not writable). Absent paths are covered too — the pattern does not require
 /// the path to exist, which is the point of a pre-planting defense.
-fn emit_handoff_regex(p: &mut String, root: &Path, home: bool) {
+fn emit_handoff_regex(p: &mut String, root: &Path, names: &[&str], home: bool) {
     let root_re = regex_escape(&root.to_string_lossy());
     let mut emit = |name: &str| {
         let name_re = regex_escape(name);
@@ -828,7 +828,7 @@ fn emit_handoff_regex(p: &mut String, root: &Path, home: bool) {
             "(deny file-write* (regex #\"^{root_re}(/.*)?/{name_re}(/.*)?$\"))\n"
         ));
     };
-    for name in HANDOFF_CONFIG_NAMES {
+    for name in names {
         emit(name);
     }
     for name in HANDOFF_GIT_NAMES {
@@ -849,7 +849,7 @@ fn emit_handoff_regex(p: &mut String, root: &Path, home: bool) {
     // and a trusted tool later loads it. Deny creating a symlink with an ancestor's
     // name at any depth (a rename onto that name is a create too, measured). A
     // directory of that name is still created normally (`mkdir .claude`, `git init`).
-    let mut ancestors: Vec<&str> = HANDOFF_CONFIG_NAMES
+    let mut ancestors: Vec<&str> = names
         .iter()
         .chain(HANDOFF_GIT_NAMES)
         .flat_map(|n| n.match_indices('/').map(move |(i, _)| &n[..i]))
