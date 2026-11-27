@@ -5,6 +5,19 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **goose's project surfaces are in the trust-handoff set: `.agents/`, `.goose/`
+  and `.config/goose/`.** goose loads plugins from `.agents/plugins` (a plugin's
+  `hooks/hooks.json` runs shell commands when a session starts), skills, agents
+  and recipes from `.agents/` and `.goose/` (a recipe declares the extensions it
+  starts), and decides which plugins are on from `.config/goose/settings.json`
+  and `settings.local.json`, all enabled by default and run outside any sandbox.
+  An agent confined by tartaros could plant one for the next goose session. They
+  are protected at any depth, absent ones included, like `.codex`; under HOME,
+  `.config/goose` also covers the `config.yaml` that lists the extensions goose
+  starts. The rest of `.config/` stays writable. Corpus scenario
+  `trust-handoff-goose`.
+
 ## [0.1.0-alpha.26] — 2026-11-25
 
 ### Added

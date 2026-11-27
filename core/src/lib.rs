@@ -80,6 +80,17 @@ pub const HANDOFF_CONFIG_NAMES: &[&str] = &[
     // Codex CLI config/prompts a trusted Codex run later loads and acts on —
     // the same passive-RCE surface as .claude, protected as a whole directory.
     ".codex",
+    // goose loads from the project: plugins (`.agents/plugins`, whose
+    // `hooks/hooks.json` runs shell commands at session start), skills, agents
+    // and recipes (`.agents/*`, `.goose/*`; a recipe declares extensions it
+    // starts), all enabled by default. Whole directories, like `.codex`.
+    // `.config/goose` holds the project plugin settings (`settings.json`,
+    // `settings.local.json`) that decide which of them are on; under HOME it is
+    // also the user config whose `config.yaml` lists the extensions goose starts.
+    // Only that subdirectory: the rest of `.config/` is ordinary project files.
+    ".agents",
+    ".goose",
+    ".config/goose",
     // Editor auto-run surfaces: tasks/launch/extensions and workspace files a
     // trusted editor runs or trusts on open. Protected as whole directories, since
     // the auto-run surface is more than three JSON files (extensions.json,
@@ -119,6 +130,7 @@ pub const HANDOFF_DIR_SUFFIXES: &[&str] = &[
     ".git/hooks",
     ".claude/commands", ".claude/agents", ".claude/skills", ".claude/hooks",
     ".codex", ".vscode", ".idea", ".husky", ".github/workflows",
+    ".agents", ".goose", ".config/goose",
 ];
 
 /// Per-USER startup/config files a trusted tool or the host's next shell later

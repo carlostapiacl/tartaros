@@ -58,7 +58,8 @@ it. The rule doesn't change: a capability ships with its test, or it doesn't shi
       what's left.** Absent top-level handoff paths are held by a placeholder
       (alpha.7, alpha.18, alpha.21). Still open: an absent handoff name nested below
       the root (a new `sub/.gitmodules`, `.claude/skills/` when only `.claude/`
-      exists) and a repository the agent creates during the run.
+      exists, `.config/goose/` when only `.config/` does, `.agents/` in a nested
+      project) and a repository the agent creates during the run.
 - [ ] **Create-at-root on hosts with no user namespaces at all.** Where
       AppArmor is what restricts them, `tartaros setup apparmor` (0.1.0-alpha.25). A
       minimal packaged helper for the rest (`unprivileged_userns_clone=0`,
