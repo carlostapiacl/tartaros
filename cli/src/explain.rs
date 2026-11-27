@@ -105,9 +105,27 @@ fn explain_json(p: &Policy, profile: Option<&Profile>, blocked: Option<&str>) ->
     let enforcement = tartaros_linux::enforcement_report(p);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let enforcement: Vec<String> = Vec::new();
+    #[cfg(target_os = "linux")]
+    let (engine, abi) = ("landlock+seccomp", tartaros_linux::landlock_abi());
+    #[cfg(target_os = "macos")]
+    let (engine, abi) = ("seatbelt", None::<u32>);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let (engine, abi) = (backend_os(), None::<u32>);
     serde_json::json!({
         "tartaros": env!("CARGO_PKG_VERSION"),
         "backend": backend_os(),
+        // The short answer for a launcher that shows or logs whether a command is
+        // confined (goose#12805): `active` is false exactly when `run` would refuse
+        // on this host, with the reason in `refused`. The confinement covers the
+        // command and every process it starts; what the launcher runs outside
+        // tartaros is the launcher's to report.
+        "confinement": {
+            "active": blocked.is_none(),
+            "engine": engine,
+            "landlock_abi": abi,
+            "covers": "process-tree",
+            "refused": blocked,
+        },
         "profile": profile.map(|pr| pr.name()),
         "role": p.role,
         "network": format!("{:?}", p.network),
@@ -118,6 +136,7 @@ fn explain_json(p: &Policy, profile: Option<&Profile>, blocked: Option<&str>) ->
             .collect::<Vec<_>>(),
         "local_ports": p.local_ports,
         "listen_ports": p.listen_ports,
+        "listen_any": p.listen_any,
         "writable_roots": paths(&p.writable_roots),
         "write_denied": p.fs_rules.iter().filter(|r| r.access == Access::Deny).map(|r| r.path.display().to_string()).collect::<Vec<_>>(),
         "read_denied": paths(&p.read_denies),
@@ -159,6 +178,9 @@ pub(crate) fn explain(p: &Policy) {
     if !p.local_ports.is_empty() {
         println!("loopback ports (connect only): {:?}", p.local_ports);
     }
+    if p.listen_any {
+        println!("listen: any port (Linux, only inside the run's own network namespace)");
+    }
     if !p.listen_ports.is_empty() {
         println!("listen ports (bind + accept, opt-in): {:?}", p.listen_ports);
     }
@@ -181,7 +203,11 @@ pub(crate) fn explain(p: &Policy) {
             println!("request rule {}: {methods} on {paths} (TLS terminated; anything else refused, 403)", r.host);
         }
     }
-    println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
+    println!(
+        "deny AF_UNIX sockets: {}{}",
+        p.deny_unix_sockets,
+        if cfg!(target_os = "linux") && !p.deny_unix_sockets { " (--allow-unix: host daemon sockets are reachable)" } else { "" }
+    );
     if !p.allow_mach_register.is_empty() {
         println!("macOS Mach register (prefix): {}", p.allow_mach_register.join(", "));
     }

@@ -6,6 +6,31 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **`--listen any` (`listen_any` in a policy file): any port, the ephemeral one
+  included, for test suites that pick their own.** Linux only, and only when the
+  run has its own empty network namespace (no `--net`, `--port`, `--allow-domain`
+  or egress namespace; root or user namespaces), so a listener is reachable only
+  from inside the run. Refused (exit 78) on macOS, on Windows and on a Linux host
+  without namespaces, where Landlock and Seatbelt would open every port to the
+  LAN. Corpus scenario `network-listen-any`: the ephemeral port serves, a server
+  on the host's loopback stays out of reach.
+- **`explain --json` has a `confinement` object** for a launcher that shows or
+  logs whether its commands are confined (goose#12805): `active` (false exactly
+  when `run` would refuse here, with the reason in `refused`), `engine`
+  (`landlock+seccomp` or `seatbelt`), `landlock_abi` (asked of the kernel) and
+  `covers` (`process-tree`).
+- **`run` warns, before it starts, where new files cannot be created** (Linux,
+  without a mount namespace): directly in a writable root with a deny below it,
+  and in a repository's `.git`, where `git add` and `git commit` fail on
+  `.git/index.lock`. `explain` already said so; `run` did not, and the first
+  `git add` failed. The warning names the fix for the host (`sudo tartaros setup
+  apparmor` on Ubuntu 23.10+). Test `linux_git_warning` checks it against the
+  kernel on whichever host it runs.
+- **The AF_UNIX warning on Linux names the user's own daemons:** the session bus
+  `/run/user/<uid>/bus` (from which `systemd-run --user` starts a process outside
+  the sandbox, measured on Ubuntu 24.04), `systemd/private`, and rootless docker
+  and podman sockets. The environment scrub drops `XDG_RUNTIME_DIR`, but the agent
+  can spell the path itself; `--deny-unix` closes it.
 - **`--listen N` (`listen_ports` in a policy file): let the agent serve on N.**
   A test suite that starts its own server needs to bind and listen, which no
   grant allowed without `--net`. Listening is an inbound channel, so it is its
@@ -38,6 +63,17 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   in `--json`) and in `why`. Corpus scenario `trust-handoff-allow-one-name`.
 
 ### Changed
+- **AF_UNIX is denied by default on Linux; `--allow-unix` opens it.** Landlock
+  cannot scope a unix socket by path, and with the old default an agent could
+  set `XDG_RUNTIME_DIR` itself and run `systemd-run --user` through the session
+  bus, starting a process outside the sandbox (measured on Ubuntu 24.04, with and
+  without namespaces; reported in goose#12805). The default now matches macOS,
+  where Seatbelt already denies AF_UNIX. `socketpair()` is not affected, so
+  multiprocessing, asyncio and child pipes keep working; a tool that creates its
+  own unix socket (syslog, `git credential-cache`, an `ssh-agent` started inside)
+  needs `--allow-unix`. A policy file keeps the default unless it sets
+  `deny_unix_sockets`; `false` is `--allow-unix`. `Policy::default()` in the
+  library is unchanged.
 - **`--port N` is connect-only on Linux too.** Linux granted Landlock `BindTcp`
   as well as `ConnectTcp` for a port grant, so an agent could listen on a granted
   port nothing held; macOS never allowed it, and `network-local-bind-denied`

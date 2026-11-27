@@ -96,6 +96,14 @@ pub struct Policy {
     /// host offers one, so the listener is reachable only from inside the run
     /// (docs/limits.md).
     pub listen_ports: Vec<u16>,
+    /// `--listen any`: bind, accept and connect on ANY TCP port, the ephemeral
+    /// port 0 included, for test suites that pick their own port. Linux only, and
+    /// only when the run has its own empty network namespace (no --net, --port,
+    /// --allow-domain or egress namespace; root or user namespaces), where the
+    /// only reachable address is the run's own loopback. Refused anywhere else:
+    /// Seatbelt and Landlock scope ports, not addresses, so outside a private
+    /// namespace "any port" would open every port to the LAN.
+    pub listen_any: bool,
     /// External hosts (by IP) the role may reach; everything else is outside.
     pub allowed_hosts: Vec<String>,
     /// Egress allow-list BY DOMAIN NAME. Non-empty means: the agent gets no direct
@@ -169,10 +177,12 @@ pub struct Policy {
     pub max_processes: Option<u64>,
     /// CPU-time limit in seconds (`RLIMIT_CPU`).
     pub max_cpu_secs: Option<u64>,
-    /// Opt-in (IPC-1): deny creating `AF_UNIX` sockets via seccomp, so the agent
-    /// cannot reach a unix socket outside its territory (Landlock does not mediate
-    /// pathname unix sockets). Default off — real agents use unix sockets, so this
-    /// is a strict mode the policy turns on when that is acceptable.
+    /// Deny creating `AF_UNIX` sockets via seccomp (IPC-1), so the agent cannot
+    /// reach a unix socket outside its territory (Landlock does not mediate
+    /// pathname unix sockets). The CLI turns it on by default on Linux and
+    /// `--allow-unix` turns it off; `socketpair()` is not affected. Off in
+    /// `Policy::default()` for library callers, and refused on macOS, where
+    /// Seatbelt already denies AF_UNIX unless `allow_unix_socket_paths` names one.
     pub deny_unix_sockets: bool,
     /// Single-segment glob denies (e.g. `~/.codex/*.config.toml`). macOS-only
     /// (compiled to anchored Seatbelt regexes); the Linux backend rejects a

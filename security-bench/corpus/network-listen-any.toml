@@ -1,0 +1,26 @@
+id = "network-listen-any"
+category = "network"
+severity = "high"
+os = ["linux"]
+requires = ["landlock-net", "userns"]
+
+# --listen any (listen_any) lets a test suite serve on any port, the ephemeral
+# one included, because the run has its own empty network namespace: the host's
+# loopback, and a server listening on it, stay out of reach. macOS refuses the
+# flag (Seatbelt scopes ports, not addresses).
+[policy]
+writable_roots = ["{root}/work"]
+listen_any = true
+
+[[server]]
+port = 18024
+
+[[fixture]]
+path = "{root}/work/src"
+dir = true
+
+[attack]
+cmd = "python3 -c 'import socket; socket.create_connection((\"127.0.0.1\",18024),timeout=2)'"
+
+[control]
+cmd = "python3 -c 'import socket\ns=socket.socket()\ns.bind((\"127.0.0.1\",0))\ns.listen(1)\nc=socket.create_connection(s.getsockname())\na,_=s.accept()\nc.send(b\"ok\")\nassert a.recv(2)==b\"ok\"'"
