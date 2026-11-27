@@ -203,7 +203,11 @@ pub(crate) fn explain(p: &Policy) {
             println!("request rule {}: {methods} on {paths} (TLS terminated; anything else refused, 403)", r.host);
         }
     }
-    println!("deny AF_UNIX sockets: {}", p.deny_unix_sockets);
+    println!(
+        "deny AF_UNIX sockets: {}{}",
+        p.deny_unix_sockets,
+        if cfg!(target_os = "linux") && !p.deny_unix_sockets { " (--allow-unix: host daemon sockets are reachable)" } else { "" }
+    );
     if !p.allow_mach_register.is_empty() {
         println!("macOS Mach register (prefix): {}", p.allow_mach_register.join(", "));
     }

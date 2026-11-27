@@ -181,8 +181,8 @@ it guarantees, and the caveat prints on `run` and on `explain`.
 
 | profile | adds | for |
 |---|---|---|
-| `local-agent` (default) | trust-handoff + network deny | a trusted agent that can make mistakes |
-| `hostile-code` | + PID/mount isolation, AF_UNIX lockdown | actively malicious code on a shared kernel |
+| `local-agent` (default) | trust-handoff + network deny + AF_UNIX deny | a trusted agent that can make mistakes |
+| `hostile-code` | + PID/mount isolation, seccomp hardening | actively malicious code on a shared kernel |
 | `multi-tenant` | + egress-free network namespace | the most a single kernel can give; full tenant isolation is the [microVM backend](docs/microvm-backend.md) |
 
 ## Install
@@ -241,8 +241,10 @@ the roadmap item that closes it:
   the run; Linux reaps it with `cgroup.kill` (strict macOS teardown is on the
   roadmap).
 - **AF_UNIX on Linux is all or nothing.** Landlock doesn't filter unix sockets by
-  path, so the default profile warns when `docker.sock` or D-Bus is reachable, and
-  `--deny-unix` or `hostile-code` close it. macOS filters by path.
+  path, so creating one is denied by default (`socketpair()` still works). A tool
+  that needs its own unix socket (syslog, `git credential-cache`, an `ssh-agent`
+  started inside) needs `--allow-unix`, which also makes `docker.sock` and D-Bus
+  reachable; the run warns when one is present. macOS filters by path.
 - **Disk space.** Memory, processes and CPU are capped; bytes on disk are not yet
   (disk quota is on the roadmap).
 - **Handoff files the agent creates.** Existing handoff files are protected

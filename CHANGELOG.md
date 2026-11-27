@@ -56,6 +56,17 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   in `--json`) and in `why`. Corpus scenario `trust-handoff-allow-one-name`.
 
 ### Changed
+- **AF_UNIX is denied by default on Linux; `--allow-unix` opens it.** Landlock
+  cannot scope a unix socket by path, and with the old default an agent could
+  set `XDG_RUNTIME_DIR` itself and run `systemd-run --user` through the session
+  bus, starting a process outside the sandbox (measured on Ubuntu 24.04, with and
+  without namespaces; reported in goose#12805). The default now matches macOS,
+  where Seatbelt already denies AF_UNIX. `socketpair()` is not affected, so
+  multiprocessing, asyncio and child pipes keep working; a tool that creates its
+  own unix socket (syslog, `git credential-cache`, an `ssh-agent` started inside)
+  needs `--allow-unix`. A policy file keeps the default unless it sets
+  `deny_unix_sockets`; `false` is `--allow-unix`. `Policy::default()` in the
+  library is unchanged.
 - **`--port N` is connect-only on Linux too.** Linux granted Landlock `BindTcp`
   as well as `ConnectTcp` for a port grant, so an agent could listen on a granted
   port nothing held; macOS never allowed it, and `network-local-bind-denied`
