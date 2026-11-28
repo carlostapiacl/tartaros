@@ -5,6 +5,8 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.27] — 2026-11-27
+
 ### Added
 - **`--listen any` (`listen_any` in a policy file): any port, the ephemeral one
   included, for test suites that pick their own.** Linux only, and only when the
