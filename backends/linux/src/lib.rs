@@ -1278,6 +1278,14 @@ fn confined_command(
     // Apply in the child, just before exec, so only the sandboxed process is
     // restricted. The ruleset fd was built here in the parent.
     let mut created = Some(ruleset);
+    // A second descriptor on the same ruleset, so the child can add the fresh
+    // /proc once the PID namespace has mounted it.
+    let fresh_proc_rule: Option<std::os::fd::OwnedFd> = if policy.fresh_proc_readable() {
+        created.as_ref().and_then(|r| r.try_clone().ok()).and_then(Option::<std::os::fd::OwnedFd>::from)
+    } else {
+        None
+    };
+    let read_access = read_only.bits();
     let max_memory = policy.max_memory_bytes;
     let max_processes = policy.max_processes;
     let max_cpu = policy.max_cpu_secs;
@@ -1519,6 +1527,9 @@ fn confined_command(
             // before the agent execs. A uid-0 agent otherwise keeps CAP_SYS_MODULE,
             // CAP_SYS_RAWIO, CAP_SYS_PTRACE, etc. No-op for a non-root euid.
             namespace::drop_all_capabilities()?;
+            if let Some(fd) = &fresh_proc_rule {
+                namespace::grant_fresh_proc(std::os::fd::AsRawFd::as_raw_fd(fd), read_access);
+            }
             // Landlock.
             created
                 .take()
