@@ -80,6 +80,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   states the intent ("granting an outbound loopback port must not also grant
   LISTENING"). A policy that relied on it adds `--listen N`.
 
+### Fixed
+- **With a read deny, a run can read its own `/proc` again** (Linux, PID
+  namespace, which is on wherever the host allows namespaces). The read carve
+  granted the host's `/proc`, which does not reach the fresh one the namespace
+  mounts, so every read under `/proc` failed: Node's `process.memoryUsage()`
+  and `os.cpus()`, the Sentry SDK and vitest's workers broke. The child now
+  grants the fresh `/proc`, which shows only the run's own processes; not when
+  something under `/proc` is read-denied.
+
 ## [0.1.0-alpha.26] — 2026-11-25
 
 ### Added

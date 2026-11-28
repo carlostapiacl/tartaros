@@ -662,6 +662,26 @@ pub(crate) unsafe fn drop_all_capabilities() -> std::io::Result<()> {
 /// preserved across the following `execve`. If the parent already died in the
 /// (tiny) window since the fork, the signal was missed, so we also exit if we
 /// have already been reparented to init in the same PID namespace.
+/// Adds a read rule for the fresh `/proc` to the Landlock ruleset, after the PID
+/// namespace mounted it and before `restrict_self` (see
+/// `Policy::fresh_proc_readable`). Raw syscalls only: this runs between fork and
+/// exec. A failure leaves `/proc` unreadable, which is the stricter outcome.
+pub(crate) unsafe fn grant_fresh_proc(ruleset_fd: libc::c_int, access: u64) {
+    #[repr(C, packed)]
+    struct PathBeneathAttr {
+        allowed_access: u64,
+        parent_fd: i32,
+    }
+    const LANDLOCK_RULE_PATH_BENEATH: libc::c_int = 1;
+    let fd = libc::open(c"/proc".as_ptr(), libc::O_PATH | libc::O_CLOEXEC);
+    if fd < 0 {
+        return;
+    }
+    let attr = PathBeneathAttr { allowed_access: access, parent_fd: fd };
+    libc::syscall(libc::SYS_landlock_add_rule, ruleset_fd, LANDLOCK_RULE_PATH_BENEATH, &attr as *const PathBeneathAttr, 0u32);
+    libc::close(fd);
+}
+
 pub(crate) unsafe fn set_pdeathsig_kill() {
     libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
     // getppid() == 1 means our original parent is already gone (reparented to the

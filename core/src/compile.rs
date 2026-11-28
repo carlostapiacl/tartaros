@@ -616,6 +616,17 @@ impl Policy {
 
 
 impl Policy {
+    /// Whether the Linux backend grants read on the fresh `/proc` a PID namespace
+    /// mounts. The read carve opens its rules on the host's `/proc` before the
+    /// namespace exists, and a rule on that mount does not reach the new one, so
+    /// with any read deny the run could not read `/proc` at all (not even
+    /// `/proc/self/statm` or `/proc/cpuinfo`). The fresh `/proc` shows only the
+    /// run's own processes, so granting it hides nothing from the host. Not when
+    /// `/proc` itself is isolated or something in it is read-denied.
+    pub fn fresh_proc_readable(&self) -> bool {
+        self.isolate_pids && !self.isolate_process_info && !self.read_denies.iter().any(|d| d.starts_with("/proc"))
+    }
+
     /// Explicit write denies whose (resolved) path does not exist yet. Landlock
     /// matches inodes, so these can only be enforced by the carve (withholding
     /// the nearest existing ancestor), never by a bind mount.
