@@ -236,6 +236,25 @@ example), since that would lift the restriction for whoever replaces it.
 Every flag, the TOML policy format and `explain` are documented in
 [`cli/README.md`](cli/README.md).
 
+## Use with goose
+
+goose can run every shell command its agent starts through a sandbox launcher
+(`GOOSE_SANDBOX_COMMAND`, proposed in goose#12805 and not in a goose release
+yet). Install tartaros as above, then in `~/.config/goose/config.yaml`:
+
+```yaml
+GOOSE_SANDBOX_COMMAND: ["tartaros", "run", "--write", "{cwd}", "{readonly:--write-deny}", "--"]
+GOOSE_SANDBOX_STATUS_COMMAND: ["tartaros", "explain", "--json", "--write", "{cwd}", "{readonly:--write-deny}"]
+```
+
+goose puts the working directory in `{cwd}` and expands `{readonly:--write-deny}`
+to one `--write-deny <path>` per path it protects: its own config and recipe
+directories, `.git/hooks` and `.git/config`. Before the first command it runs the
+status command and starts the session only if `confinement.active` is `true`; a
+launcher that fails stops the command instead of running it unconfined. The rest
+of the policy (network, read denies, a profile) goes in the same lists, for
+example `"--profile", "hostile-code"` before `"--"`.
+
 ## Know the edges
 
 A sandbox is only as trustworthy as its stated limits, so here they are, each with
