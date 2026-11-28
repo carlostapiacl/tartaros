@@ -14,7 +14,7 @@ on, off or narrow it per run, and `tartaros explain` shows what a run grants. It
 alpha, under active development, and open to contributions ([how](#contributing)).
 
 Open source (Apache-2.0) · macOS and Linux · Windows backend (preview) · one binary · no Docker, no VM, no
-account, no login · written in Rust · `v0.1.0-alpha.26`
+account, no login · written in Rust · `v0.1.0-alpha.27`
 
 [Website](https://carlostapiacl.github.io/tartaros/) ·
 [Evidence](https://carlostapiacl.github.io/tartaros/evidence.html) ·

@@ -95,7 +95,8 @@ another removes the paths they protect, planned again instead of failing, shippe
 in 0.1.0-alpha.23. Programs that read preferences starting on macOS shipped in
 0.1.0-alpha.24. Placeholders git does not see and `tartaros setup apparmor` shipped in
 0.1.0-alpha.25. Passing `AGENT_ID` through and scratch roots (`--handoff-scratch`) shipped in
-0.1.0-alpha.26. The details are in the [changelog](CHANGELOG.md).
+0.1.0-alpha.26. Listening ports (`--listen`), AF_UNIX denied by default on Linux and goose's
+project surfaces in the trust-handoff set shipped in 0.1.0-alpha.27. The details are in the [changelog](CHANGELOG.md).
 
 ## How to help
 
