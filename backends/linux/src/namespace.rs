@@ -403,12 +403,14 @@ pub(crate) unsafe fn setup_ro_binds(
             return Err(std::io::Error::last_os_error());
         }
         // Remount that bind read-only. MS_REMOUNT|MS_BIND changes only the mount
-        // flags of the bind, not the underlying filesystem.
+        // flags of the bind, not the underlying filesystem; the locked flags it
+        // already has are passed again, or a user namespace refuses the remount.
+        let kept = kept_mount_flags(p).unwrap_or(0);
         if libc::mount(
             std::ptr::null(),
             p.as_ptr(),
             std::ptr::null(),
-            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC,
+            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC | kept,
             std::ptr::null(),
         ) != 0
         {
@@ -452,6 +454,18 @@ pub(crate) unsafe fn pin_mounts(paths: &[std::ffi::CString]) -> std::io::Result<
 /// filesystem, a path the user cannot reach) is left as it was, which is the
 /// behaviour without sealing.
 pub(crate) unsafe fn seal_readonly(mountpoints: &[std::ffi::CString]) {
+    for m in mountpoints {
+        let Some(kept) = kept_mount_flags(m) else { continue };
+        let flags = libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | kept;
+        let _ = libc::mount(std::ptr::null(), m.as_ptr(), std::ptr::null(), flags, std::ptr::null());
+    }
+}
+
+/// The nosuid/nodev/noexec/atime flags the mount holding `path` has now, as mount
+/// flags. Inside a user namespace these are locked: a remount that drops one is
+/// refused with EPERM, so every read-only remount passes them again. A tmpfs /tmp
+/// (nosuid,nodev) is the common case. `None` when the path cannot be resolved.
+unsafe fn kept_mount_flags(path: &std::ffi::CStr) -> Option<libc::c_ulong> {
     const KEEP: [(libc::c_ulong, libc::c_ulong); 6] = [
         (libc::ST_NOSUID, libc::MS_NOSUID),
         (libc::ST_NODEV, libc::MS_NODEV),
@@ -464,19 +478,11 @@ pub(crate) unsafe fn seal_readonly(mountpoints: &[std::ffi::CString]) {
     const ST_RELATIME: libc::c_ulong = 0x1000;
     #[cfg(target_env = "gnu")]
     const _: () = assert!(ST_RELATIME == libc::ST_RELATIME);
-    for m in mountpoints {
-        let mut sv: libc::statvfs = std::mem::zeroed();
-        if libc::statvfs(m.as_ptr(), &mut sv) != 0 {
-            continue;
-        }
-        let mut flags = libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY;
-        for (st, ms) in KEEP {
-            if sv.f_flag & st != 0 {
-                flags |= ms;
-            }
-        }
-        let _ = libc::mount(std::ptr::null(), m.as_ptr(), std::ptr::null(), flags, std::ptr::null());
+    let mut sv: libc::statvfs = std::mem::zeroed();
+    if libc::statvfs(path.as_ptr(), &mut sv) != 0 {
+        return None;
     }
+    Some(KEEP.iter().filter(|(st, _)| sv.f_flag & st != 0).fold(0, |acc, (_, ms)| acc | ms))
 }
 
 /// Cover each read-denied directory with an empty, read-only tmpfs. Landlock

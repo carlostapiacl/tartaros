@@ -88,6 +88,13 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   and `os.cpus()`, the Sentry SDK and vitest's workers broke. The child now
   grants the fresh `/proc`, which shows only the run's own processes; not when
   something under `/proc` is read-denied.
+- **A writable root on a tmpfs (`/tmp` on Kali, `/run/user/<uid>`) no
+  longer fails with "spawn: Operation not permitted".** In a user namespace the
+  mount's nosuid/nodev flags are locked, and the read-only bind of a protected
+  path dropped them, so the kernel refused it. The bind now passes them again,
+  as the read-only seal already did. A root inside `/dev/shm` is refused with
+  its reason: the run replaces `/dev/shm` with a private tmpfs, which would hide
+  those binds.
 
 ## [0.1.0-alpha.26] — 2026-11-25
 

@@ -1298,6 +1298,19 @@ fn confined_command(
     // box (and a place to leave files behind). On a host that forbids namespaces
     // the dir stays shared — the same as before, reported by `explain`.
     let private_shm = ns_capable;
+    // A writable root inside /dev/shm would end up under that private tmpfs: the
+    // command still reaches the host directory through its working directory, but
+    // the read-only binds of its protected paths (`.git/hooks`) are hidden with it.
+    // Refuse rather than run with the trust-handoff set unprotected.
+    if private_shm {
+        let shm = tartaros_core::resolve_best_effort(std::path::Path::new("/dev/shm"));
+        if let Some(root) = policy.writable_roots.iter().map(|r| tartaros_core::resolve_best_effort(r)).find(|r| r.starts_with(&shm)) {
+            return Err(err(format!(
+                "--write {}: inside /dev/shm, which this run replaces with a private tmpfs; use a directory outside it",
+                root.display()
+            )));
+        }
+    }
     // Compile the seccomp BPF programs HERE in the parent (allocation is fine),
     // not in pre_exec — building a BPF program after fork could deadlock a child of
     // a multithreaded parent (broker/collector threads) on the malloc lock (review
