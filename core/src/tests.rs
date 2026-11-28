@@ -917,3 +917,20 @@ fn handoff_allow_refuses_unknown_git_and_home_names() {
     // validation runs with the other handoff checks every backend calls
     assert!(Policy { handoff_allow: vec![".gose".into()], ..Default::default() }.check_handoff_exempt().is_err());
 }
+
+#[test]
+fn fresh_proc_is_readable_unless_proc_is_isolated_or_denied() {
+    let mut p = Policy { isolate_pids: true, read_denies: vec![PathBuf::from("/home/u")], ..Policy::default() };
+    assert!(p.fresh_proc_readable(), "a read deny elsewhere must not take /proc away");
+
+    p.isolate_pids = false;
+    assert!(!p.fresh_proc_readable(), "without a PID namespace there is no fresh /proc");
+
+    p.isolate_pids = true;
+    p.isolate_process_info = true;
+    assert!(!p.fresh_proc_readable(), "--isolate-proc keeps /proc denied");
+
+    p.isolate_process_info = false;
+    p.read_denies.push(PathBuf::from("/proc/self/environ"));
+    assert!(!p.fresh_proc_readable(), "a deny inside /proc must not be reopened");
+}
