@@ -4,6 +4,28 @@ What comes next, and why it matters to the person running the agent. Each item
 lands in [`CHANGELOG.md`](CHANGELOG.md) together with a corpus scenario that proves
 it. The rule doesn't change: a capability ships with its test, or it doesn't ship.
 
+## Road to 0.1.0-beta.1
+
+Beta means the interface stops moving under you. From beta.1 on, a change that
+breaks a flag, a policy file or `explain --json` first ships a deprecation
+warning for at least one release. Beta.1 ships when all of these hold:
+
+- [ ] **Frozen interface.** The CLI flags, the policy file format and the
+      `explain --json` schema are written down in `docs/` and covered by tests
+      that fail on an unannounced change.
+- [ ] **Measured toolchain compatibility** (below, under Now) is published.
+- [ ] **CI you can trust.** Green on Linux and macOS without reruns for two
+      releases in a row.
+- [ ] **Quiet defaults.** Two releases in a row with no `Changed` entry that
+      breaks an existing setup.
+- [ ] **Real use.** Two to three weeks of pilot use with no new bug in the
+      corpus areas.
+
+Not required for beta.1: the Windows backend (stays preview), the microVM
+backend, learn mode, and Linux hosts without user namespaces where
+`tartaros setup apparmor` is not an option (documented in
+[`docs/limits.md`](docs/limits.md)).
+
 ## Now — next release
 
 - [ ] **Linux without user namespaces.** *The same protection on a stock
