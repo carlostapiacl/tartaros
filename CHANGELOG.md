@@ -80,6 +80,15 @@ loosely [Keep a Changelog](https://keepachangelog.com/).
   states the intent ("granting an outbound loopback port must not also grant
   LISTENING"). A policy that relied on it adds `--listen N`.
 
+### Fixed
+- **A writable root on a tmpfs (`/tmp` on Kali, `/run/user/<uid>`) no
+  longer fails with "spawn: Operation not permitted".** In a user namespace the
+  mount's nosuid/nodev flags are locked, and the read-only bind of a protected
+  path dropped them, so the kernel refused it. The bind now passes them again,
+  as the read-only seal already did. A root inside `/dev/shm` is refused with
+  its reason: the run replaces `/dev/shm` with a private tmpfs, which would hide
+  those binds.
+
 ## [0.1.0-alpha.26] — 2026-11-25
 
 ### Added
